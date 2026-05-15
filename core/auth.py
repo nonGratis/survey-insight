@@ -27,14 +27,36 @@ IDENTITY_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
 
+# Scopes для роботи з Forms+Drive+Sheets API. Додаються incrementally
+# після identity-логіну: Google показує другий consent screen лише на
+# delta-scopes завдяки include_granted_scopes='true'.
+API_SCOPES = IDENTITY_SCOPES + [
+    "https://www.googleapis.com/auth/forms.body.readonly",
+    "https://www.googleapis.com/auth/forms.responses.readonly",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+]
 
-def _allow_http_for_localhost() -> None:
-    """Дозволити non-HTTPS redirect для localhost dev.
 
-    google-auth-oauthlib за замовчуванням забороняє HTTP. Для Cloud Run
-    у Тиждень 4+ цей флаг не виставлятимемо — там буде HTTPS.
+def has_api_scopes(creds_dict: dict | None) -> bool:
+    """Чи містить поточний token усі API-scopes (для гейту UI)."""
+    if not creds_dict:
+        return False
+    granted = set(creds_dict.get("scopes") or [])
+    return all(scope in granted for scope in API_SCOPES)
+
+
+def _configure_oauthlib_env() -> None:
+    """Виставити env-флаги oauthlib для нашого web-flow.
+
+    - INSECURE_TRANSPORT: дозволити HTTP-redirect на localhost (для dev).
+      На Cloud Run у Тиждень 4+ цей флаг знімаємо — там буде HTTPS.
+    - RELAX_TOKEN_SCOPE: не падати, якщо Google повертає інакший набір
+      scopes ніж ми запитали (норма для incremental authorization, де
+      identity-grant перекаже разом із новими scopes).
     """
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+    os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 
 def build_flow(scopes: list[str], code_verifier: str | None = None) -> Flow:
@@ -46,7 +68,7 @@ def build_flow(scopes: list[str], code_verifier: str | None = None) -> Flow:
             той самий, що був при генерації auth_url, інакше Google поверне
             invalid_grant. Якщо None — flow згенерує новий (для auth_url-фази).
     """
-    _allow_http_for_localhost()
+    _configure_oauthlib_env()
     flow = Flow.from_client_secrets_file(
         str(CREDENTIALS_PATH),
         scopes=scopes,
