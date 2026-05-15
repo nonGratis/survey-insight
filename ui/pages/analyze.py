@@ -5,7 +5,9 @@ import pandas as pd
 import streamlit as st
 
 from core.auth import credentials_from_dict
+from core.charts import bar_categorical, freq_table, hist_ordinal, response_count
 from core.forms_api import (
+    Question,
     get_form_structure,
     get_linked_sheet_id,
     list_user_forms,
@@ -82,15 +84,41 @@ if not sheet_id:
 elif df.empty:
     st.info("Sheet привʼязаний, але відповідей ще немає.")
 
-st.divider()
-st.subheader("Питання та типи")
-for idx, q in enumerate(questions, start=1):
-    with st.container(border=True):
-        st.markdown(f"**{idx}. {q.title}**")
-        st.caption(f"Тип: `{q.type}`")
-        if q.options:
-            st.write("Варіанти: " + ", ".join(q.options))
-
 if not df.empty:
     with st.expander("Перші 5 рядків відповідей (raw)", expanded=False):
         st.dataframe(df.head(), use_container_width=True, hide_index=True)
+
+
+st.divider()
+st.subheader("Аналіз по питаннях")
+
+
+def _render_question(idx: int, q: Question, df: pd.DataFrame) -> None:
+    """Відмалювати один expander під питання: метрика + графік/таблиця."""
+    label = f"{idx}. {q.title}  ·  `{q.type}`"
+    with st.expander(label, expanded=(idx == 1)):
+        if q.title not in df.columns:
+            st.caption("У Sheet немає колонки з такою назвою — пропускаю.")
+            return
+
+        st.metric("Відповідей на це питання", response_count(df, q.title))
+
+        if q.type in ("MULTIPLE_CHOICE", "CHECKBOX"):
+            st.plotly_chart(bar_categorical(df, q.title), use_container_width=True)
+        elif q.type == "LINEAR_SCALE":
+            st.plotly_chart(hist_ordinal(df, q.title), use_container_width=True)
+        elif q.type == "SHORT_ANSWER":
+            table = freq_table(df, q.title)
+            if table.empty:
+                st.caption("Немає непорожніх відповідей.")
+            else:
+                st.dataframe(table, use_container_width=True, hide_index=True)
+        else:
+            st.caption(f"Графік для `{q.type}` буде у наступних блоках.")
+
+
+if df.empty:
+    st.info("Відповіді ще не зʼявились — графіки покажуться, коли надійдуть.")
+else:
+    for idx, q in enumerate(questions, start=1):
+        _render_question(idx, q, df)
