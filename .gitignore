@@ -220,6 +220,9 @@ __marimo__/
 
 # survey-insight project-specific
 .streamlit/secrets.toml
+config/credentials.json
+config/*.json
+config/token.json
 data/raw/
 *.xlsx
 .vscode/
