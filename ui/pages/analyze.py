@@ -7,13 +7,14 @@ import streamlit as st
 from core.auth import credentials_from_dict
 from core.charts import bar_categorical, freq_table, hist_ordinal, response_count
 from core.forms_api import (
+    FormsApiError,
     Question,
     get_form_structure,
     get_linked_sheet_id,
     list_user_forms,
     parse_question_types,
 )
-from core.sheets_api import fetch_responses
+from core.sheets_api import SheetsApiError, fetch_responses
 from ui.components.auth_widget import ensure_api_access
 
 st.title("Аналіз")
@@ -30,7 +31,11 @@ def _cached_forms(_creds_token: str) -> list[dict]:
     return list_user_forms(creds)
 
 
-forms = _cached_forms(creds.token or "")
+try:
+    forms = _cached_forms(creds.token or "")
+except FormsApiError as exc:
+    st.error(f"Не вдалося отримати список форм: {exc}")
+    st.stop()
 
 if not forms:
     st.info(
@@ -54,7 +59,12 @@ def _cached_structure(form_id: str, _creds_token: str) -> dict:
     return get_form_structure(creds, form_id)
 
 
-structure = _cached_structure(choice["id"], creds.token or "")
+try:
+    structure = _cached_structure(choice["id"], creds.token or "")
+except FormsApiError as exc:
+    st.error(f"Не вдалося завантажити форму: {exc}")
+    st.stop()
+
 questions = parse_question_types(structure)
 sheet_id = get_linked_sheet_id(structure)
 
@@ -64,16 +74,17 @@ def _cached_responses(sheet_id_: str, _creds_token: str) -> pd.DataFrame:
     return fetch_responses(creds, sheet_id_)
 
 
-df: pd.DataFrame
+df = pd.DataFrame()
 if sheet_id:
-    df = _cached_responses(sheet_id, creds.token or "")
-else:
-    df = pd.DataFrame()
+    try:
+        df = _cached_responses(sheet_id, creds.token or "")
+    except SheetsApiError as exc:
+        st.error(f"Не вдалося завантажити відповіді: {exc}")
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Назва форми", structure.get("info", {}).get("title", "—"))
 col2.metric("Питань", len(questions))
-col3.metric("Відповідей", len(df) if sheet_id else "—")
+col3.metric("Відповідей", str(len(df)) if sheet_id else "—")
 
 if not sheet_id:
     st.warning(

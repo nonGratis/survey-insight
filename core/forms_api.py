@@ -7,12 +7,32 @@ Forms API дає структуру форми: питання, типи, вар
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 FORM_MIME_TYPE = "application/vnd.google-apps.form"
+DEFAULT_FORMS_PAGE_SIZE = 50
+
+QuestionType = Literal[
+    "MULTIPLE_CHOICE",
+    "CHECKBOX",
+    "SHORT_ANSWER",
+    "LINEAR_SCALE",
+    "DATE",
+    "TIME",
+    "UNKNOWN",
+]
+
+
+class FormsApiError(RuntimeError):
+    """Доменна помилка під будь-який збій Forms/Drive API.
+
+    Перехоплює googleapiclient.errors.HttpError і дає UI-шару змістовне
+    повідомлення замість сирого traceback.
+    """
 
 
 @dataclass(frozen=True)
@@ -21,11 +41,13 @@ class Question:
 
     id: str
     title: str
-    type: str  # MULTIPLE_CHOICE | CHECKBOX | SHORT_ANSWER | LINEAR_SCALE | DATE | TIME | UNKNOWN
+    type: QuestionType
     options: list[str]  # для CHOICE/CHECKBOX — список варіантів, інакше []
 
 
-def list_user_forms(creds: Credentials, page_size: int = 50) -> list[dict]:
+def list_user_forms(
+    creds: Credentials, page_size: int = DEFAULT_FORMS_PAGE_SIZE
+) -> list[dict[str, Any]]:
     """Повернути список Google Forms користувача через Drive API.
 
     Args:
@@ -35,21 +57,40 @@ def list_user_forms(creds: Credentials, page_size: int = 50) -> list[dict]:
     Returns:
         Список dict: [{id, name, modifiedTime}, ...] відсортований за
         modifiedTime descending.
+
+    Raises:
+        FormsApiError: при будь-якій HTTP-помилці від Drive API
+            (403 — нема scope, 401 — токен невалідний, тощо).
     """
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
-    resp = service.files().list(
-        q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
-        fields="files(id,name,modifiedTime)",
-        pageSize=page_size,
-        orderBy="modifiedTime desc",
-    ).execute()
+    try:
+        resp = service.files().list(
+            q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
+            fields="files(id,name,modifiedTime)",
+            pageSize=page_size,
+            orderBy="modifiedTime desc",
+        ).execute()
+    except HttpError as exc:
+        raise FormsApiError(
+            f"Не вдалося отримати список форм з Drive: {exc.reason or exc}"
+        ) from exc
     return resp.get("files", [])
 
 
 def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
-    """Завантажити повну структуру форми через Forms API."""
+    """Завантажити повну структуру форми через Forms API.
+
+    Raises:
+        FormsApiError: 403 (нема forms.body.readonly), 404 (форма видалена
+            або недоступна), інші HTTP-помилки.
+    """
     service = build("forms", "v1", credentials=creds, cache_discovery=False)
-    return service.forms().get(formId=form_id).execute()
+    try:
+        return service.forms().get(formId=form_id).execute()
+    except HttpError as exc:
+        raise FormsApiError(
+            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}"
+        ) from exc
 
 
 def get_linked_sheet_id(form: dict[str, Any]) -> str | None:

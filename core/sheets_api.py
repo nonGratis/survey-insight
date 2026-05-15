@@ -11,10 +11,15 @@ from __future__ import annotations
 import pandas as pd
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 # Sheets API "A:ZZ" покриває до 702 колонок — більш ніж достатньо для
 # будь-якої реальної форми (максимум у Google Forms ~300 питань).
 DEFAULT_COLUMN_RANGE = "A:ZZ"
+
+
+class SheetsApiError(RuntimeError):
+    """Доменна помилка Sheets API — для змістовного UI-повідомлення."""
 
 
 def _find_response_sheet_name(service, sheet_id: str) -> str:
@@ -47,20 +52,30 @@ def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
         DataFrame, де колонки — заголовки з першого рядка аркуша
         (зазвичай "Timestamp" + назви питань форми). Порожній DataFrame,
         якщо відповідей ще немає.
+
+    Raises:
+        SheetsApiError: на 403/404 та інші HTTP-помилки Sheets API.
     """
     service = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    sheet_name = _find_response_sheet_name(service, sheet_id)
-    range_name = f"'{sheet_name}'!{DEFAULT_COLUMN_RANGE}"
-    resp = service.spreadsheets().values().get(
-        spreadsheetId=sheet_id, range=range_name
-    ).execute()
+    try:
+        sheet_name = _find_response_sheet_name(service, sheet_id)
+        range_name = f"'{sheet_name}'!{DEFAULT_COLUMN_RANGE}"
+        resp = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id, range=range_name
+        ).execute()
+    except HttpError as exc:
+        raise SheetsApiError(
+            f"Не вдалося прочитати Sheet {sheet_id}: {exc.reason or exc}"
+        ) from exc
 
     values = resp.get("values", [])
     if not values:
         return pd.DataFrame()
 
     headers, *rows = values
-    # Sheets API обрізає trailing порожні cells у кожному рядку —
-    # доповнюємо до довжини headers, інакше DataFrame не побудується.
-    rows = [row + [""] * (len(headers) - len(row)) for row in rows]
+    # Sheets API обрізає trailing порожні cells. Нормалізуємо кожен рядок
+    # точно до довжини headers: padding порожніми або truncate, якщо
+    # користувач випадково додав колонки поза header-рядком.
+    width = len(headers)
+    rows = [(row + [""] * max(0, width - len(row)))[:width] for row in rows]
     return pd.DataFrame(rows, columns=headers)
