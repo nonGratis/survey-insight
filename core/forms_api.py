@@ -52,6 +52,15 @@ def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
     return service.forms().get(formId=form_id).execute()
 
 
+def get_linked_sheet_id(form: dict[str, Any]) -> str | None:
+    """Повернути id привʼязаного Google Sheet або None.
+
+    Forms API заповнює top-level поле `linkedSheetId` лише коли власник
+    форми створив link до Sheet через Responses → Link to Sheets.
+    """
+    return form.get("linkedSheetId")
+
+
 def parse_question_types(form: dict[str, Any]) -> list[Question]:
     """Витягти питання та класифікувати типи.
 
