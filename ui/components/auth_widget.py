@@ -12,6 +12,7 @@ Credentials серіалізуємо в session_state — достатньо д�
 from __future__ import annotations
 
 import streamlit as st
+from streamlit.delta_generator import DeltaGenerator
 
 from core.auth import (
     API_SCOPES,
@@ -68,44 +69,76 @@ def _handle_oauth_callback() -> None:
     st.rerun()
 
 
-def _render_login_button() -> None:
+def _get_container(location: str) -> DeltaGenerator:
+    if location == "sidebar":
+        return st.sidebar
+    return st
+
+
+def _render_login_button(location: str = "sidebar") -> None:
     flow = build_flow(IDENTITY_SCOPES)
     auth_url, verifier = get_auth_url(flow)
     save_verifier(verifier)
-    st.sidebar.markdown("### Доступ")
-    st.sidebar.link_button("Увійти через Google", auth_url, use_container_width=True)
-    st.sidebar.caption("Demo в Testing-режимі: працює лише для test users.")
+    container = _get_container(location)
+    container.link_button("Увійти через Google", auth_url, use_container_width=True)
+    container.caption("Demo в Testing-режимі: працює лише для test users.")
 
 
-def _render_logged_in() -> None:
+def _render_logged_in(location: str = "sidebar") -> None:
     user = st.session_state.get("user", {})
     email = user.get("email", "—")
     name = user.get("name", "")
     picture = user.get("picture")
 
-    st.sidebar.markdown("### Профіль")
+    container = _get_container(location)
+    container.subheader("Профіль")
     if picture:
-        st.sidebar.image(picture, width=64)
-    st.sidebar.markdown(f"**{name}**")
-    st.sidebar.caption(email)
-    if st.sidebar.button("Вийти", use_container_width=True):
+        container.image(picture, width=64)
+    if name:
+        container.text(name)
+    container.caption(email)
+    if container.button("Вийти", use_container_width=True):
         st.session_state.pop("credentials", None)
         st.session_state.pop("user", None)
         st.rerun()
 
 
-def render_login() -> bool:
-    """Відмалювати auth-віджет у sidebar. Повертає True, якщо залогінений."""
+def ensure_login_state() -> bool:
+    """Оновити стан входу та повернути True, якщо є валідні credentials."""
     _handle_oauth_callback()
 
     if "credentials" in st.session_state:
         creds = credentials_from_dict(st.session_state["credentials"])
         creds = refresh_if_needed(creds)
         st.session_state["credentials"] = credentials_to_dict(creds)
-        _render_logged_in()
         return True
 
-    _render_login_button()
+    return False
+
+
+def render_login_button(location: str = "sidebar") -> None:
+    """Відмалювати кнопку входу в заданій області."""
+    _render_login_button(location)
+
+
+def render_profile(location: str = "sidebar") -> None:
+    """Відмалювати профіль та кнопку виходу в заданій області."""
+    _render_logged_in(location)
+
+
+def render_login(
+    location: str = "sidebar",
+    profile_location: str | None = "sidebar",
+) -> bool:
+    """Відмалювати auth-віджет. Повертає True, якщо залогінений."""
+    logged_in = ensure_login_state()
+
+    if logged_in:
+        if profile_location:
+            _render_logged_in(profile_location)
+        return True
+
+    _render_login_button(location)
     return False
 
 
