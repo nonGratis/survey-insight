@@ -145,20 +145,6 @@ def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
     }
 
 
-def _render_sidebar() -> list[str]:
-    """Намалювати sidebar для налаштування видимих колонок."""
-    with st.sidebar:
-        with st.expander("Налаштування таблиці", expanded=False):
-            visible = st.multiselect(
-                "Видимі колонки (порядок selection = порядок у таблиці)",
-                options=ALL_COLUMNS,
-                default=DEFAULT_VISIBLE_COLUMNS,
-                key="catalog_visible_columns",
-            )
-
-    return visible or ALL_COLUMNS  # порожній multiselect = показати все
-
-
 def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
     """Послідовно застосувати фільтри. Pending-рядки (без enrichment)
     проходять тільки коли селектор стоїть на 'Усі'."""
@@ -226,8 +212,6 @@ def _build_dataframe(
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce", utc=True)
     return df
 
-
-visible_columns = _render_sidebar()
 filter_values = _render_table_filters(forms_meta)
 
 
@@ -272,7 +256,7 @@ def _table_with_enrichment() -> None:
 
     df = _build_dataframe(forms_meta, enrichments, stats)
     filtered = _apply_filters(df, filter_values)
-    table_columns = list(visible_columns)
+    table_columns = list(ALL_COLUMNS)
     display = filtered[[c for c in table_columns if c in filtered.columns]].copy()
     if "Accepting" in display.columns:
         display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
