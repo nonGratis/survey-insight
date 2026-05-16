@@ -72,7 +72,7 @@ def _handle_oauth_callback() -> None:
 def _get_container(location: str) -> DeltaGenerator:
     if location == "sidebar":
         return st.sidebar
-    return st
+    return st.container()
 
 
 def _render_login_button(location: str = "sidebar") -> None:
