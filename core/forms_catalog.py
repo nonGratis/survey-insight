@@ -103,7 +103,8 @@ def list_forms_with_drive_meta(creds: Credentials) -> list[FormDriveMeta]:
                 break
     except HttpError as exc:
         raise FormsApiError(
-            f"Не вдалося отримати каталог форм з Drive: {exc.reason or exc}"
+            f"Не вдалося отримати каталог форм з Drive: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
     return items
 
@@ -142,7 +143,8 @@ def enrich_form(creds: Credentials, form_id: str) -> FormEnrichment:
             form = service.forms().get(formId=form_id).execute()
     except HttpError as exc:
         raise FormsApiError(
-            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}"
+            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
     return _parse_form(form)
 
@@ -191,7 +193,8 @@ def fetch_response_stats(creds: Credentials, sheet_id: str) -> ResponseStats:
     except HttpError as exc:
         raise SheetsApiError(
             f"Не вдалося отримати timestamps з Sheet {sheet_id}: "
-            f"{exc.reason or exc}"
+            f"{exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
 
     values = resp.get("values", [])

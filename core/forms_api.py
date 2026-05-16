@@ -35,8 +35,14 @@ class FormsApiError(RuntimeError):
     """Доменна помилка під будь-який збій Forms/Drive API.
 
     Перехоплює googleapiclient.errors.HttpError і дає UI-шару змістовне
-    повідомлення замість сирого traceback.
+    повідомлення замість сирого traceback. Зберігає HTTP-статус, щоб
+    caller (наприклад parallel_map) міг розрізняти "очікувані" коди
+    (403 shared form без access, 404 видалена форма) від справжніх збоїв.
     """
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -83,7 +89,8 @@ def list_user_forms(
             ).execute()
     except HttpError as exc:
         raise FormsApiError(
-            f"Не вдалося отримати список форм з Drive: {exc.reason or exc}"
+            f"Не вдалося отримати список форм з Drive: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
     return resp.get("files", [])
 
@@ -103,7 +110,8 @@ def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
             return service.forms().get(formId=form_id).execute()
     except HttpError as exc:
         raise FormsApiError(
-            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}"
+            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
 
 

@@ -23,7 +23,16 @@ DEFAULT_COLUMN_RANGE = "A:ZZ"
 
 
 class SheetsApiError(RuntimeError):
-    """Доменна помилка Sheets API — для змістовного UI-повідомлення."""
+    """Доменна помилка Sheets API — для змістовного UI-повідомлення.
+
+    Зберігає HTTP-статус. Це дозволяє caller'у (parallel_map) розрізняти
+    очікувані коди (403 shared form без read-access до Sheet, 404 видалений)
+    від справжніх збоїв і знижувати log-level відповідно.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 def find_response_sheet_name(service, sheet_id: str) -> str:
@@ -85,7 +94,8 @@ def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
             ).execute()
     except HttpError as exc:
         raise SheetsApiError(
-            f"Не вдалося прочитати Sheet {sheet_id}: {exc.reason or exc}"
+            f"Не вдалося прочитати Sheet {sheet_id}: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
 
     values = resp.get("values", [])

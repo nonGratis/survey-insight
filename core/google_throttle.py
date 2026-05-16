@@ -26,6 +26,11 @@ R = TypeVar("R")
 DEFAULT_MAX_WORKERS = 5
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 
+# HTTP-коди, які трактуємо як "очікувано-нерезультативний" доступ
+# (shared form без read-access до Sheet, видалена форма тощо). Для них
+# parallel_map логує INFO без traceback — це нормальний потік, не дефект.
+EXPECTED_DENIED_STATUSES = {403, 404}
+
 
 def call_with_backoff(
     fn: Callable[..., R],
@@ -103,13 +108,41 @@ def parallel_map(
             try:
                 results.append((item, future.result()))
             except Exception as exc:  # noqa: BLE001
-                # exc_info=True не дасть traceback'у з future.result(), бо
-                # sys.exc_info() тут порожній. Будуємо tuple явно зі
-                # збереженим __traceback__.
-                log.warning(
-                    "parallel_task_failed",
-                    extra={"op": getattr(fn, "__name__", repr(fn))},
-                    exc_info=(type(exc), exc, exc.__traceback__),
-                )
+                _log_parallel_failure(fn, exc)
                 results.append((item, exc))
     return results
+
+
+def _log_parallel_failure(fn: Callable, exc: BaseException) -> None:
+    """Класифікувати exception і залогувати на адекватному рівні.
+
+    - Очікуваний denied (HTTP 403/404) → INFO без traceback (нормальний
+      потік для shared-форм без доступу до Sheet).
+    - Інша доменна помилка (RuntimeError-нащадок із вже інформативним
+      повідомленням) → WARNING без traceback.
+    - Все інше (KeyError, TypeError, ...) → WARNING з повним traceback —
+      це справді щось зламалось і вимагає уваги.
+    """
+    op = getattr(fn, "__name__", repr(fn))
+    status = getattr(exc, "status", None)
+    extra: dict[str, object] = {
+        "op": op,
+        "exc_type": type(exc).__name__,
+        # `msg` зарезервовано LogRecord'ом — використовуємо `exc_msg`.
+        "exc_msg": str(exc),
+    }
+    if status is not None:
+        extra["status"] = status
+
+    if status in EXPECTED_DENIED_STATUSES:
+        log.info("parallel_task_denied", extra=extra)
+    elif isinstance(exc, RuntimeError):
+        log.warning("parallel_task_failed", extra=extra)
+    else:
+        # Будуємо exc_info tuple явно — sys.exc_info() тут порожній,
+        # exc_info=True не дав би traceback'у з future.result().
+        log.warning(
+            "parallel_task_failed",
+            extra=extra,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
