@@ -11,9 +11,10 @@ Tier 2/3 виконуються у фоні через @st.fragment(run_every) t
 session_state. Користувач не чекає на повний enrichment — таблиця
 відображається одразу з Tier 1 і дозаповнюється рядок-за-рядком.
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pandas as pd
 import streamlit as st
@@ -29,7 +30,10 @@ from core.forms_catalog import (
     list_forms_with_drive_meta,
 )
 from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
+from core.logger import get_logger
 from ui.components.auth_widget import ensure_api_access
+
+log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
 
@@ -78,6 +82,7 @@ def _cached_drive_list(_creds_token: str) -> list[FormDriveMeta]:
 try:
     forms_meta = _cached_drive_list(creds.token or "")
 except FormsApiError as exc:
+    log.exception("ui_catalog_drive_list_failed", extra={"status": exc.status})
     st.error(f"Не вдалося завантажити каталог: {exc}")
     st.stop()
 
@@ -159,8 +164,8 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
     if isinstance(f["date_range"], (tuple, list)) and len(f["date_range"]) == 2:
         start, end = f["date_range"]
         if isinstance(start, date) and isinstance(end, date):
-            start_ts = pd.Timestamp(datetime.combine(start, datetime.min.time()), tz=timezone.utc)
-            end_ts = pd.Timestamp(datetime.combine(end, datetime.max.time()), tz=timezone.utc)
+            start_ts = pd.Timestamp(datetime.combine(start, datetime.min.time()), tz=UTC)
+            end_ts = pd.Timestamp(datetime.combine(end, datetime.max.time()), tz=UTC)
             out = out[(out["Modified"] >= start_ts) & (out["Modified"] <= end_ts)]
 
     if f["accepting"] == "Приймає відповіді":
@@ -170,7 +175,7 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
 
     if f["sheet"] != "Усі":
         has_sheet = out["SheetID"].astype(str).str.len() > 0
-        if f["sheet"] == "З привʼязаним Sheet":
+        if f["sheet"] == "З привʼязаним Sheet":  # noqa: SIM108 — if/else тут читабельніший за ternary
             out = out[has_sheet]
         else:  # "Без Sheet"
             out = out[~has_sheet]
@@ -211,6 +216,7 @@ def _build_dataframe(
     df["Modified"] = pd.to_datetime(df["Modified"], errors="coerce", utc=True)
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce", utc=True)
     return df
+
 
 filter_values = _render_table_filters(forms_meta)
 
@@ -264,7 +270,7 @@ def _table_with_enrichment() -> None:
     st.dataframe(
         display,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "📊": st.column_config.LinkColumn(
                 help="Перейти на сторінку Аналіз",
@@ -284,12 +290,8 @@ def _table_with_enrichment() -> None:
             "Accepting": st.column_config.TextColumn("Приймає"),
             "Total": st.column_config.NumberColumn("Відповідей", format="%d"),
             "LastResponse": st.column_config.TextColumn("Остання відповідь"),
-            "Modified": st.column_config.DatetimeColumn(
-                "Змінено", format="DD.MM.YYYY HH:mm"
-            ),
-            "Created": st.column_config.DatetimeColumn(
-                "Створено", format="DD.MM.YYYY HH:mm"
-            ),
+            "Modified": st.column_config.DatetimeColumn("Змінено", format="DD.MM.YYYY HH:mm"),
+            "Created": st.column_config.DatetimeColumn("Створено", format="DD.MM.YYYY HH:mm"),
             "SheetID": st.column_config.TextColumn("Sheet ID", width="small"),
             "Description": st.column_config.TextColumn("Опис"),
         },
