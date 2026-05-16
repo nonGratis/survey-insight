@@ -13,6 +13,7 @@ Event-name convention:
 - auth_login_ok / auth_callback_failed / oauth_userinfo_failed
 - ui_<page>_load_failed
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -22,9 +23,10 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Iterator, Literal
+from datetime import UTC, datetime
+from typing import Literal
 
 # RESERVED: усе, що `LogRecord` ставить сам, виключаємо з extras.
 # Авто-derive із порожнього запису — щоб не пропустити нові поля у Python 3.12+.
@@ -53,7 +55,7 @@ class JSONFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -72,9 +74,7 @@ class HumanFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
-        base = (
-            f"{ts} {record.levelname:<7} {record.name}: {record.getMessage()}"
-        )
+        base = f"{ts} {record.levelname:<7} {record.name}: {record.getMessage()}"
         extras = _safe_extras(record)
         if extras:
             base += "  [" + " ".join(f"{k}={v}" for k, v in extras.items()) + "]"
@@ -144,9 +144,7 @@ def setup_logging(force: bool = False) -> None:
     Викликати ОДИН РАЗ у entry-point (app.py) до будь-яких імпортів core/.
     """
     root = logging.getLogger()
-    if not force and any(
-        getattr(h, _HANDLER_MARKER, False) for h in root.handlers
-    ):
+    if not force and any(getattr(h, _HANDLER_MARKER, False) for h in root.handlers):
         return
 
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
