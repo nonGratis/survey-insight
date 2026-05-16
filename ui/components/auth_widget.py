@@ -80,7 +80,11 @@ def _render_login_button(location: str = "sidebar") -> None:
     auth_url, verifier = get_auth_url(flow)
     save_verifier(verifier)
     container = _get_container(location)
-    container.link_button("Увійти через Google", auth_url, use_container_width=True)
+    container.link_button(
+        "Увійти через Google",
+        auth_url,
+        use_container_width=True,
+    )
     container.caption("Demo в Testing-режимі: працює лише для test users.")
 
 
