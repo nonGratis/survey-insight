@@ -50,7 +50,6 @@ ALL_COLUMNS = [
     "Created",
     "SheetID",
     "Description",
-    "FullID",
 ]
 DEFAULT_VISIBLE_COLUMNS = [
     "📊",
@@ -216,7 +215,6 @@ def _build_dataframe(
             "Created": f.created_time,
             "SheetID": (enr.linked_sheet_id or "") if enr else "",
             "Description": (enr.description or "") if enr else "",
-            "FullID": f.id,
         }
         rows.append(row)
     df = pd.DataFrame(rows)
@@ -272,11 +270,7 @@ def _table_with_enrichment() -> None:
 
     df = _build_dataframe(forms_meta, enrichments, stats)
     filtered = _apply_filters(df, filter_values)
-    # Завжди тримаємо FullID у наборі — він знадобиться для row-selection state
-    # bridge у наступному коміті, навіть якщо користувач його приховав.
     table_columns = list(visible_columns)
-    if "FullID" not in table_columns:
-        table_columns.append("FullID")
     display = filtered[[c for c in table_columns if c in filtered.columns]]
 
     st.dataframe(
@@ -310,7 +304,6 @@ def _table_with_enrichment() -> None:
             ),
             "SheetID": st.column_config.TextColumn("Sheet ID", width="small"),
             "Description": st.column_config.TextColumn("Опис"),
-            "FullID": st.column_config.TextColumn("Form ID", width="small"),
         },
     )
 
