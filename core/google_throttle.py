@@ -13,6 +13,10 @@ from typing import Callable, Iterable, TypeVar
 
 from googleapiclient.errors import HttpError
 
+from core.logger import get_logger
+
+log = get_logger(__name__)
+
 T = TypeVar("T")
 R = TypeVar("R")
 
@@ -32,11 +36,19 @@ def call_with_backoff(
 ) -> R:
     """Викликати Google API з експоненційним backoff на 429/5xx.
 
+    Логування:
+    - Success-path не логується ТУТ — кожен виклик уже обгорнутий log_call
+      у відповідному API-helper'і (анти-дубль).
+    - WARNING `api_op_retry` на кожній спробі-після-першої.
+    - ERROR `api_op_failed` із traceback на остаточному провалі.
+
     Args:
         fn: функція Google API клієнта (зазвичай method().execute()).
         max_retries: скільки разів пробуємо при ретраєбл-помилках.
         base_delay: стартова затримка в секундах; кожен ретрай ×2 + jitter.
     """
+    label = getattr(fn, "__name__", repr(fn))
+    overall_start = time.perf_counter()
     for attempt in range(max_retries):
         try:
             return fn(*args, **kwargs)
@@ -44,8 +56,27 @@ def call_with_backoff(
             retryable = exc.resp.status in RETRY_HTTP_CODES
             if retryable and attempt < max_retries - 1:
                 delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                log.warning(
+                    "api_op_retry",
+                    extra={
+                        "op": label,
+                        "status": exc.resp.status,
+                        "attempt": attempt + 1,
+                        "delay_s": round(delay, 2),
+                    },
+                )
                 time.sleep(delay)
                 continue
+            duration_ms = round((time.perf_counter() - overall_start) * 1000, 1)
+            log.error(
+                "api_op_failed",
+                extra={
+                    "op": label,
+                    "duration_ms": duration_ms,
+                    "status": exc.resp.status,
+                },
+                exc_info=True,
+            )
             raise
     raise RuntimeError("unreachable: max_retries should have raised")
 
@@ -72,5 +103,13 @@ def parallel_map(
             try:
                 results.append((item, future.result()))
             except Exception as exc:  # noqa: BLE001
+                # exc_info=True не дасть traceback'у з future.result(), бо
+                # sys.exc_info() тут порожній. Будуємо tuple явно зі
+                # збереженим __traceback__.
+                log.warning(
+                    "parallel_task_failed",
+                    extra={"op": getattr(fn, "__name__", repr(fn))},
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
                 results.append((item, exc))
     return results
