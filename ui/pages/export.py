@@ -1,4 +1,5 @@
 """Сторінка експорту в long format CSV та PDF-звіт."""
+
 import streamlit as st
 
 st.title("Експорт")

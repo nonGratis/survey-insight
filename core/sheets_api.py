@@ -6,6 +6,7 @@ header-рядком (питання форми + Timestamp) і одним ряд
 ("Form Responses 1" / "Відповіді форми 1"), тому ми завжди спочатку
 читаємо metadata.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -53,23 +54,24 @@ def find_response_sheet_name(service, sheet_id: str) -> str:
             sheet_id=sheet_id,
             logger=log,
         ):
-            meta = service.spreadsheets().get(
-                spreadsheetId=sheet_id,
-                fields="sheets(properties(title,sheetType))",
-            ).execute()
+            meta = (
+                service.spreadsheets()
+                .get(
+                    spreadsheetId=sheet_id,
+                    fields="sheets(properties(title,sheetType))",
+                )
+                .execute()
+            )
     except HttpError as exc:
         raise SheetsApiError(
-            f"Не вдалося прочитати metadata Sheet {sheet_id}: "
-            f"{exc.reason or exc}",
+            f"Не вдалося прочитати metadata Sheet {sheet_id}: {exc.reason or exc}",
             status=exc.resp.status,
         ) from exc
     for sheet in meta.get("sheets", []):
         props = sheet.get("properties", {})
         if props.get("sheetType", "GRID") == "GRID":
             return props["title"]
-    raise SheetsApiError(
-        f"У spreadsheet {sheet_id} не знайдено жодного GRID-аркуша."
-    )
+    raise SheetsApiError(f"У spreadsheet {sheet_id} не знайдено жодного GRID-аркуша.")
 
 
 def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
@@ -98,9 +100,12 @@ def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
             sheet_id=sheet_id,
             logger=log,
         ):
-            resp = service.spreadsheets().values().get(
-                spreadsheetId=sheet_id, range=range_name
-            ).execute()
+            resp = (
+                service.spreadsheets()
+                .values()
+                .get(spreadsheetId=sheet_id, range=range_name)
+                .execute()
+            )
     except HttpError as exc:
         raise SheetsApiError(
             f"Не вдалося прочитати Sheet {sheet_id}: {exc.reason or exc}",
