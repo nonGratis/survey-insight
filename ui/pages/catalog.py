@@ -268,7 +268,7 @@ def _table_with_enrichment() -> None:
     st.dataframe(
         display,
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "📊": st.column_config.LinkColumn(
                 help="Перейти на сторінку Аналіз",

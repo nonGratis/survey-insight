@@ -85,7 +85,7 @@ def _render_login_button() -> None:
     auth_url, verifier = get_auth_url(flow)
     save_verifier(verifier)
     st.sidebar.markdown("### Доступ")
-    st.sidebar.link_button("Увійти через Google", auth_url, use_container_width=True)
+    st.sidebar.link_button("Увійти через Google", auth_url, width="stretch")
     st.sidebar.caption("Demo в Testing-режимі: працює лише для test users.")
 
 
@@ -100,7 +100,7 @@ def _render_logged_in() -> None:
         st.sidebar.image(picture, width=64)
     st.sidebar.markdown(f"**{name}**")
     st.sidebar.caption(email)
-    if st.sidebar.button("Вийти", use_container_width=True):
+    if st.sidebar.button("Вийти", width="stretch"):
         st.session_state.pop("credentials", None)
         st.session_state.pop("user", None)
         st.rerun()

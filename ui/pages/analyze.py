@@ -125,7 +125,7 @@ elif df.empty:
 
 if not df.empty:
     with st.expander("Перші 5 рядків відповідей (raw)", expanded=False):
-        st.dataframe(df.head(), use_container_width=True, hide_index=True)
+        st.dataframe(df.head(), width="stretch", hide_index=True)
 
 
 st.divider()
@@ -143,15 +143,15 @@ def _render_question(idx: int, q: Question, df: pd.DataFrame) -> None:
         st.metric("Відповідей на це питання", response_count(df, q.title))
 
         if q.type in ("MULTIPLE_CHOICE", "CHECKBOX"):
-            st.plotly_chart(bar_categorical(df, q.title), use_container_width=True)
+            st.plotly_chart(bar_categorical(df, q.title), width="stretch")
         elif q.type == "LINEAR_SCALE":
-            st.plotly_chart(hist_ordinal(df, q.title), use_container_width=True)
+            st.plotly_chart(hist_ordinal(df, q.title), width="stretch")
         elif q.type == "SHORT_ANSWER":
             table = freq_table(df, q.title)
             if table.empty:
                 st.caption("Немає непорожніх відповідей.")
             else:
-                st.dataframe(table, use_container_width=True, hide_index=True)
+                st.dataframe(table, width="stretch", hide_index=True)
         else:
             st.caption(f"Графік для `{q.type}` буде у наступних блоках.")
 
