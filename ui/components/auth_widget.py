@@ -28,6 +28,9 @@ from core.auth import (
     refresh_if_needed,
     save_verifier,
 )
+from core.logger import get_logger, hash_email
+
+log = get_logger(__name__)
 
 
 def _handle_oauth_callback() -> None:
@@ -56,6 +59,7 @@ def _handle_oauth_callback() -> None:
         creds = exchange_code(flow, code)
         user = get_user_info(creds)
     except Exception as exc:  # noqa: BLE001
+        log.exception("auth_callback_failed")
         st.error(f"Помилка входу: {exc}")
         st.query_params.clear()
         clear_verifier()
@@ -64,6 +68,14 @@ def _handle_oauth_callback() -> None:
     clear_verifier()
     st.session_state["credentials"] = credentials_to_dict(creds)
     st.session_state["user"] = user
+    email = user.get("email", "")
+    log.info(
+        "auth_login_ok",
+        extra={
+            "user_hash": hash_email(email) if email else "",
+            "scopes_count": len(scopes),
+        },
+    )
     st.query_params.clear()
     st.rerun()
 
@@ -73,7 +85,7 @@ def _render_login_button() -> None:
     auth_url, verifier = get_auth_url(flow)
     save_verifier(verifier)
     st.sidebar.markdown("### Доступ")
-    st.sidebar.link_button("Увійти через Google", auth_url, use_container_width=True)
+    st.sidebar.link_button("Увійти через Google", auth_url, width="stretch")
     st.sidebar.caption("Demo в Testing-режимі: працює лише для test users.")
 
 
@@ -88,7 +100,7 @@ def _render_logged_in() -> None:
         st.sidebar.image(picture, width=64)
     st.sidebar.markdown(f"**{name}**")
     st.sidebar.caption(email)
-    if st.sidebar.button("Вийти", use_container_width=True):
+    if st.sidebar.button("Вийти", width="stretch"):
         st.session_state.pop("credentials", None)
         st.session_state.pop("user", None)
         st.rerun()

@@ -4,6 +4,12 @@
 оголошення сторінок. Бізнес-логіка живе у core/, UI — у ui/pages/.
 Доступ до сторінок гейтується OAuth-логіном (Google identity).
 """
+# Налаштовуємо logging першим, до будь-яких інших імпортів core/, щоб
+# модулі одразу отримали сконфігурований root logger.
+from core.logger import setup_logging
+
+setup_logging()
+
 import streamlit as st
 
 from ui.components.auth_widget import render_login
@@ -21,9 +27,30 @@ if not logged_in:
     st.stop()
 
 pages = [
-    st.Page("ui/pages/analyze.py", title="Аналіз", icon=":material/analytics:"),
-    st.Page("ui/pages/weighting.py", title="Зважування", icon=":material/balance:"),
-    st.Page("ui/pages/export.py", title="Експорт", icon=":material/download:"),
+    st.Page(
+        "ui/pages/catalog.py",
+        title="Каталог",
+        icon=":material/table_view:",
+        url_path="catalog",
+    ),
+    st.Page(
+        "ui/pages/analyze.py",
+        title="Аналіз",
+        icon=":material/analytics:",
+        url_path="analyze",
+    ),
+    st.Page(
+        "ui/pages/weighting.py",
+        title="Зважування",
+        icon=":material/balance:",
+        url_path="weighting",
+    ),
+    st.Page(
+        "ui/pages/export.py",
+        title="Експорт",
+        icon=":material/download:",
+        url_path="export",
+    ),
 ]
 
 nav = st.navigation(pages)

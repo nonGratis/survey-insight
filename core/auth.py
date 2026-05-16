@@ -15,6 +15,10 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
+from core.logger import get_logger, log_call
+
+log = get_logger(__name__)
+
 CREDENTIALS_PATH = Path("config") / "credentials.json"
 REDIRECT_URI = "http://localhost:8501"
 # PKCE verifier зберігаємо у temp-файлі, бо Streamlit session_state
@@ -157,4 +161,5 @@ def refresh_if_needed(creds: Credentials) -> Credentials:
 def get_user_info(creds: Credentials) -> dict:
     """Дістати email/name/picture через oauth2 v2 userinfo endpoint."""
     service = build("oauth2", "v2", credentials=creds, cache_discovery=False)
-    return service.userinfo().get().execute()
+    with log_call("api_call_ok", target="oauth.userinfo", logger=log):
+        return service.userinfo().get().execute()

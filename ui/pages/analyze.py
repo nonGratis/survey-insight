@@ -14,8 +14,11 @@ from core.forms_api import (
     list_user_forms,
     parse_question_types,
 )
+from core.logger import get_logger
 from core.sheets_api import SheetsApiError, fetch_responses
 from ui.components.auth_widget import ensure_api_access
+
+log = get_logger(__name__)
 
 st.title("Аналіз")
 
@@ -34,6 +37,7 @@ def _cached_forms(_creds_token: str) -> list[dict]:
 try:
     forms = _cached_forms(creds.token or "")
 except FormsApiError as exc:
+    log.exception("ui_analyze_list_forms_failed", extra={"status": exc.status})
     st.error(f"Не вдалося отримати список форм: {exc}")
     st.stop()
 
@@ -44,10 +48,26 @@ if not forms:
     )
     st.stop()
 
+# Якщо користувач прийшов сюди з Каталог через LinkColumn-кнопку "Аналіз",
+# URL міститиме ?form_id=ABC; підбираємо її як default у selectbox.
+preselected_id = st.query_params.get("form_id")
+default_idx = 0
+if preselected_id:
+    matched = next(
+        (i for i, f in enumerate(forms) if f["id"] == preselected_id), None
+    )
+    if matched is not None:
+        default_idx = matched
+    # Прибираємо query-param, щоб користувач міг вільно міняти selectbox,
+    # а URL не "тягнув" стару форму при наступному rerun.
+    if "form_id" in st.query_params:
+        del st.query_params["form_id"]
+
 choice = st.selectbox(
     "Виберіть форму",
     options=forms,
     format_func=lambda f: f["name"],
+    index=default_idx,
 )
 
 if not choice:
@@ -62,6 +82,10 @@ def _cached_structure(form_id: str, _creds_token: str) -> dict:
 try:
     structure = _cached_structure(choice["id"], creds.token or "")
 except FormsApiError as exc:
+    log.exception(
+        "ui_analyze_get_structure_failed",
+        extra={"form_id": choice["id"], "status": exc.status},
+    )
     st.error(f"Не вдалося завантажити форму: {exc}")
     st.stop()
 
@@ -79,6 +103,10 @@ if sheet_id:
     try:
         df = _cached_responses(sheet_id, creds.token or "")
     except SheetsApiError as exc:
+        log.exception(
+            "ui_analyze_fetch_responses_failed",
+            extra={"sheet_id": sheet_id, "status": exc.status},
+        )
         st.error(f"Не вдалося завантажити відповіді: {exc}")
 
 col1, col2, col3 = st.columns(3)
@@ -97,7 +125,7 @@ elif df.empty:
 
 if not df.empty:
     with st.expander("Перші 5 рядків відповідей (raw)", expanded=False):
-        st.dataframe(df.head(), use_container_width=True, hide_index=True)
+        st.dataframe(df.head(), width="stretch", hide_index=True)
 
 
 st.divider()
@@ -115,15 +143,15 @@ def _render_question(idx: int, q: Question, df: pd.DataFrame) -> None:
         st.metric("Відповідей на це питання", response_count(df, q.title))
 
         if q.type in ("MULTIPLE_CHOICE", "CHECKBOX"):
-            st.plotly_chart(bar_categorical(df, q.title), use_container_width=True)
+            st.plotly_chart(bar_categorical(df, q.title), width="stretch")
         elif q.type == "LINEAR_SCALE":
-            st.plotly_chart(hist_ordinal(df, q.title), use_container_width=True)
+            st.plotly_chart(hist_ordinal(df, q.title), width="stretch")
         elif q.type == "SHORT_ANSWER":
             table = freq_table(df, q.title)
             if table.empty:
                 st.caption("Немає непорожніх відповідей.")
             else:
-                st.dataframe(table, use_container_width=True, hide_index=True)
+                st.dataframe(table, width="stretch", hide_index=True)
         else:
             st.caption(f"Графік для `{q.type}` буде у наступних блоках.")
 
