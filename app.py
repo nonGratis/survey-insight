@@ -4,6 +4,12 @@
 оголошення сторінок. Бізнес-логіка живе у core/, UI — у ui/pages/.
 Доступ до сторінок гейтується OAuth-логіном (Google identity).
 """
+# Налаштовуємо logging першим, до будь-яких інших імпортів core/, щоб
+# модулі одразу отримали сконфігурований root logger.
+from core.logger import setup_logging
+
+setup_logging()
+
 import streamlit as st
 
 from ui.components.auth_widget import render_login
