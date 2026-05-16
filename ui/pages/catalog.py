@@ -119,7 +119,7 @@ def _render_sidebar(forms: list[FormDriveMeta]) -> dict:
             owners = st.multiselect("Власник", options=owner_options, key="catalog_owners")
             date_range = st.date_input(
                 "Змінено в діапазоні",
-                value=(None, None),
+                value=(),  # порожній tuple = немає дефолтних меж; користувач задає обидві
                 key="catalog_date_range",
             )
             accepting = st.selectbox(
