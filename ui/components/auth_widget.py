@@ -9,6 +9,7 @@ OAuth-callback (повернення з accounts.google.com у вигляді ?c
 (див. core.auth), бо Streamlit session_state не виживає редиректу.
 Credentials серіалізуємо в session_state — достатньо для single-user демо.
 """
+
 from __future__ import annotations
 
 import streamlit as st

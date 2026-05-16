@@ -4,6 +4,7 @@
 оголошення сторінок. Бізнес-логіка живе у core/, UI — у ui/pages/.
 Доступ до сторінок гейтується OAuth-логіном (Google identity).
 """
+
 import streamlit as st
 
 # Налаштовуємо logging першим, до будь-яких інших імпортів core/, щоб
@@ -37,8 +38,8 @@ if not logged_in:
     with info_cols[0]:
         st.subheader("Про продукт")
         st.write(
-                "Survey Insight об'єднує відповіді з Google Forms,"
-                " робить зрозумілі зрізи та готує дані для експорту."
+            "Survey Insight об'єднує відповіді з Google Forms,"
+            " робить зрозумілі зрізи та готує дані для експорту."
         )
     with info_cols[1]:
         st.subheader("FAQ")
@@ -54,7 +55,9 @@ if not logged_in:
             st.write("Дані використовуються лише для побудови звітів у цій сесії.")
     with info_cols[2]:
         st.subheader("Підтримка")
-        st.write("Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua")
+        st.write(
+            "Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua"
+        )
 
     st.stop()
 
