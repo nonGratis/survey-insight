@@ -271,7 +271,9 @@ def _table_with_enrichment() -> None:
     df = _build_dataframe(forms_meta, enrichments, stats)
     filtered = _apply_filters(df, filter_values)
     table_columns = list(visible_columns)
-    display = filtered[[c for c in table_columns if c in filtered.columns]]
+    display = filtered[[c for c in table_columns if c in filtered.columns]].copy()
+    if "Accepting" in display.columns:
+        display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
 
     st.dataframe(
         display,
@@ -293,7 +295,7 @@ def _table_with_enrichment() -> None:
             "Owner": st.column_config.TextColumn("Власник"),
             "Questions": st.column_config.NumberColumn("Питань", format="%d"),
             "Sections": st.column_config.NumberColumn("Секцій", format="%d"),
-            "Accepting": st.column_config.CheckboxColumn("Приймає"),
+            "Accepting": st.column_config.TextColumn("Приймає"),
             "Total": st.column_config.NumberColumn("Відповідей", format="%d"),
             "LastResponse": st.column_config.TextColumn("Остання відповідь"),
             "Modified": st.column_config.DatetimeColumn(
