@@ -5,27 +5,63 @@
 Доступ до сторінок гейтується OAuth-логіном (Google identity).
 """
 
+import streamlit as st
+
 # Налаштовуємо logging першим, до будь-яких інших імпортів core/, щоб
 # модулі одразу отримали сконфігурований root logger.
 from core.logger import setup_logging
 
 setup_logging()
 
-import streamlit as st
-
-from ui.components.auth_widget import render_login
+from ui.components.auth_widget import (  # noqa: E402
+    ensure_login_state,
+    render_login_button,
+    render_profile,
+)
 
 st.set_page_config(page_title="Survey Insight", layout="wide")
 
-logged_in = render_login()
+logged_in = ensure_login_state()
 
 if not logged_in:
-    st.title("Survey Insight")
-    st.info(
-        "Увійди через Google у бічній панелі ліворуч, щоб отримати доступ "
-        "до аналізу, зважування і експорту."
-    )
+    hero_cols = st.columns([1, 2, 1], gap="large")
+    with hero_cols[1]:
+        st.subheader("Вхід")
+        st.write(
+            "Увійди через Google, щоб отримати доступ до сторінок з аналізом форм."
+        )
+        render_login_button(location="main")
+
+    st.divider()
+
+    info_cols = st.columns(3, gap="large")
+    with info_cols[0]:
+        st.subheader("Про продукт")
+        st.write(
+            "Survey Insight об'єднує відповіді з Google Forms,"
+            " робить зрозумілі зрізи та готує дані для експорту."
+        )
+    with info_cols[1]:
+        st.subheader("FAQ")
+        with st.expander("Як отримати доступ?"):
+            st.write(
+                "Увійди через Google. Після входу сторінки та функції системи стануть доступні."
+            )
+        with st.expander("Чому потрібні дозволи?"):
+            st.write(
+                "Доступ потрібен, щоб читати та редагувати форми та таблиці, які ти обираєш."
+            )
+        with st.expander("Чи зберігаються дані?"):
+            st.write("Дані використовуються лише для побудови звітів у цій сесії.")
+    with info_cols[2]:
+        st.subheader("Підтримка")
+        st.write(
+            "Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua"
+        )
+
     st.stop()
+
+render_profile(location="sidebar")
 
 pages = [
     st.Page(
