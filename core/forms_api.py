@@ -4,6 +4,7 @@ Drive API використовуємо лише для одного — пере
 (Forms API не має методу list, треба фільтрувати у Drive за mimeType).
 Forms API дає структуру форми: питання, типи, варіанти.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -35,8 +36,14 @@ class FormsApiError(RuntimeError):
     """Доменна помилка під будь-який збій Forms/Drive API.
 
     Перехоплює googleapiclient.errors.HttpError і дає UI-шару змістовне
-    повідомлення замість сирого traceback.
+    повідомлення замість сирого traceback. Зберігає HTTP-статус, щоб
+    caller (наприклад parallel_map) міг розрізняти "очікувані" коди
+    (403 shared form без access, 404 видалена форма) від справжніх збоїв.
     """
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -75,15 +82,20 @@ def list_user_forms(
             page_size=page_size,
             logger=log,
         ):
-            resp = service.files().list(
-                q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
-                fields="files(id,name,modifiedTime)",
-                pageSize=page_size,
-                orderBy="modifiedTime desc",
-            ).execute()
+            resp = (
+                service.files()
+                .list(
+                    q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
+                    fields="files(id,name,modifiedTime)",
+                    pageSize=page_size,
+                    orderBy="modifiedTime desc",
+                )
+                .execute()
+            )
     except HttpError as exc:
         raise FormsApiError(
-            f"Не вдалося отримати список форм з Drive: {exc.reason or exc}"
+            f"Не вдалося отримати список форм з Drive: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
     return resp.get("files", [])
 
@@ -97,13 +109,12 @@ def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
     """
     service = build("forms", "v1", credentials=creds, cache_discovery=False)
     try:
-        with log_call(
-            "api_call_ok", target="forms.forms.get", form_id=form_id, logger=log
-        ):
+        with log_call("api_call_ok", target="forms.forms.get", form_id=form_id, logger=log):
             return service.forms().get(formId=form_id).execute()
     except HttpError as exc:
         raise FormsApiError(
-            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}"
+            f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",
+            status=exc.resp.status,
         ) from exc
 
 
@@ -143,7 +154,7 @@ def _extract_question(item: dict[str, Any]) -> Question | None:
     if "choiceQuestion" in question:
         choice = question["choiceQuestion"]
         qtype = choice.get("type", "RADIO")
-        normalized = "CHECKBOX" if qtype == "CHECKBOX" else "MULTIPLE_CHOICE"
+        normalized: QuestionType = "CHECKBOX" if qtype == "CHECKBOX" else "MULTIPLE_CHOICE"
         options = [opt.get("value", "") for opt in choice.get("options", [])]
         return Question(id=qid, title=title, type=normalized, options=options)
 

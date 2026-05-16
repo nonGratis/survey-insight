@@ -9,6 +9,7 @@ OAuth-callback (повернення з accounts.google.com у вигляді ?c
 (див. core.auth), бо Streamlit session_state не виживає редиректу.
 Credentials серіалізуємо в session_state — достатньо для single-user демо.
 """
+
 from __future__ import annotations
 
 import streamlit as st
@@ -29,6 +30,9 @@ from core.auth import (
     refresh_if_needed,
     save_verifier,
 )
+from core.logger import get_logger, hash_email
+
+log = get_logger(__name__)
 
 
 def _handle_oauth_callback() -> None:
@@ -57,6 +61,7 @@ def _handle_oauth_callback() -> None:
         creds = exchange_code(flow, code)
         user = get_user_info(creds)
     except Exception as exc:  # noqa: BLE001
+        log.exception("auth_callback_failed")
         st.error(f"Помилка входу: {exc}")
         st.query_params.clear()
         clear_verifier()
@@ -65,6 +70,14 @@ def _handle_oauth_callback() -> None:
     clear_verifier()
     st.session_state["credentials"] = credentials_to_dict(creds)
     st.session_state["user"] = user
+    email = user.get("email", "")
+    log.info(
+        "auth_login_ok",
+        extra={
+            "user_hash": hash_email(email) if email else "",
+            "scopes_count": len(scopes),
+        },
+    )
     st.query_params.clear()
     st.rerun()
 
@@ -82,6 +95,7 @@ def _render_login_button(location: str = "sidebar") -> None:
     container = _get_container(location)
     container.link_button("Увійти через Google", auth_url, use_container_width=True)
     container.caption("Demo в Testing-режимі: працює лише для test users.")
+
 
 
 def _render_logged_in(location: str = "sidebar") -> None:
