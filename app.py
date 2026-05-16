@@ -21,6 +21,7 @@ if not logged_in:
     st.stop()
 
 pages = [
+    st.Page("ui/pages/catalog.py", title="Каталог", icon=":material/table_view:"),
     st.Page("ui/pages/analyze.py", title="Аналіз", icon=":material/analytics:"),
     st.Page("ui/pages/weighting.py", title="Зважування", icon=":material/balance:"),
     st.Page("ui/pages/export.py", title="Експорт", icon=":material/download:"),
