@@ -17,7 +17,10 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from core.forms_api import FORM_MIME_TYPE, FormsApiError
+from core.logger import get_logger, log_call
 from core.sheets_api import SheetsApiError, find_response_sheet_name
+
+log = get_logger(__name__)
 
 DRIVE_FIELDS = (
     "nextPageToken,"
@@ -75,15 +78,24 @@ def list_forms_with_drive_meta(creds: Credentials) -> list[FormDriveMeta]:
     service = build("drive", "v3", credentials=creds, cache_discovery=False)
     items: list[FormDriveMeta] = []
     page_token: str | None = None
+    page_idx = 0
     try:
         while True:
-            resp = service.files().list(
-                q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
-                fields=DRIVE_FIELDS,
-                pageSize=DRIVE_PAGE_SIZE,
-                pageToken=page_token,
-                orderBy="modifiedTime desc",
-            ).execute()
+            page_idx += 1
+            with log_call(
+                "api_call_ok",
+                target="drive.files.list",
+                scope="catalog",
+                page=page_idx,
+                logger=log,
+            ):
+                resp = service.files().list(
+                    q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
+                    fields=DRIVE_FIELDS,
+                    pageSize=DRIVE_PAGE_SIZE,
+                    pageToken=page_token,
+                    orderBy="modifiedTime desc",
+                ).execute()
             for raw in resp.get("files", []):
                 items.append(_parse_drive_file(raw))
             page_token = resp.get("nextPageToken")
@@ -120,7 +132,14 @@ def enrich_form(creds: Credentials, form_id: str) -> FormEnrichment:
     """
     service = build("forms", "v1", credentials=creds, cache_discovery=False)
     try:
-        form = service.forms().get(formId=form_id).execute()
+        with log_call(
+            "api_call_ok",
+            target="forms.forms.get",
+            scope="enrich",
+            form_id=form_id,
+            logger=log,
+        ):
+            form = service.forms().get(formId=form_id).execute()
     except HttpError as exc:
         raise FormsApiError(
             f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}"
@@ -159,9 +178,16 @@ def fetch_response_stats(creds: Credentials, sheet_id: str) -> ResponseStats:
         sheet_name = find_response_sheet_name(service, sheet_id)
         # Беремо тільки колонку A — мінімум payload, але достатньо для timestamps.
         range_name = f"'{sheet_name}'!A:A"
-        resp = service.spreadsheets().values().get(
-            spreadsheetId=sheet_id, range=range_name
-        ).execute()
+        with log_call(
+            "api_call_ok",
+            target="sheets.values.get",
+            scope="response_stats_column_a",
+            sheet_id=sheet_id,
+            logger=log,
+        ):
+            resp = service.spreadsheets().values().get(
+                spreadsheetId=sheet_id, range=range_name
+            ).execute()
     except HttpError as exc:
         raise SheetsApiError(
             f"Не вдалося отримати timestamps з Sheet {sheet_id}: "

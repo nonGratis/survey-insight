@@ -13,6 +13,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from core.logger import get_logger, log_call
+
+log = get_logger(__name__)
+
 # Sheets API "A:ZZ" покриває до 702 колонок — більш ніж достатньо для
 # будь-якої реальної форми (максимум у Google Forms ~300 питань).
 DEFAULT_COLUMN_RANGE = "A:ZZ"
@@ -32,10 +36,17 @@ def find_response_sheet_name(service, sheet_id: str) -> str:
 
     Public, бо forms_catalog.fetch_response_stats також використовує.
     """
-    meta = service.spreadsheets().get(
-        spreadsheetId=sheet_id,
-        fields="sheets(properties(title,sheetType))",
-    ).execute()
+    with log_call(
+        "api_call_ok",
+        target="sheets.spreadsheets.get",
+        scope="metadata",
+        sheet_id=sheet_id,
+        logger=log,
+    ):
+        meta = service.spreadsheets().get(
+            spreadsheetId=sheet_id,
+            fields="sheets(properties(title,sheetType))",
+        ).execute()
     for sheet in meta.get("sheets", []):
         props = sheet.get("properties", {})
         if props.get("sheetType", "GRID") == "GRID":
@@ -62,9 +73,16 @@ def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
     try:
         sheet_name = find_response_sheet_name(service, sheet_id)
         range_name = f"'{sheet_name}'!{DEFAULT_COLUMN_RANGE}"
-        resp = service.spreadsheets().values().get(
-            spreadsheetId=sheet_id, range=range_name
-        ).execute()
+        with log_call(
+            "api_call_ok",
+            target="sheets.values.get",
+            scope="full_range",
+            sheet_id=sheet_id,
+            logger=log,
+        ):
+            resp = service.spreadsheets().values().get(
+                spreadsheetId=sheet_id, range=range_name
+            ).execute()
     except HttpError as exc:
         raise SheetsApiError(
             f"Не вдалося прочитати Sheet {sheet_id}: {exc.reason or exc}"
