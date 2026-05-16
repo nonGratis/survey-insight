@@ -45,22 +45,31 @@ def find_response_sheet_name(service, sheet_id: str) -> str:
 
     Public, бо forms_catalog.fetch_response_stats також використовує.
     """
-    with log_call(
-        "api_call_ok",
-        target="sheets.spreadsheets.get",
-        scope="metadata",
-        sheet_id=sheet_id,
-        logger=log,
-    ):
-        meta = service.spreadsheets().get(
-            spreadsheetId=sheet_id,
-            fields="sheets(properties(title,sheetType))",
-        ).execute()
+    try:
+        with log_call(
+            "api_call_ok",
+            target="sheets.spreadsheets.get",
+            scope="metadata",
+            sheet_id=sheet_id,
+            logger=log,
+        ):
+            meta = service.spreadsheets().get(
+                spreadsheetId=sheet_id,
+                fields="sheets(properties(title,sheetType))",
+            ).execute()
+    except HttpError as exc:
+        raise SheetsApiError(
+            f"Не вдалося прочитати metadata Sheet {sheet_id}: "
+            f"{exc.reason or exc}",
+            status=exc.resp.status,
+        ) from exc
     for sheet in meta.get("sheets", []):
         props = sheet.get("properties", {})
         if props.get("sheetType", "GRID") == "GRID":
             return props["title"]
-    raise RuntimeError(f"No GRID sheet found in spreadsheet {sheet_id}.")
+    raise SheetsApiError(
+        f"У spreadsheet {sheet_id} не знайдено жодного GRID-аркуша."
+    )
 
 
 def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
