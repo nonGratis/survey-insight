@@ -36,8 +36,9 @@ ENRICHMENT_TICK_SECONDS = 2
 # Усі колонки таблиці у канонічному порядку. UI-користувач у settings
 # panel вибирає підмножину і її ж порядок — задавання default тут.
 ALL_COLUMNS = [
-    "AnalyzeLink",
-    "Name",
+    "📊",
+    "↗",
+    "FormName",
     "Title",
     "Owner",
     "Questions",
@@ -52,8 +53,9 @@ ALL_COLUMNS = [
     "FullID",
 ]
 DEFAULT_VISIBLE_COLUMNS = [
-    "AnalyzeLink",
-    "Name",
+    "📊",
+    "↗",
+    "FormName",
     "Owner",
     "Questions",
     "Accepting",
@@ -121,7 +123,7 @@ def _render_sidebar(forms: list[FormDriveMeta]) -> dict:
             owners = st.multiselect("Власник", options=owner_options, key="catalog_owners")
             date_range = st.date_input(
                 "Змінено в діапазоні",
-                value=(),  # порожній tuple = немає дефолтних меж; користувач задає обидві
+                value=[],  # порожній список = немає дефолтних меж; користувач задає обидві
                 key="catalog_date_range",
             )
             accepting = st.selectbox(
@@ -151,9 +153,7 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
     out = df
 
     if f["search"]:
-        # Колонка Name містить "{edit_url}|{name} ↗" — шукаємо у частині після pipe.
-        display_names = out["Name"].astype(str).str.split("|", n=1).str[-1]
-        out = out[display_names.str.contains(f["search"], case=False, na=False)]
+        out = out[out["FormName"].astype(str).str.contains(f["search"], case=False, na=False)]
 
     if f["owners"]:
         out = out[out["Owner"].isin(f["owners"])]
@@ -171,12 +171,11 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
         out = out[out["Accepting"] == False]  # noqa: E712
 
     if f["sheet"] != "Усі":
-        loaded_mask = out["Title"].astype(str).str.len() > 0
         has_sheet = out["SheetID"].astype(str).str.len() > 0
         if f["sheet"] == "З привʼязаним Sheet":
             out = out[has_sheet]
         else:  # "Без Sheet"
-            out = out[loaded_mask & ~has_sheet]
+            out = out[~has_sheet]
 
     return out
 
@@ -192,11 +191,9 @@ def _build_dataframe(
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
         row = {
-            "AnalyzeLink": f"/analyze?form_id={f.id}",
-            # Name це LinkColumn: cell-значення містить URL до Forms-edit
-            # і display-text після pipe з суфіксом " ↗" — у column_config
-            # display_text=r"^.*\|(.*)$" покаже саме display-text.
-            "Name": f"{f.edit_url}|{f.name} ↗",
+            "📊": f"/analyze?form_id={f.id}",
+            "↗": f.edit_url,
+            "FormName": f.name,
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
             "Questions": enr.questions_count if enr else None,
@@ -275,17 +272,17 @@ def _table_with_enrichment() -> None:
         hide_index=True,
         use_container_width=True,
         column_config={
-            "AnalyzeLink": st.column_config.LinkColumn(
-                "📊",
-                help="Перейти на сторінку Аналіз для цієї форми",
-                display_text="Аналіз",
+            "📊": st.column_config.LinkColumn(
+                help="Перейти на сторінку Аналіз",
+                display_text="📊",
                 width="small",
             ),
-            "Name": st.column_config.LinkColumn(
-                "Назва",
-                help="Натисніть, щоб відкрити форму в редакторі Google Forms",
-                display_text=r"^.*\|(.*)$",
+            "↗": st.column_config.LinkColumn(
+                help="Відкрити форму в редакторі Google Forms",
+                display_text="↗",
+                width="small",
             ),
+            "FormName": st.column_config.TextColumn("Назва"),
             "Title": st.column_config.TextColumn("Внутрішня назва"),
             "Owner": st.column_config.TextColumn("Власник"),
             "Questions": st.column_config.NumberColumn("Питань", format="%d"),
