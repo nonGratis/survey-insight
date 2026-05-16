@@ -7,6 +7,7 @@ Tier 3 (`ResponseStats`) — статистика відповідей із пр
 UI шар рендерить Tier 1 одразу і прогресивно дозаповнює Tier 2/3
 через background fragment.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -89,13 +90,17 @@ def list_forms_with_drive_meta(creds: Credentials) -> list[FormDriveMeta]:
                 page=page_idx,
                 logger=log,
             ):
-                resp = service.files().list(
-                    q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
-                    fields=DRIVE_FIELDS,
-                    pageSize=DRIVE_PAGE_SIZE,
-                    pageToken=page_token,
-                    orderBy="modifiedTime desc",
-                ).execute()
+                resp = (
+                    service.files()
+                    .list(
+                        q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
+                        fields=DRIVE_FIELDS,
+                        pageSize=DRIVE_PAGE_SIZE,
+                        pageToken=page_token,
+                        orderBy="modifiedTime desc",
+                    )
+                    .execute()
+                )
             for raw in resp.get("files", []):
                 items.append(_parse_drive_file(raw))
             page_token = resp.get("nextPageToken")
@@ -187,13 +192,15 @@ def fetch_response_stats(creds: Credentials, sheet_id: str) -> ResponseStats:
             sheet_id=sheet_id,
             logger=log,
         ):
-            resp = service.spreadsheets().values().get(
-                spreadsheetId=sheet_id, range=range_name
-            ).execute()
+            resp = (
+                service.spreadsheets()
+                .values()
+                .get(spreadsheetId=sheet_id, range=range_name)
+                .execute()
+            )
     except HttpError as exc:
         raise SheetsApiError(
-            f"Не вдалося отримати timestamps з Sheet {sheet_id}: "
-            f"{exc.reason or exc}",
+            f"Не вдалося отримати timestamps з Sheet {sheet_id}: {exc.reason or exc}",
             status=exc.resp.status,
         ) from exc
 

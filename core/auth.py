@@ -3,6 +3,7 @@
 Чиста обгортка над google-auth-oauthlib без залежності від Streamlit —
 щоб можна було тестувати окремо й перевикористовувати поза UI.
 """
+
 from __future__ import annotations
 
 import os
