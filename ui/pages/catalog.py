@@ -13,6 +13,8 @@ session_state. Користувач не чекає на повний enrichment
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
+
 import pandas as pd
 import streamlit as st
 
@@ -30,6 +32,33 @@ from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from ui.components.auth_widget import ensure_api_access
 
 ENRICHMENT_TICK_SECONDS = 2
+
+# Усі колонки таблиці у канонічному порядку. UI-користувач у settings
+# panel вибирає підмножину і її ж порядок — задавання default тут.
+ALL_COLUMNS = [
+    "Name",
+    "Title",
+    "Owner",
+    "Questions",
+    "Sections",
+    "Accepting",
+    "Total",
+    "LastResponse",
+    "Modified",
+    "Created",
+    "SheetID",
+    "Description",
+    "FullID",
+]
+DEFAULT_VISIBLE_COLUMNS = [
+    "Name",
+    "Owner",
+    "Questions",
+    "Accepting",
+    "Total",
+    "LastResponse",
+    "Modified",
+]
 
 st.title("Каталог")
 
@@ -73,6 +102,82 @@ st.session_state.setdefault("form_enrichments", {})
 st.session_state.setdefault("form_response_stats", {})
 
 
+def _render_sidebar(forms: list[FormDriveMeta]) -> dict:
+    """Намалювати sidebar з фільтрами і column config, повернути значення."""
+    with st.sidebar:
+        with st.expander("Налаштування таблиці", expanded=False):
+            visible = st.multiselect(
+                "Видимі колонки (порядок selection = порядок у таблиці)",
+                options=ALL_COLUMNS,
+                default=DEFAULT_VISIBLE_COLUMNS,
+                key="catalog_visible_columns",
+            )
+
+        with st.expander("Фільтри", expanded=True):
+            search = st.text_input("Пошук за назвою", key="catalog_search")
+            owner_options = sorted({f.owner_email for f in forms if f.owner_email != "—"})
+            owners = st.multiselect("Власник", options=owner_options, key="catalog_owners")
+            date_range = st.date_input(
+                "Змінено в діапазоні",
+                value=(None, None),
+                key="catalog_date_range",
+            )
+            accepting = st.selectbox(
+                "Стан",
+                options=["Усі", "Приймає відповіді", "Не приймає"],
+                key="catalog_accepting",
+            )
+            sheet = st.selectbox(
+                "Sheet",
+                options=["Усі", "З привʼязаним Sheet", "Без Sheet"],
+                key="catalog_sheet",
+            )
+
+    return {
+        "visible": visible or ALL_COLUMNS,  # порожній multiselect = показати все
+        "search": search.strip(),
+        "owners": owners,
+        "date_range": date_range,
+        "accepting": accepting,
+        "sheet": sheet,
+    }
+
+
+def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
+    """Послідовно застосувати фільтри. Pending-рядки (без enrichment)
+    проходять тільки коли селектор стоїть на 'Усі'."""
+    out = df
+
+    if f["search"]:
+        names = out["Name"].astype(str).str.split("|").str[-1]
+        out = out[names.str.contains(f["search"], case=False, na=False)]
+
+    if f["owners"]:
+        out = out[out["Owner"].isin(f["owners"])]
+
+    if isinstance(f["date_range"], tuple) and len(f["date_range"]) == 2:
+        start, end = f["date_range"]
+        if isinstance(start, date) and isinstance(end, date):
+            start_ts = pd.Timestamp(datetime.combine(start, datetime.min.time()), tz=timezone.utc)
+            end_ts = pd.Timestamp(datetime.combine(end, datetime.max.time()), tz=timezone.utc)
+            out = out[(out["Modified"] >= start_ts) & (out["Modified"] <= end_ts)]
+
+    if f["accepting"] == "Приймає відповіді":
+        out = out[out["Accepting"] == True]  # noqa: E712 — pandas truth
+    elif f["accepting"] == "Не приймає":
+        out = out[out["Accepting"] == False]  # noqa: E712
+
+    if f["sheet"] != "Усі":
+        loaded_mask = out["Title"].astype(str).str.len() > 0
+        has_sheet = out["SheetID"].astype(str).str.len() > 0
+        if f["sheet"] == "З привʼязаним Sheet":
+            out = out[has_sheet]
+        else:  # "Без Sheet"
+            out = out[loaded_mask & ~has_sheet]
+
+    return out
+
+
 def _build_dataframe(
     forms: list[FormDriveMeta],
     enrichments: dict[str, FormEnrichment | None],
@@ -105,6 +210,9 @@ def _build_dataframe(
     df["Modified"] = pd.to_datetime(df["Modified"], errors="coerce", utc=True)
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce", utc=True)
     return df
+
+
+filter_values = _render_sidebar(forms_meta)
 
 
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
@@ -147,9 +255,16 @@ def _table_with_enrichment() -> None:
         )
 
     df = _build_dataframe(forms_meta, enrichments, stats)
+    filtered = _apply_filters(df, filter_values)
+    # Завжди тримаємо FullID у наборі — він знадобиться для row-selection state
+    # bridge у наступному коміті, навіть якщо користувач його приховав.
+    visible_columns = list(filter_values["visible"])
+    if "FullID" not in visible_columns:
+        visible_columns = visible_columns + ["FullID"]
+    display = filtered[[c for c in visible_columns if c in filtered.columns]]
 
     st.dataframe(
-        df,
+        display,
         hide_index=True,
         use_container_width=True,
         column_config={
