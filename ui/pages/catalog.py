@@ -63,8 +63,6 @@ DEFAULT_VISIBLE_COLUMNS = [
     "Modified",
 ]
 
-st.title("Каталог")
-
 if not ensure_api_access():
     st.stop()
 
@@ -77,19 +75,23 @@ def _cached_drive_list(_creds_token: str) -> list[FormDriveMeta]:
     return list_forms_with_drive_meta(creds)
 
 
-col_metric, col_refresh = st.columns([4, 1])
 try:
     forms_meta = _cached_drive_list(creds.token or "")
 except FormsApiError as exc:
     st.error(f"Не вдалося завантажити каталог: {exc}")
     st.stop()
 
-col_metric.metric("Форм у каталозі", len(forms_meta))
-if col_refresh.button("Оновити", help="Скинути кеш і перечитати з Drive"):
-    _cached_drive_list.clear()
-    st.session_state["form_enrichments"] = {}
-    st.session_state["form_response_stats"] = {}
-    st.rerun()
+title_col, metric_col, col_refresh = st.columns([6, 1.5, 0.6])
+with title_col:
+    st.markdown("## Каталог")
+with metric_col:
+    st.metric("Форм у каталозі", len(forms_meta))
+with col_refresh:
+    if col_refresh.button("", icon=":material/refresh:", help="Скинути кеш і перечитати з Drive"):
+        _cached_drive_list.clear()
+        st.session_state["form_enrichments"] = {}
+        st.session_state["form_response_stats"] = {}
+        st.rerun()
 
 if not forms_meta:
     st.info(
