@@ -5,6 +5,7 @@
 Streamlit-агностично — щоб можна було перевикористати у PDF-експорті,
 ноутбуках, тестах.
 """
+
 from __future__ import annotations
 
 import pandas as pd
@@ -31,9 +32,19 @@ def hist_ordinal(df: pd.DataFrame, col: str, title: str | None = None) -> Figure
     """Гістограма для LINEAR_SCALE (числові шкали 1-5, 1-10 тощо)."""
     vals = pd.to_numeric(df[col], errors="coerce").dropna()
     if vals.empty:
-        return Figure().update_layout(title=title or col, annotations=[dict(
-            text="Немає числових значень", showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper"
-        )])
+        return Figure().update_layout(
+            title=title or col,
+            annotations=[
+                dict(
+                    text="Немає числових значень",
+                    showarrow=False,
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                )
+            ],
+        )
     nbins = max(int(vals.max() - vals.min() + 1), 5)
     fig = px.histogram(
         vals,

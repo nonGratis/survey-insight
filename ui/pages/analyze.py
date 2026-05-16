@@ -1,4 +1,5 @@
 """Сторінка аналізу: вибір Google Form, структура, реальні відповіді."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -53,9 +54,7 @@ if not forms:
 preselected_id = st.query_params.get("form_id")
 default_idx = 0
 if preselected_id:
-    matched = next(
-        (i for i, f in enumerate(forms) if f["id"] == preselected_id), None
-    )
+    matched = next((i for i, f in enumerate(forms) if f["id"] == preselected_id), None)
     if matched is not None:
         default_idx = matched
     # Прибираємо query-param, щоб користувач міг вільно міняти selectbox,

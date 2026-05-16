@@ -4,12 +4,14 @@ Google API дозволяє паралельні запити — лімітує
 ThreadPoolExecutor дає нам speedup проти послідовного fetch без потреби
 sleep-між-викликами. На 429/5xx — експоненційний backoff per task.
 """
+
 from __future__ import annotations
 
 import random
 import time
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Iterable, TypeVar
+from typing import TypeVar
 
 from googleapiclient.errors import HttpError
 
@@ -60,7 +62,7 @@ def call_with_backoff(
         except HttpError as exc:
             retryable = exc.resp.status in RETRY_HTTP_CODES
             if retryable and attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt) + random.uniform(0, 0.5)
+                delay = base_delay * (2**attempt) + random.uniform(0, 0.5)
                 log.warning(
                     "api_op_retry",
                     extra={
@@ -100,9 +102,7 @@ def parallel_map(
     """
     results: list[tuple[T, R | Exception]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_item = {
-            executor.submit(call_with_backoff, fn, item): item for item in items
-        }
+        future_to_item = {executor.submit(call_with_backoff, fn, item): item for item in items}
         for future in as_completed(future_to_item):
             item = future_to_item[future]
             try:
