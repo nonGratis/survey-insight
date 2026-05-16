@@ -36,6 +36,7 @@ ENRICHMENT_TICK_SECONDS = 2
 # Усі колонки таблиці у канонічному порядку. UI-користувач у settings
 # panel вибирає підмножину і її ж порядок — задавання default тут.
 ALL_COLUMNS = [
+    "AnalyzeLink",
     "Name",
     "Title",
     "Owner",
@@ -51,6 +52,7 @@ ALL_COLUMNS = [
     "FullID",
 ]
 DEFAULT_VISIBLE_COLUMNS = [
+    "AnalyzeLink",
     "Name",
     "Owner",
     "Questions",
@@ -149,8 +151,9 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
     out = df
 
     if f["search"]:
-        names = out["Name"].astype(str).str.split("|").str[-1]
-        out = out[names.str.contains(f["search"], case=False, na=False)]
+        # Колонка Name містить "{edit_url}|{name} ↗" — шукаємо у частині після pipe.
+        display_names = out["Name"].astype(str).str.split("|", n=1).str[-1]
+        out = out[display_names.str.contains(f["search"], case=False, na=False)]
 
     if f["owners"]:
         out = out[out["Owner"].isin(f["owners"])]
@@ -189,7 +192,11 @@ def _build_dataframe(
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
         row = {
-            "Name": f"{f.edit_url}|{f.name}",
+            "AnalyzeLink": f"/analyze?form_id={f.id}",
+            # Name це LinkColumn: cell-значення містить URL до Forms-edit
+            # і display-text після pipe з суфіксом " ↗" — у column_config
+            # display_text=r"^.*\|(.*)$" покаже саме display-text.
+            "Name": f"{f.edit_url}|{f.name} ↗",
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
             "Questions": enr.questions_count if enr else None,
@@ -263,16 +270,20 @@ def _table_with_enrichment() -> None:
         visible_columns = visible_columns + ["FullID"]
     display = filtered[[c for c in visible_columns if c in filtered.columns]]
 
-    event = st.dataframe(
+    st.dataframe(
         display,
         hide_index=True,
         use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row",
         column_config={
+            "AnalyzeLink": st.column_config.LinkColumn(
+                "📊",
+                help="Перейти на сторінку Аналіз для цієї форми",
+                display_text="Аналіз",
+                width="small",
+            ),
             "Name": st.column_config.LinkColumn(
                 "Назва",
-                help="Клік відкриває форму в редакторі Google Forms",
+                help="Натисніть, щоб відкрити форму в редакторі Google Forms",
                 display_text=r"^.*\|(.*)$",
             ),
             "Title": st.column_config.TextColumn("Внутрішня назва"),
@@ -293,20 +304,6 @@ def _table_with_enrichment() -> None:
             "FullID": st.column_config.TextColumn("Form ID", width="small"),
         },
     )
-
-    selected_rows = event.selection.rows if event and event.selection else []
-    if selected_rows:
-        selected_form = display.iloc[selected_rows[0]]
-        selected_id = str(selected_form["FullID"])
-        # Розпакувати name з склейки "url|name" якщо колонка Name видима.
-        name_value = str(selected_form.get("Name", selected_id))
-        selected_name = name_value.split("|", 1)[-1] if "|" in name_value else name_value
-
-        col_btn, col_caption = st.columns([1, 4])
-        if col_btn.button("→ Аналіз обраної форми", type="primary", key="catalog_to_analyze"):
-            st.session_state["preselected_form_id"] = selected_id
-            st.switch_page("ui/pages/analyze.py")
-        col_caption.caption(f"Обрано: {selected_name}")
 
 
 _table_with_enrichment()

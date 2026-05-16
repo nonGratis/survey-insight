@@ -44,9 +44,9 @@ if not forms:
     )
     st.stop()
 
-# Якщо користувач прийшов сюди з Каталог через "→ Аналіз обраної форми",
-# йому очікувано побачити саме ту форму обраною за замовчуванням.
-preselected_id = st.session_state.pop("preselected_form_id", None)
+# Якщо користувач прийшов сюди з Каталог через LinkColumn-кнопку "Аналіз",
+# URL міститиме ?form_id=ABC; підбираємо її як default у selectbox.
+preselected_id = st.query_params.get("form_id")
 default_idx = 0
 if preselected_id:
     matched = next(
@@ -54,6 +54,10 @@ if preselected_id:
     )
     if matched is not None:
         default_idx = matched
+    # Прибираємо query-param, щоб користувач міг вільно міняти selectbox,
+    # а URL не "тягнув" стару форму при наступному rerun.
+    if "form_id" in st.query_params:
+        del st.query_params["form_id"]
 
 choice = st.selectbox(
     "Виберіть форму",
