@@ -263,10 +263,12 @@ def _table_with_enrichment() -> None:
         visible_columns = visible_columns + ["FullID"]
     display = filtered[[c for c in visible_columns if c in filtered.columns]]
 
-    st.dataframe(
+    event = st.dataframe(
         display,
         hide_index=True,
         use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
             "Name": st.column_config.LinkColumn(
                 "Назва",
@@ -291,6 +293,20 @@ def _table_with_enrichment() -> None:
             "FullID": st.column_config.TextColumn("Form ID", width="small"),
         },
     )
+
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        selected_form = display.iloc[selected_rows[0]]
+        selected_id = str(selected_form["FullID"])
+        # Розпакувати name з склейки "url|name" якщо колонка Name видима.
+        name_value = str(selected_form.get("Name", selected_id))
+        selected_name = name_value.split("|", 1)[-1] if "|" in name_value else name_value
+
+        col_btn, col_caption = st.columns([1, 4])
+        if col_btn.button("→ Аналіз обраної форми", type="primary", key="catalog_to_analyze"):
+            st.session_state["preselected_form_id"] = selected_id
+            st.switch_page("ui/pages/analyze.py")
+        col_caption.caption(f"Обрано: {selected_name}")
 
 
 _table_with_enrichment()

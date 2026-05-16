@@ -44,10 +44,22 @@ if not forms:
     )
     st.stop()
 
+# Якщо користувач прийшов сюди з Каталог через "→ Аналіз обраної форми",
+# йому очікувано побачити саме ту форму обраною за замовчуванням.
+preselected_id = st.session_state.pop("preselected_form_id", None)
+default_idx = 0
+if preselected_id:
+    matched = next(
+        (i for i, f in enumerate(forms) if f["id"] == preselected_id), None
+    )
+    if matched is not None:
+        default_idx = matched
+
 choice = st.selectbox(
     "Виберіть форму",
     options=forms,
     format_func=lambda f: f["name"],
+    index=default_idx,
 )
 
 if not choice:
