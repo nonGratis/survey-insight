@@ -22,13 +22,15 @@ class SheetsApiError(RuntimeError):
     """Доменна помилка Sheets API — для змістовного UI-повідомлення."""
 
 
-def _find_response_sheet_name(service, sheet_id: str) -> str:
+def find_response_sheet_name(service, sheet_id: str) -> str:
     """Повернути імʼя першого GRID-аркуша у привʼязаному Spreadsheet.
 
     Forms-linked spreadsheets завжди мають мінімум один GRID-аркуш із
     відповідями. Беремо перший такий — це робастно для українських,
     англійських та будь-яких інших локалізацій, а також для випадку,
     коли користувач додав другий tab вручну.
+
+    Public, бо forms_catalog.fetch_response_stats також використовує.
     """
     meta = service.spreadsheets().get(
         spreadsheetId=sheet_id,
@@ -58,7 +60,7 @@ def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
     """
     service = build("sheets", "v4", credentials=creds, cache_discovery=False)
     try:
-        sheet_name = _find_response_sheet_name(service, sheet_id)
+        sheet_name = find_response_sheet_name(service, sheet_id)
         range_name = f"'{sheet_name}'!{DEFAULT_COLUMN_RANGE}"
         resp = service.spreadsheets().values().get(
             spreadsheetId=sheet_id, range=range_name
