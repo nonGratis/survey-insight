@@ -29,7 +29,10 @@ from core.forms_catalog import (
     list_forms_with_drive_meta,
 )
 from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
+from core.logger import get_logger
 from ui.components.auth_widget import ensure_api_access
+
+log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
 
@@ -78,6 +81,7 @@ def _cached_drive_list(_creds_token: str) -> list[FormDriveMeta]:
 try:
     forms_meta = _cached_drive_list(creds.token or "")
 except FormsApiError as exc:
+    log.exception("ui_catalog_drive_list_failed", extra={"status": exc.status})
     st.error(f"Не вдалося завантажити каталог: {exc}")
     st.stop()
 

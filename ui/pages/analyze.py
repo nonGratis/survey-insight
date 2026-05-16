@@ -14,8 +14,11 @@ from core.forms_api import (
     list_user_forms,
     parse_question_types,
 )
+from core.logger import get_logger
 from core.sheets_api import SheetsApiError, fetch_responses
 from ui.components.auth_widget import ensure_api_access
+
+log = get_logger(__name__)
 
 st.title("Аналіз")
 
@@ -34,6 +37,7 @@ def _cached_forms(_creds_token: str) -> list[dict]:
 try:
     forms = _cached_forms(creds.token or "")
 except FormsApiError as exc:
+    log.exception("ui_analyze_list_forms_failed", extra={"status": exc.status})
     st.error(f"Не вдалося отримати список форм: {exc}")
     st.stop()
 
@@ -78,6 +82,10 @@ def _cached_structure(form_id: str, _creds_token: str) -> dict:
 try:
     structure = _cached_structure(choice["id"], creds.token or "")
 except FormsApiError as exc:
+    log.exception(
+        "ui_analyze_get_structure_failed",
+        extra={"form_id": choice["id"], "status": exc.status},
+    )
     st.error(f"Не вдалося завантажити форму: {exc}")
     st.stop()
 
@@ -95,6 +103,10 @@ if sheet_id:
     try:
         df = _cached_responses(sheet_id, creds.token or "")
     except SheetsApiError as exc:
+        log.exception(
+            "ui_analyze_fetch_responses_failed",
+            extra={"sheet_id": sheet_id, "status": exc.status},
+        )
         st.error(f"Не вдалося завантажити відповіді: {exc}")
 
 col1, col2, col3 = st.columns(3)
