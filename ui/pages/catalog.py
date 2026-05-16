@@ -106,8 +106,46 @@ st.session_state.setdefault("form_enrichments", {})
 st.session_state.setdefault("form_response_stats", {})
 
 
-def _render_sidebar(forms: list[FormDriveMeta]) -> dict:
-    """Намалювати sidebar з фільтрами і column config, повернути значення."""
+def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
+    """Намалювати фільтри над таблицею, повернути значення."""
+    top_left, top_mid, top_right = st.columns([2, 1, 1])
+    with top_left:
+        search = st.text_input("Пошук за назвою", key="catalog_search")
+    with top_mid:
+        owner_options = sorted({f.owner_email for f in forms if f.owner_email != "—"})
+        owners = st.multiselect("Власник", options=owner_options, key="catalog_owners")
+    with top_right:
+        accepting = st.selectbox(
+            "Стан",
+            options=["Усі", "Приймає відповіді", "Не приймає"],
+            key="catalog_accepting",
+        )
+
+    bottom_left, bottom_right = st.columns([2, 1])
+    with bottom_left:
+        date_range = st.date_input(
+            "Змінено в діапазоні",
+            value=[],  # порожній список = немає дефолтних меж; користувач задає обидві
+            key="catalog_date_range",
+        )
+    with bottom_right:
+        sheet = st.selectbox(
+            "Sheet",
+            options=["Усі", "З привʼязаним Sheet", "Без Sheet"],
+            key="catalog_sheet",
+        )
+
+    return {
+        "search": search.strip(),
+        "owners": owners,
+        "date_range": date_range,
+        "accepting": accepting,
+        "sheet": sheet,
+    }
+
+
+def _render_sidebar() -> list[str]:
+    """Намалювати sidebar для налаштування видимих колонок."""
     with st.sidebar:
         with st.expander("Налаштування таблиці", expanded=False):
             visible = st.multiselect(
@@ -117,34 +155,7 @@ def _render_sidebar(forms: list[FormDriveMeta]) -> dict:
                 key="catalog_visible_columns",
             )
 
-        with st.expander("Фільтри", expanded=True):
-            search = st.text_input("Пошук за назвою", key="catalog_search")
-            owner_options = sorted({f.owner_email for f in forms if f.owner_email != "—"})
-            owners = st.multiselect("Власник", options=owner_options, key="catalog_owners")
-            date_range = st.date_input(
-                "Змінено в діапазоні",
-                value=[],  # порожній список = немає дефолтних меж; користувач задає обидві
-                key="catalog_date_range",
-            )
-            accepting = st.selectbox(
-                "Стан",
-                options=["Усі", "Приймає відповіді", "Не приймає"],
-                key="catalog_accepting",
-            )
-            sheet = st.selectbox(
-                "Sheet",
-                options=["Усі", "З привʼязаним Sheet", "Без Sheet"],
-                key="catalog_sheet",
-            )
-
-    return {
-        "visible": visible or ALL_COLUMNS,  # порожній multiselect = показати все
-        "search": search.strip(),
-        "owners": owners,
-        "date_range": date_range,
-        "accepting": accepting,
-        "sheet": sheet,
-    }
+    return visible or ALL_COLUMNS  # порожній multiselect = показати все
 
 
 def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
@@ -158,7 +169,7 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
     if f["owners"]:
         out = out[out["Owner"].isin(f["owners"])]
 
-    if isinstance(f["date_range"], tuple) and len(f["date_range"]) == 2:
+    if isinstance(f["date_range"], (tuple, list)) and len(f["date_range"]) == 2:
         start, end = f["date_range"]
         if isinstance(start, date) and isinstance(end, date):
             start_ts = pd.Timestamp(datetime.combine(start, datetime.min.time()), tz=timezone.utc)
@@ -216,7 +227,8 @@ def _build_dataframe(
     return df
 
 
-filter_values = _render_sidebar(forms_meta)
+visible_columns = _render_sidebar()
+filter_values = _render_table_filters(forms_meta)
 
 
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
@@ -262,10 +274,10 @@ def _table_with_enrichment() -> None:
     filtered = _apply_filters(df, filter_values)
     # Завжди тримаємо FullID у наборі — він знадобиться для row-selection state
     # bridge у наступному коміті, навіть якщо користувач його приховав.
-    visible_columns = list(filter_values["visible"])
-    if "FullID" not in visible_columns:
-        visible_columns = visible_columns + ["FullID"]
-    display = filtered[[c for c in visible_columns if c in filtered.columns]]
+    table_columns = list(visible_columns)
+    if "FullID" not in table_columns:
+        table_columns.append("FullID")
+    display = filtered[[c for c in table_columns if c in filtered.columns]]
 
     st.dataframe(
         display,
