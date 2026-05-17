@@ -72,9 +72,7 @@ def _asymptotic_exp(t: np.ndarray, a: float, b: float, c: float) -> np.ndarray:
     return a * (1.0 - np.exp(-b * t)) + c
 
 
-def _fit_asymptotic_exp(
-    t: np.ndarray, y: np.ndarray
-) -> tuple[float, float, float]:
+def _fit_asymptotic_exp(t: np.ndarray, y: np.ndarray) -> tuple[float, float, float]:
     """Знайти (a, b, c) curve_fit'ом. Кидає ForecastError при non-convergence."""
     # Початкові оцінки: a≈y_max-y_min, b малий додатній, c≈y[0].
     a0 = float(max(y[-1] - y[0], 1.0))
@@ -91,9 +89,7 @@ def _fit_asymptotic_exp(
             maxfev=5000,
         )
     except (RuntimeError, ValueError) as exc:
-        raise ForecastError(
-            f"Asymptotic exp не зійшовся: {exc}"
-        ) from exc
+        raise ForecastError(f"Asymptotic exp не зійшовся: {exc}") from exc
     return float(popt[0]), float(popt[1]), float(popt[2])
 
 
@@ -154,9 +150,7 @@ def asymptotic_exp_forecast(
     if timeline.daily_counts.empty:
         raise ForecastError("Немає даних: timeline порожня.")
     if len(timeline.daily_counts) < 3:
-        raise ForecastError(
-            "Замало точок для прогнозу: потрібно мінімум 3 дні з даними."
-        )
+        raise ForecastError("Замало точок для прогнозу: потрібно мінімум 3 дні з даними.")
 
     deadline_dt = (
         deadline
@@ -199,9 +193,7 @@ def asymptotic_exp_forecast(
 
     # Bootstrap CI
     rng = np.random.default_rng(random_seed)
-    ci_lower_arr, ci_upper_arr = _bootstrap_ci(
-        timeline.daily_counts, t_future, n_bootstrap, rng
-    )
+    ci_lower_arr, ci_upper_arr = _bootstrap_ci(timeline.daily_counts, t_future, n_bootstrap, rng)
 
     future_cum = pd.Series(future_cum_arr, index=future_dates, name="future_cum")
     ci_lower = pd.Series(ci_lower_arr, index=future_dates, name="ci_lower")
