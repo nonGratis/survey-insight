@@ -12,11 +12,18 @@ PR1 заповнює тільки вкладку Огляд; решта пока
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
+import pandas as pd
 import streamlit as st
 
 from core.auth import credentials_from_dict
+from core.charts_timeline import plot_timeline_with_forecast
+from core.forecast import ForecastError, asymptotic_exp_forecast
 from core.forms_api import FormsApiError, get_form_structure, get_linked_sheet_id
 from core.logger import get_logger
+from core.sheets_api import SheetsApiError, fetch_responses
+from core.timeline import build_timeline
 from ui.components.auth_widget import ensure_api_access
 
 log = get_logger(__name__)
@@ -32,8 +39,7 @@ creds = credentials_from_dict(st.session_state["credentials"])
 form_id = st.query_params.get("form_id") or st.session_state.get("preselected_form_id")
 if not form_id:
     st.info(
-        "Перейди до **Каталогу** і клікни «📊 Аналіз» біля форми, "
-        "щоб почати аналіз відповідей."
+        "Перейди до **Каталогу** і клікни «📊 Аналіз» біля форми, щоб почати аналіз відповідей."
     )
     st.stop()
 
@@ -61,6 +67,46 @@ if not sheet_id:
     )
     st.stop()
 
+# Sidebar: deadline + target (персистяться в session_state per form_id).
+_config_key = f"analysis_config_{form_id}"
+_default_deadline = date.today() + timedelta(days=14)
+_config = st.session_state.get(_config_key, {"deadline": _default_deadline, "target": 100})
+
+with st.sidebar:
+    st.subheader("Параметри аналізу")
+    _config["deadline"] = st.date_input(
+        "Дедлайн опитування",
+        value=_config["deadline"],
+        key=f"deadline_{form_id}",
+    )
+    _config["target"] = st.number_input(
+        "Цільова к-сть відповідей",
+        min_value=1,
+        value=int(_config["target"]),
+        step=10,
+        key=f"target_{form_id}",
+    )
+    if st.button("Оновити дані", key=f"refresh_{form_id}"):
+        st.cache_data.clear()
+        st.rerun()
+st.session_state[_config_key] = _config
+
+
+@st.cache_data(ttl=60, show_spinner="Завантажую відповіді…")
+def _cached_responses(sheet_id_: str, _creds_token: str) -> pd.DataFrame:
+    return fetch_responses(creds, sheet_id_)
+
+
+try:
+    df = _cached_responses(sheet_id, creds.token or "")
+except SheetsApiError as exc:
+    log.exception(
+        "ui_analysis_fetch_responses_failed",
+        extra={"sheet_id": sheet_id, "status": exc.status},
+    )
+    st.error(f"Не вдалося завантажити відповіді: {exc}")
+    st.stop()
+
 tab_overview, tab_per_q, tab_crosstabs, tab_quality, tab_repr = st.tabs(
     [
         "📈 Огляд",
@@ -72,10 +118,50 @@ tab_overview, tab_per_q, tab_crosstabs, tab_quality, tab_repr = st.tabs(
 )
 
 with tab_overview:
-    st.info(
-        "Скоро у наступному коміті цього PR: часовий кумулятив відповідей з "
-        "прогнозом до дедлайну і довірчим інтервалом."
-    )
+    timeline = build_timeline(df)
+
+    if timeline.cumulative.empty:
+        st.info("Поки немає валідних timestamps у відповідях.")
+    else:
+        forecast = None
+        forecast_error: str | None = None
+        try:
+            forecast = asymptotic_exp_forecast(timeline, deadline=_config["deadline"])
+        except ForecastError as exc:
+            forecast_error = str(exc)
+
+        fig = plot_timeline_with_forecast(
+            timeline=timeline,
+            forecast=forecast,
+            target=int(_config["target"]),
+            deadline=_config["deadline"],
+        )
+        st.plotly_chart(fig, width="stretch")
+
+        cols = st.columns(4)
+        current = int(timeline.cumulative.iloc[-1])
+        days_left = (_config["deadline"] - date.today()).days
+        cols[0].metric("Зараз", current)
+        if forecast is not None:
+            ci_half = (forecast.final_ci[1] - forecast.final_ci[0]) // 2
+            cols[1].metric(
+                "Прогноз на дедлайн",
+                forecast.final_estimate,
+                delta=f"±{ci_half}",
+            )
+        else:
+            cols[1].metric("Прогноз на дедлайн", "—")
+        cols[2].metric("До дедлайну", f"{days_left} днів")
+        cols[3].metric("Мета", int(_config["target"]))
+
+        if forecast is not None:
+            st.caption(
+                f"Asymptotic exp · RMSE={forecast.rmse:.2f} · "
+                f"R²={forecast.r_squared:.3f} · "
+                f"95% CI на дедлайн: {forecast.final_ci[0]}–{forecast.final_ci[1]}"
+            )
+        elif forecast_error:
+            st.caption(f"Прогноз недоступний: {forecast_error}")
 
 with tab_per_q:
     st.info("Скоро у PR4: дескриптивна статистика по кожному питанню.")
@@ -84,10 +170,7 @@ with tab_crosstabs:
     st.info("Скоро у PR5: крос-табуляції питання × питання + χ²-тест.")
 
 with tab_quality:
-    st.info(
-        "Скоро у PR6: час заповнення, drop-out rate, виявлення підозрілих "
-        "патернів відповідей."
-    )
+    st.info("Скоро у PR6: час заповнення, drop-out rate, виявлення підозрілих патернів відповідей.")
 
 with tab_repr:
     st.info(
