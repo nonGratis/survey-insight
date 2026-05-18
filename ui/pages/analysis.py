@@ -20,7 +20,12 @@ import streamlit as st
 from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
 from core.forecast import ForecastError, asymptotic_exp_forecast
-from core.forms_api import FormsApiError, get_form_structure, get_linked_sheet_id
+from core.forms_api import (
+    FormsApiError,
+    get_form_structure,
+    get_linked_sheet_id,
+    list_user_forms,
+)
 from core.logger import get_logger
 from core.sheets_api import SheetsApiError, fetch_responses
 from core.timeline import build_timeline
@@ -35,13 +40,56 @@ if not ensure_api_access():
 
 creds = credentials_from_dict(st.session_state["credentials"])
 
-# Resolve form_id: пріоритет — query param (з Каталог-кнопки), fallback — session_state.
-form_id = st.query_params.get("form_id") or st.session_state.get("preselected_form_id")
-if not form_id:
+# Selectbox-driven form picker. URL `?form_id=` (з Каталог-кнопки 📊) і
+# `preselected_form_id` (legacy) використовуємо ЛИШЕ як default-індекс —
+# завжди показуємо selectbox зі списку всіх форм, бо cross-tab auth поки
+# не зберігається і LinkColumn у Каталозі відкриває новий tab з порожнім
+# session_state.
+
+
+@st.cache_data(ttl=120, show_spinner="Завантажую список форм…")
+def _cached_forms(_creds_token: str) -> list[dict]:
+    """Список форм користувача, кешований на 2 хв за access_token."""
+    return list_user_forms(creds)
+
+
+try:
+    forms = _cached_forms(creds.token or "")
+except FormsApiError as exc:
+    log.exception("ui_analysis_list_forms_failed", extra={"status": exc.status})
+    st.error(f"Не вдалося отримати список форм: {exc}")
+    st.stop()
+
+if not forms:
     st.info(
-        "Перейди до **Каталогу** і клікни «📊 Аналіз» біля форми, щоб почати аналіз відповідей."
+        "На цьому акаунті не знайдено жодної Google Form. "
+        "Створи форму в google.com/forms і повернись сюди."
     )
     st.stop()
+
+# Preselect із URL (з Каталог-кнопки) або session_state (legacy fallback).
+preselected_id = st.query_params.get("form_id") or st.session_state.get("preselected_form_id")
+default_idx = 0
+if preselected_id:
+    matched = next((i for i, f in enumerate(forms) if f["id"] == preselected_id), None)
+    if matched is not None:
+        default_idx = matched
+    # Прибираємо обидва preselect-джерела, щоб юзер міг вільно міняти selectbox
+    # без "залипання" URL/session_state при наступному rerun.
+    if "form_id" in st.query_params:
+        del st.query_params["form_id"]
+    st.session_state.pop("preselected_form_id", None)
+
+choice = st.selectbox(
+    "Форма для аналізу",
+    options=forms,
+    format_func=lambda f: f["name"],
+    index=default_idx,
+)
+if not choice:
+    st.stop()
+
+form_id = choice["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
