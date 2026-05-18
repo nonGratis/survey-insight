@@ -12,9 +12,8 @@ PR1 заповнює тільки вкладку Огляд; решта пока
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-import pandas as pd
 import streamlit as st
 
 from core.auth import credentials_from_dict
@@ -24,11 +23,11 @@ from core.forms_api import (
     FormsApiError,
     get_form_structure,
     get_linked_sheet_id,
+    list_response_timestamps,
     list_user_forms,
 )
 from core.logger import get_logger
-from core.sheets_api import SheetsApiError, fetch_responses
-from core.timeline import build_timeline
+from core.timeline import build_timeline_from_timestamps
 from ui.components.auth_widget import ensure_api_access
 
 log = get_logger(__name__)
@@ -109,11 +108,15 @@ sheet_id = get_linked_sheet_id(structure)
 
 st.caption(f"Форма: **{form_title}**")
 if not sheet_id:
-    st.warning(
-        "Ця форма не має привʼязаного Google Sheet. "
-        "Прив'яжи Sheet у формі (Responses → Link to Sheets), щоб увімкнути аналіз."
+    # Огляд tab працює напряму з Forms API і Sheet не потребує.
+    # Решта tabs (По питаннях / Крос-таби / Якість) у майбутніх PR'ах
+    # покажуть власне попередження про потребу Sheet — там, де вони
+    # реально читатимуть answer values.
+    st.info(
+        "Ця форма не має прив'язаного Google Sheet. "
+        "Огляд працює через Forms API безпосередньо; інші вкладки "
+        "потребуватимуть Sheet (Responses → Link to Sheets у формі)."
     )
-    st.stop()
 
 # Sidebar: deadline + target (персистяться в session_state per form_id).
 _config_key = f"analysis_config_{form_id}"
@@ -141,18 +144,19 @@ st.session_state[_config_key] = _config
 
 
 @st.cache_data(ttl=60, show_spinner="Завантажую відповіді…")
-def _cached_responses(sheet_id_: str, _creds_token: str) -> pd.DataFrame:
-    return fetch_responses(creds, sheet_id_)
+def _cached_timestamps(form_id_: str, _creds_token: str) -> list[datetime]:
+    """Forms API timestamps, кешовано на 60s за access_token+form_id."""
+    return list_response_timestamps(creds, form_id_)
 
 
 try:
-    df = _cached_responses(sheet_id, creds.token or "")
-except SheetsApiError as exc:
+    timestamps = _cached_timestamps(form_id, creds.token or "")
+except FormsApiError as exc:
     log.exception(
-        "ui_analysis_fetch_responses_failed",
-        extra={"sheet_id": sheet_id, "status": exc.status},
+        "ui_analysis_list_timestamps_failed",
+        extra={"form_id": form_id, "status": exc.status},
     )
-    st.error(f"Не вдалося завантажити відповіді: {exc}")
+    st.error(f"Не вдалося отримати timestamps відповідей: {exc}")
     st.stop()
 
 tab_overview, tab_per_q, tab_crosstabs, tab_quality, tab_repr = st.tabs(
@@ -166,7 +170,7 @@ tab_overview, tab_per_q, tab_crosstabs, tab_quality, tab_repr = st.tabs(
 )
 
 with tab_overview:
-    timeline = build_timeline(df)
+    timeline = build_timeline_from_timestamps(timestamps)
 
     if timeline.cumulative.empty:
         st.info("Поки немає валідних timestamps у відповідях.")
