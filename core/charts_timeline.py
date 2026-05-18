@@ -75,19 +75,55 @@ def plot_timeline_with_forecast(
             if isinstance(deadline, datetime)
             else datetime.combine(deadline, datetime.min.time())
         )
-        fig.add_vline(
-            x=deadline_dt,
+        # add_vline з annotation_text на datetime-осі ламається у Plotly
+        # (`_mean([0, datetime])` у `shapeannotation.annotation_params_for_line`).
+        # Workaround: окремий add_shape для лінії + add_annotation з paper-yref
+        # — лінія малюється, анотація прикріплюється до top без авто-mean.
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=deadline_dt,
+            x1=deadline_dt,
+            y0=0,
+            y1=1,
             line=dict(color="#d62728", width=2, dash="dot"),
-            annotation_text="Дедлайн",
-            annotation_position="top",
+        )
+        fig.add_annotation(
+            x=deadline_dt,
+            xref="x",
+            y=1.0,
+            yref="paper",
+            text="Дедлайн",
+            showarrow=False,
+            yshift=10,
+            font=dict(color="#d62728"),
         )
 
     if target is not None and target > 0:
-        fig.add_hline(
-            y=target,
+        # Той самий patern для горизонталі — заради консистентності і захисту
+        # від майбутніх Plotly-регресій (hline+annotation на числовій осі
+        # зараз працює, але краще не покладатись).
+        fig.add_shape(
+            type="line",
+            xref="paper",
+            yref="y",
+            x0=0,
+            x1=1,
+            y0=target,
+            y1=target,
             line=dict(color="#2ca02c", width=2, dash="dot"),
-            annotation_text=f"Мета: {target}",
-            annotation_position="right",
+        )
+        fig.add_annotation(
+            x=1.0,
+            xref="paper",
+            y=target,
+            yref="y",
+            text=f"Мета: {target}",
+            showarrow=False,
+            xanchor="right",
+            yshift=10,
+            font=dict(color="#2ca02c"),
         )
 
     fig.update_layout(
