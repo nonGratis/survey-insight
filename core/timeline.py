@@ -1,14 +1,19 @@
 """Часові серії відповідей: timestamp → daily counts → cumulative.
 
-Працює з DataFrame, який повертає `core.sheets_api.fetch_responses`.
-Перша колонка Forms-linked Sheet'у — це Timestamp подання (Google
-Forms так записує завжди). Парсимо її, групуємо по доб, рахуємо
-cumulative — це є вхід для прогнозних моделей у `core.forecast`.
+Два джерела timestamps підтримуються:
+- `build_timeline_from_timestamps(list[datetime])` — recommended,
+  список приходить з Forms API `responses.list` (canonical createTime).
+- `build_timeline(df)` — legacy: парсить першу колонку DataFrame
+  (Sheet-based). Залишений для зворотної сумісності; не використовується
+  у новому Огляд-tab'і, бо локалізаційні формати ламають парсинг.
+
+Обидві функції діляться приватним хелпером `_build_from_clean_series`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 
@@ -36,34 +41,51 @@ class TimelineSeries:
     cumulative: pd.Series
 
 
+def build_timeline_from_timestamps(timestamps: list[datetime]) -> TimelineSeries:
+    """Побудувати TimelineSeries з готового списку datetime-ів.
+
+    Рекомендований вхід — повернене значення
+    `core.forms_api.list_response_timestamps`: список naive UTC
+    `datetime`, який Forms API віддає у полі `createTime`.
+
+    Без `pd.to_datetime` — pandas автоматично інтерпретує
+    `list[datetime]` як `datetime64[ns]` Series.
+    """
+    if not timestamps:
+        return _empty_timeline()
+    parsed = pd.Series(sorted(timestamps))
+    return _build_from_clean_series(parsed)
+
+
 def build_timeline(df: pd.DataFrame) -> TimelineSeries:
-    """Побудувати TimelineSeries з DataFrame відповідей.
+    """Legacy: побудувати TimelineSeries з першої колонки DataFrame.
 
-    Очікує, що перша колонка `df` містить submit-timestamps у форматі,
-    придатному для `pd.to_datetime` (Google Forms-linked Sheets завжди
-    кладуть Timestamp туди, локалізована назва не критична).
-
-    Невпарсовані рядки мовчки відкидаються — це може бути header-рядок
-    або порожні значення наприкінці.
-
-    Args:
-        df: результат `fetch_responses`.
-
-    Returns:
-        TimelineSeries. Якщо немає валідних timestamps — усі поля порожні.
+    Колишній шлях для Sheet-based timestamps. Тепер витіснений
+    `build_timeline_from_timestamps` (Forms API), але залишається
+    робочим для випадків, коли єдиним джерелом є Sheet (наприклад,
+    оффлайн-CSV-експорт).
     """
     if df.empty or df.shape[1] == 0:
         return _empty_timeline()
 
     first_col = df.iloc[:, 0]
     parsed = pd.to_datetime(first_col, errors="coerce", dayfirst=True)
-    parsed = parsed.dropna().sort_values().reset_index(drop=True)
+    parsed = parsed.dropna()
 
     if parsed.empty:
         log.warning(
             "timeline_no_valid_timestamps",
             extra={"rows": len(df), "col_name": str(df.columns[0])},
         )
+        return _empty_timeline()
+
+    return _build_from_clean_series(parsed)
+
+
+def _build_from_clean_series(parsed: pd.Series) -> TimelineSeries:
+    """Внутрішнє: Series валідних datetime → TimelineSeries з daily+cum."""
+    parsed = parsed.sort_values().reset_index(drop=True)
+    if parsed.empty:
         return _empty_timeline()
 
     # Daily counts: групуємо по даті, потім reindex на повний діапазон,
