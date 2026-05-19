@@ -8,8 +8,6 @@ type" сцена `charts.py`.
 
 from __future__ import annotations
 
-from datetime import date, datetime
-
 import plotly.graph_objects as go
 
 from core.forecast import ForecastResult
@@ -20,16 +18,17 @@ def plot_timeline_with_forecast(
     timeline: TimelineSeries,
     forecast: ForecastResult | None,
     target: int | None,
-    deadline: date | datetime | None,
 ) -> go.Figure:
-    """Скомпонувати чарт кумулятиву + прогнозу + орієнтирів.
+    """Скомпонувати чарт кумулятиву + прогнозу + цільового маркера.
 
     Лейаут:
     - Суцільна синя лінія: фактичний cumulative (timeline).
     - Пунктирна синя лінія: прогнозний future_cum (якщо forecast).
     - Затемнена зона: bootstrap CI (ci_lower..ci_upper).
-    - Червона вертикаль: deadline (якщо задано).
-    - Зелена горизонталь: target N (якщо задано).
+    - Зелена горизонталь з підписом: target N (якщо задано).
+
+    Дедлайн прибрано — модель сама визначає горизонт як 25% від
+    тривалості опитування (див. core.forecast.asymptotic_exp_forecast).
     """
     fig = go.Figure()
 
@@ -67,37 +66,6 @@ def plot_timeline_with_forecast(
                 name=f"Прогноз ({forecast.model})",
                 line=dict(color="#1f77b4", width=2, dash="dash"),
             )
-        )
-
-    if deadline is not None:
-        deadline_dt = (
-            deadline
-            if isinstance(deadline, datetime)
-            else datetime.combine(deadline, datetime.min.time())
-        )
-        # add_vline з annotation_text на datetime-осі ламається у Plotly
-        # (`_mean([0, datetime])` у `shapeannotation.annotation_params_for_line`).
-        # Workaround: окремий add_shape для лінії + add_annotation з paper-yref
-        # — лінія малюється, анотація прикріплюється до top без авто-mean.
-        fig.add_shape(
-            type="line",
-            xref="x",
-            yref="paper",
-            x0=deadline_dt,
-            x1=deadline_dt,
-            y0=0,
-            y1=1,
-            line=dict(color="#d62728", width=2, dash="dot"),
-        )
-        fig.add_annotation(
-            x=deadline_dt,
-            xref="x",
-            y=1.0,
-            yref="paper",
-            text="Дедлайн",
-            showarrow=False,
-            yshift=10,
-            font=dict(color="#d62728"),
         )
 
     if target is not None and target > 0:

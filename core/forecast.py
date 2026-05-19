@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,8 @@ log = get_logger(__name__)
 
 DEFAULT_N_BOOTSTRAP = 1000
 DEFAULT_RANDOM_SEED = 42  # для відтворюваності CI у демо
+DEFAULT_HORIZON_FRACTION = 0.25  # 25% від тривалості опитування
+MIN_HORIZON_DAYS = 1
 
 
 class ForecastError(RuntimeError):
@@ -131,38 +133,38 @@ def _bootstrap_ci(
 
 def asymptotic_exp_forecast(
     timeline: TimelineSeries,
-    deadline: date | datetime,
+    horizon_fraction: float = DEFAULT_HORIZON_FRACTION,
     n_bootstrap: int = DEFAULT_N_BOOTSTRAP,
     random_seed: int = DEFAULT_RANDOM_SEED,
 ) -> ForecastResult:
-    """Спрогнозувати cumulative до deadline.
+    """Спрогнозувати cumulative на горизонт ~25% від тривалості опитування.
+
+    Дедлайн більше не передається — прогноз йде на фіксовану частку
+    від (last - first) timestamp у даних. Це робить прогноз тривимірно
+    послідовним: для тиждень-старого опитування — 2 додаткові дні
+    наперед; для місячного — 7-8 днів.
 
     Args:
-        timeline: побудована `build_timeline`.
-        deadline: дата закриття опитування (включно).
+        timeline: побудована `build_timeline_from_timestamps`.
+        horizon_fraction: частка тривалості, яку додаємо як прогноз.
+            Default 0.25 (25%). Min горизонт 1 день.
         n_bootstrap: к-сть ресемплів для CI; 1000 — баланс точності/часу.
         random_seed: для відтворюваності.
 
     Raises:
-        ForecastError: якщо timeline порожня, deadline у минулому,
-            або curve_fit не зійшовся на історії.
+        ForecastError: якщо timeline порожня, замало точок, або
+            curve_fit не зійшовся на історії.
     """
     if timeline.daily_counts.empty:
         raise ForecastError("Немає даних: timeline порожня.")
     if len(timeline.daily_counts) < 3:
         raise ForecastError("Замало точок для прогнозу: потрібно мінімум 3 дні з даними.")
 
-    deadline_dt = (
-        deadline
-        if isinstance(deadline, datetime)
-        else datetime.combine(deadline, datetime.min.time())
-    )
+    first_known = timeline.daily_counts.index[0].to_pydatetime()
     last_known_day = timeline.daily_counts.index[-1].to_pydatetime()
-    if deadline_dt <= last_known_day:
-        raise ForecastError(
-            f"Дедлайн ({deadline_dt:%Y-%m-%d}) має бути після останньої "
-            f"відомої доби ({last_known_day:%Y-%m-%d})."
-        )
+
+    duration_days = (last_known_day.date() - first_known.date()).days
+    horizon_days = max(int(round(duration_days * horizon_fraction)), MIN_HORIZON_DAYS)
 
     cum_array = timeline.cumulative.to_numpy(dtype=float)
     n_days = len(cum_array)
@@ -177,12 +179,10 @@ def asymptotic_exp_forecast(
     ss_tot = float(np.sum((cum_array - cum_array.mean()) ** 2))
     r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
-    # Future timeline
-    first_known = timeline.daily_counts.index[0].to_pydatetime()
-    days_until_deadline = (deadline_dt.date() - last_known_day.date()).days
+    # Future timeline: last_known_day + 1 ... + horizon_days
     future_dates = pd.date_range(
         start=last_known_day + timedelta(days=1),
-        periods=days_until_deadline,
+        periods=horizon_days,
         freq="D",
     )
     t_future = np.array(
