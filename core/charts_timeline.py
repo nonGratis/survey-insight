@@ -22,24 +22,28 @@ def plot_timeline_with_forecast(
     """Скомпонувати чарт кумулятиву + прогнозу + цільового маркера.
 
     Лейаут:
-    - Суцільна синя лінія: фактичний cumulative (timeline).
+    - Step-крива з маркерами: кожна відповідь — окрема точка, y стрибає +1
+      у момент її timestamp'у (shape="hv" — горизонталь, потім вертикаль).
     - Пунктирна синя лінія: прогнозний future_cum (якщо forecast).
     - Затемнена зона: 95% prediction interval (ci_lower..ci_upper).
     - Зелена горизонталь з підписом: target N (якщо задано).
 
     Дедлайн прибрано — модель сама визначає горизонт як 25% від
     тривалості опитування (див. core.forecast.forecast_responses).
+
+    Графік малюється з `timeline.timestamps` (per-response), тоді як прогноз
+    усе ще працює на denoised daily — це дві незалежні концерни.
     """
     fig = go.Figure()
 
-    if not timeline.cumulative.empty:
+    if not timeline.timestamps.empty:
         fig.add_trace(
             go.Scatter(
-                x=timeline.cumulative.index,
-                y=timeline.cumulative.values,
+                x=timeline.timestamps,
+                y=list(range(1, len(timeline.timestamps) + 1)),
                 mode="lines+markers",
                 name="Фактично",
-                line=dict(color="#1f77b4", width=2),
+                line=dict(color="#1f77b4", width=2, shape="hv"),
                 marker=dict(size=5),
             )
         )
