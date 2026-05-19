@@ -166,29 +166,3 @@ def fit_model(
     except (RuntimeError, ValueError) as exc:
         raise ForecastError(f"{model.name} не зійшовся: {exc}") from exc
     return tuple(float(p) for p in popt)
-
-
-# Legacy шім для commit-1-сумісного intervals.bootstrap_ci. Використовує
-# ширші bounds [0, ∞) та initial guess із оригінальної реалізації. Цілковито
-# незалежний від нових SaturationModel-класів. Буде прибраний у комміті 5,
-# коли service переключиться на selector + NHPP.
-def asymptotic_exp(t: np.ndarray, a: float, b: float, c: float) -> np.ndarray:
-    return a * (1.0 - np.exp(-b * t)) + c
-
-
-def fit_asymptotic_exp(t: np.ndarray, y: np.ndarray) -> tuple[float, float, float]:
-    a0 = float(max(y[-1] - y[0], 1.0))
-    b0 = 0.05
-    c0 = float(y[0])
-    try:
-        popt, _ = curve_fit(
-            asymptotic_exp,
-            t,
-            y,
-            p0=(a0, b0, c0),
-            bounds=([0.0, 1e-6, 0.0], [np.inf, 5.0, np.inf]),
-            maxfev=CURVE_FIT_MAX_NFEV,
-        )
-    except (RuntimeError, ValueError) as exc:
-        raise ForecastError(f"Asymptotic exp не зійшовся: {exc}") from exc
-    return float(popt[0]), float(popt[1]), float(popt[2])

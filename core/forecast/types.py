@@ -39,10 +39,11 @@ class ForecastResult:
     """Результат прогнозу cumulative на горизонт.
 
     Attributes:
-        model: ідентифікатор моделі (наприклад, "asymptotic_exp").
+        model: ідентифікатор моделі ("logistic" / "gompertz" / "asymptotic_exp").
+        aicc: AICc обраної моделі на тренувальних даних.
         future_dates: дати після останнього відомого факту, включно з горизонтом.
         future_cum: модельний cumulative на future_dates.
-        ci_lower: нижня межа 95% інтервалу.
+        ci_lower: нижня межа 95% інтервалу (≥ last_observed за побудовою NHPP).
         ci_upper: верхня межа 95% інтервалу.
         final_estimate: цілочислова точкова оцінка cumulative на кінці горизонту.
         final_ci: (lower, upper) на кінці горизонту.
@@ -51,6 +52,7 @@ class ForecastResult:
     """
 
     model: str
+    aicc: float
     future_dates: pd.DatetimeIndex
     future_cum: pd.Series
     ci_lower: pd.Series
