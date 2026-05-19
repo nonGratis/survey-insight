@@ -24,11 +24,11 @@ def plot_timeline_with_forecast(
     Лейаут:
     - Суцільна синя лінія: фактичний cumulative (timeline).
     - Пунктирна синя лінія: прогнозний future_cum (якщо forecast).
-    - Затемнена зона: bootstrap CI (ci_lower..ci_upper).
+    - Затемнена зона: 95% prediction interval (ci_lower..ci_upper).
     - Зелена горизонталь з підписом: target N (якщо задано).
 
     Дедлайн прибрано — модель сама визначає горизонт як 25% від
-    тривалості опитування (див. core.forecast.asymptotic_exp_forecast).
+    тривалості опитування (див. core.forecast.forecast_responses).
     """
     fig = go.Figure()
 
