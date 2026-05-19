@@ -1,0 +1,81 @@
+"""Вибір найкращої моделі за AICc.
+
+Селектор отримує список моделей через DI (Sequence[SaturationModel]),
+фітить кожну, ранжує за AICc (з поправкою на малий N), повертає переможця.
+
+Якщо жодна модель не зійшлася — ForecastError.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+import numpy as np
+
+from core.logger import get_logger
+
+from .metrics import aicc, r_squared, rmse
+from .models import DEFAULT_MODELS, SaturationModel, fit_model
+from .types import FittedModel, ForecastError
+
+log = get_logger(__name__)
+
+
+def select_best_model(
+    t: np.ndarray,
+    y: np.ndarray,
+    target: int | None = None,
+    models: Sequence[SaturationModel] = DEFAULT_MODELS,
+) -> FittedModel:
+    """Фіт кожну модель з `models`, повернути найкращу за AICc.
+
+    Args:
+        t: тренувальні моменти часу (1D, монотонно зростаючі).
+        y: тренувальні cumulative-значення (1D, та сама довжина, що й t).
+        target: цільова кількість відповідей; передається в bounds моделей
+            як soft prior. None — широкі дефолти.
+        models: реалізації SaturationModel. Default — Logistic + Gompertz
+            + AsymptoticExp; для тестів можна передати інший набір.
+
+    Returns:
+        FittedModel переможця з заповненими aicc, rmse, r_squared.
+
+    Raises:
+        ForecastError: якщо жодна модель не зійшлася.
+    """
+    candidates: list[FittedModel] = []
+    failures: list[tuple[str, str]] = []
+    for model in models:
+        try:
+            params = fit_model(model, t, y, target)
+        except ForecastError as exc:
+            failures.append((model.name, str(exc)))
+            continue
+        y_fitted = model.predict(t, *params)
+        candidates.append(
+            FittedModel(
+                model=model,
+                params=params,
+                aicc=aicc(y, y_fitted, model.n_params),
+                rmse=rmse(y, y_fitted),
+                r_squared=r_squared(y, y_fitted),
+            )
+        )
+
+    if not candidates:
+        raise ForecastError(
+            f"Жодна модель не зійшлася: {', '.join(f'{n}: {e}' for n, e in failures)}"
+        )
+
+    candidates.sort(key=lambda c: c.aicc)
+    best = candidates[0]
+    log.info(
+        "forecast_model_selected",
+        extra={
+            "best": best.model.name,
+            "aicc": round(best.aicc, 2),
+            "candidates": [{"name": c.model.name, "aicc": round(c.aicc, 2)} for c in candidates],
+            "failures": [n for n, _ in failures],
+        },
+    )
+    return best
