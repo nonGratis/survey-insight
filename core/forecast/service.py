@@ -103,21 +103,3 @@ def forecast_responses(
         rmse=fitted.rmse,
         r_squared=fitted.r_squared,
     )
-
-
-# Backward-compat alias для існуючих імпортів. Поведінка ідентична до
-# forecast_responses(target=None) — у наступному коміті UI переходить на
-# нове ім'я і алиас прибирається.
-def asymptotic_exp_forecast(
-    timeline: TimelineSeries,
-    horizon_fraction: float = DEFAULT_HORIZON_FRACTION,
-    n_simulations: int = DEFAULT_N_SIMULATIONS,
-    random_seed: int = DEFAULT_RANDOM_SEED,
-) -> ForecastResult:
-    return forecast_responses(
-        timeline,
-        target=None,
-        horizon_fraction=horizon_fraction,
-        n_simulations=n_simulations,
-        random_seed=random_seed,
-    )
