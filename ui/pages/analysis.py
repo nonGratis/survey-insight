@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import numpy as np
 import streamlit as st
 
 from core.auth import credentials_from_dict
@@ -132,14 +133,19 @@ def _cached_forecast(
     first_ts: datetime,
     last_ts: datetime,
     target: int,
+    start_idx: int,
+    end_idx: int,
     _timestamps: list[datetime],
 ) -> tuple[ForecastResult | None, str | None]:
-    """Кешований прогноз.
+    """Кешований прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
 
-    Cache key: (form_id, к-сть відповідей, перший+останній timestamp, target).
-    Target входить у ключ, бо впливає на вибір моделі (soft prior на K).
+    Cache key: (form_id, n_responses, first_ts, last_ts, target, start_idx, end_idx).
     `_timestamps` з підкреслення — Streamlit пропускає його в hashing,
-    передаємо як payload.
+    передаємо як payload (вже відрізаний субсет).
+
+    Результат повертається у subset-локальних координатах (cumulative
+    1..len(subset)). UI зсуває значення на `start_idx - 1`, щоб згрупувати
+    з global-нумерацією графіка.
 
     Returns (result, error_msg). На фейлі фіту result=None, error=повідомлення.
     """
@@ -148,6 +154,30 @@ def _cached_forecast(
         return forecast_responses(timeline, target=target), None
     except ForecastError as exc:
         return None, str(exc)
+
+
+def _shift_forecast(forecast: ForecastResult, offset: int) -> ForecastResult:
+    """Зсунути cumulative-значення прогнозу на `offset` (для subset → global).
+
+    Прогноз рахується на subset'і timestamps, тож його cumulative починається
+    з 1 для першої точки subset'у. Графік показує global-нумерацію (1..N
+    усіх timestamps); щоб forecast curve візуально продовжувала факт,
+    додаємо `offset = start_idx - 1` (= кількість виключених на початку).
+    """
+    if offset == 0:
+        return forecast
+    return ForecastResult(
+        model=forecast.model,
+        aicc=forecast.aicc,
+        future_dates=forecast.future_dates,
+        future_cum=forecast.future_cum + offset,
+        ci_lower=forecast.ci_lower + offset,
+        ci_upper=forecast.ci_upper + offset,
+        final_estimate=forecast.final_estimate + offset,
+        final_ci=(forecast.final_ci[0] + offset, forecast.final_ci[1] + offset),
+        rmse=forecast.rmse,
+        r_squared=forecast.r_squared,
+    )
 
 
 try:
@@ -176,23 +206,40 @@ with tab_overview:
     if timeline.cumulative.empty:
         st.info("Поки немає валідних timestamps у відповідях.")
     else:
-        # Цільова кількість живе у session_state per form_id. Читаємо ДО
-        # виклику прогнозу, бо target — soft prior на асимптоту моделі,
-        # тож входить у cache key.
+        # Target і вікно прогнозу — обидва впливають на forecast, тож читаємо
+        # ДО виклику, щоб увійшли в cache key. session_state може зберігати
+        # stale значення (форма оновилась), тому clamp'имо у [1, n_ts].
         _target_key = f"analysis_target_{form_id}"
         target = int(st.session_state.get(_target_key, 100))
 
-        # Прогноз — на 25% вперед від тривалості опитування (last - first).
-        # Кеш інвалідується при зміні target (модель може змінитися).
-        if timestamps:
+        _window_key = f"analysis_window_{form_id}"
+        n_ts = len(timestamps)
+        default_window = (1, max(n_ts, 1))
+        start_idx, end_idx = st.session_state.get(_window_key, default_window)
+        start_idx = max(1, min(int(start_idx), n_ts))
+        end_idx = max(start_idx, min(int(end_idx), n_ts))
+
+        subset_timestamps = timestamps[start_idx - 1 : end_idx]
+        excluded_mask = np.zeros(n_ts, dtype=bool)
+        excluded_mask[: start_idx - 1] = True
+        excluded_mask[end_idx:] = True
+
+        # Прогноз — на 25% вперед від тривалості subset'у.
+        # Кеш інвалідується при зміні target або вікна.
+        if subset_timestamps:
             forecast, forecast_error = _cached_forecast(
                 _form_id=form_id,
                 n_responses=len(timestamps),
                 first_ts=timestamps[0],
                 last_ts=timestamps[-1],
                 target=target,
-                _timestamps=timestamps,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                _timestamps=subset_timestamps,
             )
+            # Subset → global coordinate shift.
+            if forecast is not None:
+                forecast = _shift_forecast(forecast, offset=start_idx - 1)
         else:
             forecast, forecast_error = None, None
 
@@ -241,10 +288,31 @@ with tab_overview:
             timeline=timeline,
             forecast=forecast,
             target=target,
+            excluded_mask=excluded_mask,
         )
         st.plotly_chart(fig, width="stretch")
 
-        # Рядок 4: caption — модель/якість фіту/горизонт.
+        # Рядок 4: range-slider — обирає вікно для фіту прогнозу. Full-width
+        # під графіком; рендериться завжди (а не лише при n_ts ≥ 2), щоб
+        # компонент займав те саме місце і не "стрибав" UI.
+        if n_ts >= 2:
+            st.slider(
+                "Вікно для прогнозу",
+                min_value=1,
+                max_value=n_ts,
+                value=(start_idx, end_idx),
+                step=1,
+                key=_window_key,
+                help=(
+                    "Перетягни ручки, щоб обмежити, які відповіді "
+                    "використовуються для фіту прогнозу. Сірі точки на графіку — "
+                    "виключені."
+                ),
+            )
+
+        # Рядок 5: caption — модель/якість фіту/горизонт.
+        n_used = end_idx - start_idx + 1
+        window_suffix = f" · використано {n_used} з {n_ts} відповідей" if n_used < n_ts else ""
         if forecast is not None:
             horizon_end = forecast.future_dates[-1].date()
             st.caption(
@@ -252,9 +320,10 @@ with tab_overview:
                 f"горизонт до {horizon_end:%d.%m.%Y} (25% тривалості) · "
                 f"95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
                 f"RMSE={forecast.rmse:.2f} · R²={forecast.r_squared:.3f}"
+                f"{window_suffix}"
             )
         elif forecast_error:
-            st.caption(f"Прогноз недоступний: {forecast_error}")
+            st.caption(f"Прогноз недоступний: {forecast_error}{window_suffix}")
 
 with tab_per_q:
     st.info("Скоро у PR4: дескриптивна статистика по кожному питанню.")
