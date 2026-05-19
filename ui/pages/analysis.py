@@ -18,7 +18,7 @@ import streamlit as st
 
 from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
-from core.forecast import ForecastError, ForecastResult, asymptotic_exp_forecast
+from core.forecast import ForecastError, ForecastResult, forecast_responses
 from core.forms_api import (
     FormsApiError,
     get_form_structure,
@@ -131,13 +131,13 @@ def _cached_forecast(
     n_responses: int,
     first_ts: datetime,
     last_ts: datetime,
+    target: int,
     _timestamps: list[datetime],
 ) -> tuple[ForecastResult | None, str | None]:
     """Кешований прогноз.
 
-    Cache key: (form_id, к-сть відповідей, перший+останній timestamp).
-    Якщо нові відповіді не прийшли — instant cache hit (forecast НЕ
-    залежить від target, тож зміна input'у його не invalidate'ить).
+    Cache key: (form_id, к-сть відповідей, перший+останній timestamp, target).
+    Target входить у ключ, бо впливає на вибір моделі (soft prior на K).
     `_timestamps` з підкреслення — Streamlit пропускає його в hashing,
     передаємо як payload.
 
@@ -145,7 +145,7 @@ def _cached_forecast(
     """
     timeline = build_timeline_from_timestamps(_timestamps)
     try:
-        return asymptotic_exp_forecast(timeline), None
+        return forecast_responses(timeline, target=target), None
     except ForecastError as exc:
         return None, str(exc)
 
@@ -176,22 +176,25 @@ with tab_overview:
     if timeline.cumulative.empty:
         st.info("Поки немає валідних timestamps у відповідях.")
     else:
+        # Цільова кількість живе у session_state per form_id. Читаємо ДО
+        # виклику прогнозу, бо target — soft prior на асимптоту моделі,
+        # тож входить у cache key.
+        _target_key = f"analysis_target_{form_id}"
+        target = int(st.session_state.get(_target_key, 100))
+
         # Прогноз — на 25% вперед від тривалості опитування (last - first).
-        # Кешований: при зміні цільової кількості переобчислення не відбувається.
+        # Кеш інвалідується при зміні target (модель може змінитися).
         if timestamps:
             forecast, forecast_error = _cached_forecast(
                 _form_id=form_id,
                 n_responses=len(timestamps),
                 first_ts=timestamps[0],
                 last_ts=timestamps[-1],
+                target=target,
                 _timestamps=timestamps,
             )
         else:
             forecast, forecast_error = None, None
-
-        # Цільова кількість живе у session_state per form_id.
-        _target_key = f"analysis_target_{form_id}"
-        target = int(st.session_state.get(_target_key, 100))
 
         # Рядок 1: BANs (current / forecast / target) — над усім.
         ban_cols = st.columns(3)
@@ -245,8 +248,9 @@ with tab_overview:
         if forecast is not None:
             horizon_end = forecast.future_dates[-1].date()
             st.caption(
-                f"Прогноз: asymptotic exp · горизонт до {horizon_end:%d.%m.%Y} "
-                f"(25% тривалості) · 95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
+                f"Прогноз: {forecast.model} (AICc={forecast.aicc:.1f}) · "
+                f"горизонт до {horizon_end:%d.%m.%Y} (25% тривалості) · "
+                f"95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
                 f"RMSE={forecast.rmse:.2f} · R²={forecast.r_squared:.3f}"
             )
         elif forecast_error:
