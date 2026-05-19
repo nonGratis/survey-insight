@@ -1,14 +1,37 @@
-"""Public types for forecast package: result dataclass and error."""
+"""Public types for forecast package: result dataclasses and error."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .models import SaturationModel
 
 
 class ForecastError(RuntimeError):
     """Прогнозна модель не змогла знайти збіжний фіт."""
+
+
+@dataclass(frozen=True)
+class FittedModel:
+    """Зафіксований результат фіту однієї моделі.
+
+    Attributes:
+        model: екземпляр SaturationModel (тримає predict + n_params).
+        params: оптимальні параметри (порядок як у model.predict).
+        aicc: AICc на тренувальних даних (менше — краще).
+        rmse: RMSE на тренувальних даних.
+        r_squared: R² на тренувальних даних.
+    """
+
+    model: SaturationModel
+    params: tuple[float, ...]
+    aicc: float
+    rmse: float
+    r_squared: float
 
 
 @dataclass(frozen=True)
