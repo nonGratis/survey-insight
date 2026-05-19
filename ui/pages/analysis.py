@@ -12,7 +12,7 @@ PR1 заповнює тільки вкладку Огляд; решта пока
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime
 
 import streamlit as st
 
@@ -118,30 +118,6 @@ if not sheet_id:
         "потребуватимуть Sheet (Responses → Link to Sheets у формі)."
     )
 
-# Sidebar: deadline + target (персистяться в session_state per form_id).
-_config_key = f"analysis_config_{form_id}"
-_default_deadline = date.today() + timedelta(days=14)
-_config = st.session_state.get(_config_key, {"deadline": _default_deadline, "target": 100})
-
-with st.sidebar:
-    st.subheader("Параметри аналізу")
-    _config["deadline"] = st.date_input(
-        "Дедлайн опитування",
-        value=_config["deadline"],
-        key=f"deadline_{form_id}",
-    )
-    _config["target"] = st.number_input(
-        "Цільова к-сть відповідей",
-        min_value=1,
-        value=int(_config["target"]),
-        step=10,
-        key=f"target_{form_id}",
-    )
-    if st.button("Оновити дані", key=f"refresh_{form_id}"):
-        st.cache_data.clear()
-        st.rerun()
-st.session_state[_config_key] = _config
-
 
 @st.cache_data(ttl=60, show_spinner="Завантажую відповіді…")
 def _cached_timestamps(form_id_: str, _creds_token: str) -> list[datetime]:
@@ -175,42 +151,74 @@ with tab_overview:
     if timeline.cumulative.empty:
         st.info("Поки немає валідних timestamps у відповідях.")
     else:
+        # Прогноз — на 25% вперед від тривалості опитування (last - first).
+        # Дедлайн не передається; модель сама обчислює горизонт.
         forecast = None
         forecast_error: str | None = None
         try:
-            forecast = asymptotic_exp_forecast(timeline, deadline=_config["deadline"])
+            forecast = asymptotic_exp_forecast(timeline)
         except ForecastError as exc:
             forecast_error = str(exc)
 
+        # Цільова кількість живе у session_state per form_id.
+        _target_key = f"analysis_target_{form_id}"
+        target = int(st.session_state.get(_target_key, 100))
+
+        # Рядок 1: BANs (current / forecast / target) — над усім.
+        ban_cols = st.columns(3)
+        current = int(timeline.cumulative.iloc[-1])
+        ban_cols[0].metric("Зараз", current)
+        if forecast is not None:
+            ci_half = (forecast.final_ci[1] - forecast.final_ci[0]) // 2
+            ban_cols[1].metric(
+                "Прогноз",
+                forecast.final_estimate,
+                delta=f"±{ci_half}",
+                delta_color="off",
+            )
+        else:
+            ban_cols[1].metric("Прогноз", "—")
+        ban_cols[2].metric("Мета", target)
+
+        # Рядок 2: controls (target + refresh) — компактно над графіком.
+        ctrl_target, ctrl_refresh = st.columns([4, 1])
+        with ctrl_target:
+            target = int(
+                st.number_input(
+                    "Цільова кількість відповідей",
+                    min_value=1,
+                    value=target,
+                    step=10,
+                    key=_target_key,
+                    label_visibility="collapsed",
+                    placeholder="Цільова кількість",
+                )
+            )
+        with ctrl_refresh:
+            if st.button(
+                "Оновити",
+                key=f"refresh_{form_id}",
+                width="stretch",
+                help="Скинути кеш і перечитати свіжі timestamps з Forms API",
+            ):
+                st.cache_data.clear()
+                st.rerun()
+
+        # Рядок 3: графік (без deadline-вертикалі; target — горизонталь).
         fig = plot_timeline_with_forecast(
             timeline=timeline,
             forecast=forecast,
-            target=int(_config["target"]),
-            deadline=_config["deadline"],
+            target=target,
         )
         st.plotly_chart(fig, width="stretch")
 
-        cols = st.columns(4)
-        current = int(timeline.cumulative.iloc[-1])
-        days_left = (_config["deadline"] - date.today()).days
-        cols[0].metric("Зараз", current)
+        # Рядок 4: caption — модель/якість фіту/горизонт.
         if forecast is not None:
-            ci_half = (forecast.final_ci[1] - forecast.final_ci[0]) // 2
-            cols[1].metric(
-                "Прогноз на дедлайн",
-                forecast.final_estimate,
-                delta=f"±{ci_half}",
-            )
-        else:
-            cols[1].metric("Прогноз на дедлайн", "—")
-        cols[2].metric("До дедлайну", f"{days_left} днів")
-        cols[3].metric("Мета", int(_config["target"]))
-
-        if forecast is not None:
+            horizon_end = forecast.future_dates[-1].date()
             st.caption(
-                f"Asymptotic exp · RMSE={forecast.rmse:.2f} · "
-                f"R²={forecast.r_squared:.3f} · "
-                f"95% CI на дедлайн: {forecast.final_ci[0]}–{forecast.final_ci[1]}"
+                f"Прогноз: asymptotic exp · горизонт до {horizon_end:%d.%m.%Y} "
+                f"(25% тривалості) · 95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
+                f"RMSE={forecast.rmse:.2f} · R²={forecast.r_squared:.3f}"
             )
         elif forecast_error:
             st.caption(f"Прогноз недоступний: {forecast_error}")
