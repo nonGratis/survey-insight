@@ -31,10 +31,14 @@ from core.timeline import TimelineSeries
 
 log = get_logger(__name__)
 
-DEFAULT_N_BOOTSTRAP = 1000
+DEFAULT_N_BOOTSTRAP = 200
 DEFAULT_RANDOM_SEED = 42  # для відтворюваності CI у демо
 DEFAULT_HORIZON_FRACTION = 0.25  # 25% від тривалості опитування
 MIN_HORIZON_DAYS = 1
+# maxfev підібраний так, щоб успішний фіт сходився за <100 ітерацій
+# (на чистих asymptotic-exp даних), а невдалий — швидко "здавався",
+# не з'їдаючи 5000 evaluations × bootstrap_n у деградуючий сценарій.
+CURVE_FIT_MAX_NFEV = 500
 
 
 class ForecastError(RuntimeError):
@@ -88,7 +92,7 @@ def _fit_asymptotic_exp(t: np.ndarray, y: np.ndarray) -> tuple[float, float, flo
             y,
             p0=(a0, b0, c0),
             bounds=([0.0, 1e-6, 0.0], [np.inf, 5.0, np.inf]),
-            maxfev=5000,
+            maxfev=CURVE_FIT_MAX_NFEV,
         )
     except (RuntimeError, ValueError) as exc:
         raise ForecastError(f"Asymptotic exp не зійшовся: {exc}") from exc
