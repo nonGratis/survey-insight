@@ -18,7 +18,7 @@ import streamlit as st
 
 from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
-from core.forecast import ForecastError, asymptotic_exp_forecast
+from core.forecast import ForecastError, ForecastResult, asymptotic_exp_forecast
 from core.forms_api import (
     FormsApiError,
     get_form_structure,
@@ -125,6 +125,31 @@ def _cached_timestamps(form_id_: str, _creds_token: str) -> list[datetime]:
     return list_response_timestamps(creds, form_id_)
 
 
+@st.cache_data(ttl=300, show_spinner="Обчислюю прогноз…")
+def _cached_forecast(
+    _form_id: str,
+    n_responses: int,
+    first_ts: datetime,
+    last_ts: datetime,
+    _timestamps: list[datetime],
+) -> tuple[ForecastResult | None, str | None]:
+    """Кешований прогноз.
+
+    Cache key: (form_id, к-сть відповідей, перший+останній timestamp).
+    Якщо нові відповіді не прийшли — instant cache hit (forecast НЕ
+    залежить від target, тож зміна input'у його не invalidate'ить).
+    `_timestamps` з підкреслення — Streamlit пропускає його в hashing,
+    передаємо як payload.
+
+    Returns (result, error_msg). На фейлі фіту result=None, error=повідомлення.
+    """
+    timeline = build_timeline_from_timestamps(_timestamps)
+    try:
+        return asymptotic_exp_forecast(timeline), None
+    except ForecastError as exc:
+        return None, str(exc)
+
+
 try:
     timestamps = _cached_timestamps(form_id, creds.token or "")
 except FormsApiError as exc:
@@ -152,13 +177,17 @@ with tab_overview:
         st.info("Поки немає валідних timestamps у відповідях.")
     else:
         # Прогноз — на 25% вперед від тривалості опитування (last - first).
-        # Дедлайн не передається; модель сама обчислює горизонт.
-        forecast = None
-        forecast_error: str | None = None
-        try:
-            forecast = asymptotic_exp_forecast(timeline)
-        except ForecastError as exc:
-            forecast_error = str(exc)
+        # Кешований: при зміні цільової кількості переобчислення не відбувається.
+        if timestamps:
+            forecast, forecast_error = _cached_forecast(
+                _form_id=form_id,
+                n_responses=len(timestamps),
+                first_ts=timestamps[0],
+                last_ts=timestamps[-1],
+                _timestamps=timestamps,
+            )
+        else:
+            forecast, forecast_error = None, None
 
         # Цільова кількість живе у session_state per form_id.
         _target_key = f"analysis_target_{form_id}"
