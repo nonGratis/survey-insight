@@ -227,3 +227,8 @@ data/raw/
 *.xlsx
 .vscode/
 .idea/
+
+# research/ — сирі дані з PII (form_id чужих форм) у git не комітимо
+research/data/
+research/reports/figures/
+*.ipynb_checkpoints/
