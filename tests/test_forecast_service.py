@@ -26,10 +26,28 @@ def test_raises_on_empty_timeline():
         forecast_responses(tl)
 
 
-def test_raises_on_too_few_days():
-    tl = _make_timeline([3, 5])  # 2 дні
+def test_raises_on_too_few_points():
+    # Лише 4 точки — нижче MIN_TRAIN_POINTS=5
+    tl = _make_timeline([1, 1, 1, 1])
     with pytest.raises(ForecastError, match="Замало точок"):
         forecast_responses(tl)
+
+
+def test_works_with_minimum_points():
+    """5 точок будь-якого span'у мають давати валідний прогноз (A1+B1)."""
+    tl = _make_timeline([5])  # 5 відповідей одного дня
+    fc = forecast_responses(tl, target=20)
+    assert fc.final_estimate >= 5
+    assert fc.final_ci[0] >= 5
+
+
+def test_works_with_sub_daily_span():
+    """47 відповідей за 15 хвилин — раніше падало, тепер працює."""
+    base = datetime(2025, 5, 1, 12, 0, 0)
+    ts = [base + timedelta(seconds=20 * i) for i in range(47)]
+    tl = build_timeline_from_timestamps(ts)
+    fc = forecast_responses(tl, target=100)
+    assert fc.final_estimate >= 47
 
 
 def test_ci_lower_never_below_last_observed():
@@ -53,12 +71,16 @@ def test_ci_bounds_are_monotonic():
 
 
 def test_target_changes_forecast():
-    """Зміна target має впливати на результат (soft prior на K)."""
-    daily = [3, 5, 4, 3, 4, 3, 2, 4, 3, 4, 3, 3, 3, 3]
+    """Зміна target має впливати на результат (soft prior на K).
+
+    Використовуємо ненасичену лінійну траєкторію — там bounds кусаються
+    сильніше, ніж на чітко-S-кривих, де всі моделі сходяться до одного K.
+    """
+    # 8 точок з лінійним ростом — модель ще не "бачить" асимптоти
+    daily = [1, 1, 1, 1, 1, 1, 1, 1]
     tl = _make_timeline(daily)
-    fc_small = forecast_responses(tl, target=50, random_seed=1)
-    fc_large = forecast_responses(tl, target=500, random_seed=1)
-    # Хоча б одна з оцінок або CI зсунеться
+    fc_small = forecast_responses(tl, target=10, random_seed=1)
+    fc_large = forecast_responses(tl, target=1000, random_seed=1)
     assert (
         fc_small.final_estimate != fc_large.final_estimate or fc_small.final_ci != fc_large.final_ci
     )
