@@ -80,12 +80,23 @@ if preselected_id:
         del st.query_params["form_id"]
     st.session_state.pop("preselected_form_id", None)
 
-choice = st.selectbox(
-    "Форма для аналізу",
-    options=forms,
-    format_func=lambda f: f["name"],
-    index=default_idx,
-)
+form_col, refresh_col = st.columns([12, 1], vertical_alignment="bottom")
+with form_col:
+    choice = st.selectbox(
+        "Форма для аналізу",
+        options=forms,
+        format_func=lambda f: f["name"],
+        index=default_idx,
+    )
+with refresh_col:
+    if st.button(
+        ":material/refresh:",
+        key="refresh_page",
+        width="stretch",
+        help="Скинути кеш і перечитати свіжі дані з Forms API",
+    ):
+        st.cache_data.clear()
+        st.rerun()
 if not choice:
     st.stop()
 
@@ -259,29 +270,18 @@ with tab_overview:
             ban_cols[1].metric("Прогноз", "—")
         ban_cols[2].metric("Мета", target)
 
-        # Рядок 2: controls (target + refresh) — компактно над графіком.
-        ctrl_target, ctrl_refresh = st.columns([4, 1])
-        with ctrl_target:
-            target = int(
-                st.number_input(
-                    "Цільова кількість відповідей",
-                    min_value=1,
-                    value=target,
-                    step=10,
-                    key=_target_key,
-                    label_visibility="collapsed",
-                    placeholder="Цільова кількість",
-                )
+        # Рядок 2: target-control (повна ширина; refresh переїхав до селектору форм).
+        target = int(
+            st.number_input(
+                "Цільова кількість відповідей",
+                min_value=1,
+                value=target,
+                step=10,
+                key=_target_key,
+                label_visibility="collapsed",
+                placeholder="Цільова кількість",
             )
-        with ctrl_refresh:
-            if st.button(
-                "Оновити",
-                key=f"refresh_{form_id}",
-                width="stretch",
-                help="Скинути кеш і перечитати свіжі timestamps з Forms API",
-            ):
-                st.cache_data.clear()
-                st.rerun()
+        )
 
         # Рядок 3: графік (без deadline-вертикалі; target — горизонталь).
         fig = plot_timeline_with_forecast(
