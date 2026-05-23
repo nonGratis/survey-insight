@@ -20,6 +20,7 @@ import pandas as pd
 from core.timeline import TimelineSeries
 
 from .intervals import nhpp_prediction_interval
+from .models import models_for_n_points
 from .selector import select_best_model
 from .types import ForecastError, ForecastResult
 
@@ -85,7 +86,10 @@ def forecast_responses(
     duration_days = max((last_ts - first_ts).total_seconds() / 86400.0, MIN_DURATION_DAYS)
     horizon_days = max(int(np.ceil(duration_days * horizon_fraction)), MIN_HORIZON_DAYS)
 
-    fitted = select_best_model(t_train, y_train, target=target)
+    # Tiered model selection: малий N → лише AsymptoticExp (стабільний),
+    # достатній N → усі три моделі через AICc.
+    models = models_for_n_points(n_points)
+    fitted = select_best_model(t_train, y_train, target=target, models=models)
 
     # Future grid: щодоби, від наступного дня після last_ts.
     last_known_day = pd.Timestamp(last_ts.date())

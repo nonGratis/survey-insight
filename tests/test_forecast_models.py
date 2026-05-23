@@ -114,3 +114,27 @@ def test_fit_raises_on_degenerate_input():
 def test_default_models_tuple_includes_three():
     names = {m.name for m in DEFAULT_MODELS}
     assert names == {"logistic", "gompertz", "asymptotic_exp"}
+
+
+def test_models_for_small_sample_returns_only_asymptotic_exp():
+    from core.forecast.models import models_for_n_points
+
+    selected = models_for_n_points(7)
+    assert len(selected) == 1
+    assert selected[0].name == "asymptotic_exp"
+
+
+def test_models_for_large_sample_returns_all_three():
+    from core.forecast.models import models_for_n_points
+
+    selected = models_for_n_points(50)
+    assert {m.name for m in selected} == {"logistic", "gompertz", "asymptotic_exp"}
+
+
+def test_models_for_threshold_boundary():
+    from core.forecast.models import SMALL_SAMPLE_THRESHOLD, models_for_n_points
+
+    # На самому порозі — повний набір
+    assert len(models_for_n_points(SMALL_SAMPLE_THRESHOLD)) == 3
+    # На 1 нижче — лише AsymptoticExp
+    assert len(models_for_n_points(SMALL_SAMPLE_THRESHOLD - 1)) == 1
