@@ -82,7 +82,7 @@ def test_raises_when_all_models_fail():
 
     t = np.arange(10, dtype=float)
     y = np.linspace(1, 10, 10)
-    with pytest.raises(ForecastError, match="Жодна модель"):
+    with pytest.raises(ForecastError, match="не змогла знайти стійкий фіт"):
         select_best_model(t, y, target=None, models=(AlwaysFailingModel(),))
 
 
