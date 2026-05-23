@@ -63,8 +63,16 @@ def select_best_model(
         )
 
     if not candidates:
+        # Friendly message: список імен моделей, що не зійшлися; деталі — у log.
+        log.warning(
+            "forecast_all_models_failed",
+            extra={"failures": [{"model": n, "reason": e} for n, e in failures]},
+        )
+        names = ", ".join(n for n, _ in failures)
         raise ForecastError(
-            f"Жодна модель не зійшлася: {', '.join(f'{n}: {e}' for n, e in failures)}"
+            f"Модель не змогла знайти стійкий фіт ({names}). "
+            f"Можливі причини: занадто мало точок, ряд не має тренду насичення, "
+            f"або всі timestamps співпадають."
         )
 
     candidates.sort(key=lambda c: c.aicc)

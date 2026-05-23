@@ -323,7 +323,12 @@ with tab_overview:
                 f"{window_suffix}"
             )
         elif forecast_error:
-            st.caption(f"Прогноз недоступний: {forecast_error}{window_suffix}")
+            # Якщо помилка — "замало точок" І користувач звузив вікно — пораду
+            # "розширити вікно" виносимо явно, бо це найшвидший фікс.
+            hint = ""
+            if "Замало точок" in forecast_error and n_used < n_ts:
+                hint = f" Розширте вікно — повний набір має {n_ts} відповідей."
+            st.caption(f"Прогноз недоступний: {forecast_error}{hint}{window_suffix}")
 
 with tab_per_q:
     st.info("Скоро у PR4: дескриптивна статистика по кожному питанню.")
