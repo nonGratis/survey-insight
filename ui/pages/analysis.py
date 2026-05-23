@@ -92,7 +92,7 @@ with refresh_col:
     if st.button(
         ":material/refresh:",
         key="refresh_page",
-        width="stretch",
+        width="content",
         help="Скинути кеш і перечитати свіжі дані з Forms API",
     ):
         st.cache_data.clear()
