@@ -21,10 +21,9 @@ _EXCLUDED_COLOR = "rgba(150, 150, 150, 0.55)"
 def plot_timeline_with_forecast(
     timeline: TimelineSeries,
     forecast: ForecastResult | None,
-    target: int | None,
     excluded_mask: np.ndarray | None = None,
 ) -> go.Figure:
-    """Скомпонувати чарт кумулятиву + прогнозу + цільового маркера.
+    """Скомпонувати чарт кумулятиву + прогнозу.
 
     Лейаут:
     - Step-крива з маркерами: кожна відповідь — окрема точка, y стрибає +1
@@ -33,10 +32,9 @@ def plot_timeline_with_forecast(
       напівпрозорими (виключені з фіту прогнозу), інші — синіми.
     - Пунктирна синя лінія: прогнозний future_cum (якщо forecast).
     - Затемнена зона: 95% prediction interval (ci_lower..ci_upper).
-    - Зелена горизонталь з підписом: target N (якщо задано).
 
-    Дедлайн прибрано — модель сама визначає горизонт як 25% від
-    тривалості опитування (див. core.forecast.forecast_responses).
+    Горизонт прогнозу визначає сама модель — 25% від тривалості опитування
+    (див. core.forecast.forecast_responses).
 
     Графік малюється з `timeline.timestamps` (per-response), тоді як прогноз
     усе ще працює на denoised daily — це дві незалежні концерни.
@@ -44,7 +42,6 @@ def plot_timeline_with_forecast(
     Args:
         timeline: побудована TimelineSeries з повним списком timestamps.
         forecast: результат прогнозу або None.
-        target: цільова кількість відповідей або None.
         excluded_mask: bool-масив довжини len(timeline.timestamps); True
             означає "виключено з вікна прогнозу". None → усе включено.
     """
@@ -52,7 +49,6 @@ def plot_timeline_with_forecast(
 
     _add_fact_traces(fig, timeline, excluded_mask)
     _add_forecast_traces(fig, forecast)
-    _add_target_marker(fig, target)
 
     fig.update_layout(
         title="Динаміка надходження відповідей",
@@ -149,33 +145,4 @@ def _add_forecast_traces(fig: go.Figure, forecast: ForecastResult | None) -> Non
             name=f"Прогноз ({forecast.model})",
             line=dict(color=_INCLUDED_COLOR, width=2, dash="dash"),
         )
-    )
-
-
-def _add_target_marker(fig: go.Figure, target: int | None) -> None:
-    if target is None or target <= 0:
-        return
-    # Той самий патерн для горизонталі — заради консистентності і захисту
-    # від майбутніх Plotly-регресій (hline+annotation на числовій осі
-    # зараз працює, але краще не покладатись).
-    fig.add_shape(
-        type="line",
-        xref="paper",
-        yref="y",
-        x0=0,
-        x1=1,
-        y0=target,
-        y1=target,
-        line=dict(color="#2ca02c", width=2, dash="dot"),
-    )
-    fig.add_annotation(
-        x=1.0,
-        xref="paper",
-        y=target,
-        yref="y",
-        text=f"Мета: {target}",
-        showarrow=False,
-        xanchor="right",
-        yshift=10,
-        font=dict(color="#2ca02c"),
     )
