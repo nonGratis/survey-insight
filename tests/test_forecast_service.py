@@ -76,11 +76,12 @@ def test_target_changes_forecast():
     Використовуємо ненасичену лінійну траєкторію — там bounds кусаються
     сильніше, ніж на чітко-S-кривих, де всі моделі сходяться до одного K.
     """
-    # 8 точок з лінійним ростом — модель ще не "бачить" асимптоти
-    daily = [1, 1, 1, 1, 1, 1, 1, 1]
+    # Потрібно ≥ SMALL_SAMPLE_THRESHOLD точок (10), щоб селектор пробував
+    # усі три моделі — Logistic особливо чутливий до bounds на K.
+    daily = [1] * 12
     tl = _make_timeline(daily)
-    fc_small = forecast_responses(tl, target=10, random_seed=1)
-    fc_large = forecast_responses(tl, target=1000, random_seed=1)
+    fc_small = forecast_responses(tl, target=15, random_seed=1)
+    fc_large = forecast_responses(tl, target=1500, random_seed=1)
     assert (
         fc_small.final_estimate != fc_large.final_estimate or fc_small.final_ci != fc_large.final_ci
     )

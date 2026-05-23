@@ -144,6 +144,24 @@ DEFAULT_MODELS: tuple[SaturationModel, ...] = (
     AsymptoticExpModel(),
 )
 
+# Поріг "достатньо даних, щоб довіряти всім трьом моделям". Нижче нього
+# Logistic і Gompertz часто фітять випадковий шум (особливо чутливі до
+# розташування t0 на дуже короткому ряді), а AsymptoticExp залишається
+# стабільним: 3 параметри, монотонно зростає від c до a+c. Тому при малому N
+# обмежуємо набір лише ним.
+SMALL_SAMPLE_THRESHOLD = 10
+
+
+def models_for_n_points(n: int) -> tuple[SaturationModel, ...]:
+    """Tiered набір моделей залежно від кількості тренувальних точок.
+
+    - n < SMALL_SAMPLE_THRESHOLD: лише AsymptoticExp (найстабільніший на малому N).
+    - n >= SMALL_SAMPLE_THRESHOLD: усі три моделі через AICc-селектор.
+    """
+    if n < SMALL_SAMPLE_THRESHOLD:
+        return (AsymptoticExpModel(),)
+    return DEFAULT_MODELS
+
 
 def fit_model(
     model: SaturationModel,
