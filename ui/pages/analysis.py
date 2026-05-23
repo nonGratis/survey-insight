@@ -143,14 +143,13 @@ def _cached_forecast(
     n_responses: int,
     first_ts: datetime,
     last_ts: datetime,
-    target: int,
     start_idx: int,
     end_idx: int,
     _timestamps: list[datetime],
 ) -> tuple[ForecastResult | None, str | None]:
     """Кешований прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
 
-    Cache key: (form_id, n_responses, first_ts, last_ts, target, start_idx, end_idx).
+    Cache key: (form_id, n_responses, first_ts, last_ts, start_idx, end_idx).
     `_timestamps` з підкреслення — Streamlit пропускає його в hashing,
     передаємо як payload (вже відрізаний субсет).
 
@@ -162,7 +161,7 @@ def _cached_forecast(
     """
     timeline = build_timeline_from_timestamps(_timestamps)
     try:
-        return forecast_responses(timeline, target=target), None
+        return forecast_responses(timeline), None
     except ForecastError as exc:
         return None, str(exc)
 
@@ -217,12 +216,8 @@ with tab_overview:
     if timeline.cumulative.empty:
         st.info("Поки немає валідних timestamps у відповідях.")
     else:
-        # Target і вікно прогнозу — обидва впливають на forecast, тож читаємо
-        # ДО виклику, щоб увійшли в cache key. session_state може зберігати
-        # stale значення (форма оновилась), тому clamp'имо у [1, n_ts].
-        _target_key = f"analysis_target_{form_id}"
-        target = int(st.session_state.get(_target_key, 100))
-
+        # Вікно прогнозу — у cache key. session_state може зберігати stale
+        # значення (форма оновилась), тому clamp'имо у [1, n_ts].
         _window_key = f"analysis_window_{form_id}"
         n_ts = len(timestamps)
         default_window = (1, max(n_ts, 1))
@@ -236,14 +231,12 @@ with tab_overview:
         excluded_mask[end_idx:] = True
 
         # Прогноз — на 25% вперед від тривалості subset'у.
-        # Кеш інвалідується при зміні target або вікна.
         if subset_timestamps:
             forecast, forecast_error = _cached_forecast(
                 _form_id=form_id,
                 n_responses=len(timestamps),
                 first_ts=timestamps[0],
                 last_ts=timestamps[-1],
-                target=target,
                 start_idx=start_idx,
                 end_idx=end_idx,
                 _timestamps=subset_timestamps,
@@ -254,8 +247,8 @@ with tab_overview:
         else:
             forecast, forecast_error = None, None
 
-        # Рядок 1: BANs (current / forecast / target) — над усім.
-        ban_cols = st.columns(3)
+        # Рядок 1: BANs — "Зараз" і "Прогноз".
+        ban_cols = st.columns(2)
         current = int(timeline.cumulative.iloc[-1])
         ban_cols[0].metric("Зараз", current)
         if forecast is not None:
@@ -268,26 +261,11 @@ with tab_overview:
             )
         else:
             ban_cols[1].metric("Прогноз", "—")
-        ban_cols[2].metric("Мета", target)
 
-        # Рядок 2: target-control (повна ширина; refresh переїхав до селектору форм).
-        target = int(
-            st.number_input(
-                "Цільова кількість відповідей",
-                min_value=1,
-                value=target,
-                step=10,
-                key=_target_key,
-                label_visibility="collapsed",
-                placeholder="Цільова кількість",
-            )
-        )
-
-        # Рядок 3: графік (без deadline-вертикалі; target — горизонталь).
+        # Рядок 2: графік.
         fig = plot_timeline_with_forecast(
             timeline=timeline,
             forecast=forecast,
-            target=target,
             excluded_mask=excluded_mask,
         )
         st.plotly_chart(fig, width="stretch")
