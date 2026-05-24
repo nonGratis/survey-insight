@@ -38,6 +38,7 @@ def forecast_responses(
     horizon_fraction: float = DEFAULT_HORIZON_FRACTION,
     n_simulations: int = DEFAULT_N_SIMULATIONS,
     random_seed: int = DEFAULT_RANDOM_SEED,
+    horizon_until: pd.Timestamp | None = None,
 ) -> ForecastResult:
     """Спрогнозувати cumulative на ~`horizon_fraction` від тривалості опитування.
 
@@ -84,7 +85,16 @@ def forecast_responses(
 
     # Span може бути 0 (усі однакові) → захист.
     duration_days = max((last_ts - first_ts).total_seconds() / 86400.0, MIN_DURATION_DAYS)
-    horizon_days = max(int(np.ceil(duration_days * horizon_fraction)), MIN_HORIZON_DAYS)
+    if horizon_until is not None:
+        # Явний горизонт від caller'а (UI може передавати кінець full timeline
+        # + 25%, навіть коли модель навчається лише на subset).
+        until_ts = pd.Timestamp(horizon_until)
+        horizon_days = max(
+            int(np.ceil((until_ts - pd.Timestamp(last_ts)).total_seconds() / 86400.0)),
+            MIN_HORIZON_DAYS,
+        )
+    else:
+        horizon_days = max(int(np.ceil(duration_days * horizon_fraction)), MIN_HORIZON_DAYS)
 
     # Tiered model selection: малий N → лише AsymptoticExp (стабільний),
     # достатній N → усі три моделі через AICc.

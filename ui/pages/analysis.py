@@ -145,23 +145,25 @@ def _cached_forecast(
     last_ts: datetime,
     start_idx: int,
     end_idx: int,
+    horizon_until: datetime | None,
     _timestamps: list[datetime],
 ) -> tuple[ForecastResult | None, str | None]:
     """Кешований прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
 
-    Cache key: (form_id, n_responses, first_ts, last_ts, start_idx, end_idx).
+    Cache key: (form_id, n_responses, first_ts, last_ts, start_idx, end_idx,
+                horizon_until).
     `_timestamps` з підкреслення — Streamlit пропускає його в hashing,
     передаємо як payload (вже відрізаний субсет).
 
-    Результат повертається у subset-локальних координатах (cumulative
-    1..len(subset)). UI зсуває значення на `start_idx - 1`, щоб згрупувати
-    з global-нумерацією графіка.
+    horizon_until: explicit горизонт від UI (наприклад, кінець full timeline
+    + 25%), щоб trim'нутий префікс проектувався далеко вперед, а не лише
+    на 25% свого мікроскопічного span'у.
 
-    Returns (result, error_msg). На фейлі фіту result=None, error=повідомлення.
+    Результат — у subset-локальних координатах; UI зсуває на `start_idx-1`.
     """
     timeline = build_timeline_from_timestamps(_timestamps)
     try:
-        return forecast_responses(timeline), None
+        return forecast_responses(timeline, horizon_until=horizon_until), None
     except ForecastError as exc:
         return None, str(exc)
 
@@ -230,7 +232,16 @@ with tab_overview:
         excluded_mask[: start_idx - 1] = True
         excluded_mask[end_idx:] = True
 
-        # Прогноз — на 25% вперед від тривалості subset'у.
+        # Горизонт прогнозу: завжди від ОСТАННЬОГО timestamp'у повного
+        # timeline + 25% span'у. Це гарантує, що навіть trim'нутий префікс
+        # проектує далеко вперед — користувач бачить, чи модель з 16 точок
+        # коректно "вгадує" реальні 47 і трошки далі.
+        from datetime import timedelta as _td
+
+        full_span_days = (timestamps[-1] - timestamps[0]).total_seconds() / 86400.0
+        extra_days = max(int(full_span_days * 0.25), 1)
+        horizon_until = timestamps[-1] + _td(days=extra_days)
+
         if subset_timestamps:
             forecast, forecast_error = _cached_forecast(
                 _form_id=form_id,
@@ -239,6 +250,7 @@ with tab_overview:
                 last_ts=timestamps[-1],
                 start_idx=start_idx,
                 end_idx=end_idx,
+                horizon_until=horizon_until,
                 _timestamps=subset_timestamps,
             )
             # Subset → global coordinate shift.
