@@ -93,9 +93,7 @@ def nhpp_prediction_interval(
     lambda_cap = max(reality_cap / max(horizon_days, 1.0), 5.0)
 
     # Bounded MVN sampling: відкидаємо samples поза model.bounds().
-    thetas = _sample_bounded_params(
-        fitted, theta_hat, n_sims, rng, last_observed
-    )
+    thetas = _sample_bounded_params(fitted, theta_hat, n_sims, rng, last_observed)
 
     sim_cum = np.empty((n_sims, n_t), dtype=np.int64)
     for k in range(n_sims):
