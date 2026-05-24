@@ -2,20 +2,26 @@
  * Master Collector — Google Apps Script
  *
  * Збирає метадані Google Forms і timestamp'и відповідей у master-spreadsheet.
- * Архітектура: IDEMPOTENT bulk rewrite — кожен run повністю перезаписує
- * Timestamps і Forms аркуші. Жодних cursor'ів у scriptProperties, жодних
- * дублікатів за побудовою.
+ * Архітектура:
+ *   - IDEMPOTENT per-form: кожна форма перезаписується повністю (видаляємо
+ *     старі рядки за form_id, додаємо свіжі). Дублікати неможливі.
+ *   - RESUMABLE: один run обробляє стільки форм, скільки встигне за 5 хв
+ *     (з ~1 хв запасу до 6-хв квоти Apps Script). Cursor зберігається у
+ *     scriptProperties; повторні запуски продовжують з місця зупинки.
+ *   - BATCHED SHEET I/O: один read + один write за пакет, не per-form.
  *
  * Деплоймент:
  *   1. Apps Script Editor → новий проект з цим файлом.
- *   2. Project Settings → Script Properties → додати "MASTER_SHEET_ID"
- *      зі значенням ID master-spreadsheet'у.
+ *   2. Project Settings → Script Properties → "MASTER_SHEET_ID" зі значенням ID
+ *      master-spreadsheet'у.
  *   3. Services → enable "Drive API" (v3).
  *   4. Run `setupTrigger()` один раз — створить time-driven trigger на 4h.
+ *   5. Для першого backfill'у: Run `collectAll()` повторно поки log не покаже
+ *      "Pass complete". Кожен run опрацьовує батч і пише прогрес.
  *
  * Webhook (опційно):
  *   Deploy → New deployment → Web app → execute as self, anyone can access.
- *   POST /exec?formId=<id> — оновить лише цю форму (idempotent per-form).
+ *   POST ?formId=<id> — оновить лише цю форму (idempotent per-form).
  */
 
 const CONFIG = {
@@ -23,6 +29,9 @@ const CONFIG = {
   MASTER_SHEET_ID: PropertiesService.getScriptProperties().getProperty("MASTER_SHEET_ID"),
   DRIVE_QUERY: 'mimeType="application/vnd.google-apps.form"',
   TIMESTAMP_FORMAT: "yyyy-MM-dd HH:mm:ss",
+  // 5 хв з 6-хв квоти; останню хвилину тримаємо для commit'у sheet'ів і
+  // запису state у scriptProperties (вони не миттєві на великих об'ємах).
+  BATCH_TIME_LIMIT_MS: 5 * 60 * 1000,
   SHEETS: {
     TIMESTAMPS: {
       name: "Timestamps",
@@ -45,42 +54,85 @@ const CONFIG = {
   },
 };
 
+const STATE_KEYS = {
+  FILE_LIST: "collectAll_fileList",
+  CURSOR: "collectAll_cursor",
+};
+
 /* =========================================================================
  * Public entry points
  * ========================================================================= */
 
 /**
- * Bulk collection: повний rewrite Timestamps + Forms для всіх accessible форм.
- * Викликається трігером (кожні TRIGGER_HOURS) або вручну.
+ * Resumable bulk collection: обробляє стільки форм, скільки встигне за
+ * BATCH_TIME_LIMIT_MS. Cursor + cached file list persistяться у
+ * scriptProperties між run'ами.
+ *
+ * Викликати поки log не покаже "Pass complete" — приблизно 2-3 рази для
+ * 179 форм залежно від розміру.
  */
 function collectAll() {
+  const startTime = Date.now();
   const ss = SpreadsheetApp.openById(CONFIG.MASTER_SHEET_ID);
   const tsSheet = ensureSheet(ss, CONFIG.SHEETS.TIMESTAMPS);
   const formsSheet = ensureSheet(ss, CONFIG.SHEETS.FORMS);
   const errSheet = ensureSheet(ss, CONFIG.SHEETS.ERRORS);
+  const props = PropertiesService.getScriptProperties();
 
-  const allTimestamps = [];
-  const allMetadata = [];
-  const errors = [];
-
-  const files = listAllForms();
-  for (const file of files) {
-    try {
-      const form = FormApp.openById(file.id);
-      allMetadata.push(buildFormMetadata(file, form));
-      const tsRows = buildTimestampRows(file.id, form);
-      for (const row of tsRows) allTimestamps.push(row);
-    } catch (e) {
-      errors.push([file.id, e.toString(), formatNow()]);
-    }
+  // Resume cached file list across runs; коли пас завершено — старт нового.
+  let fileList = readJsonProp(props, STATE_KEYS.FILE_LIST);
+  let cursor = parseInt(props.getProperty(STATE_KEYS.CURSOR) || "0", 10);
+  if (!fileList) {
+    fileList = listAllForms();
+    props.setProperty(STATE_KEYS.FILE_LIST, JSON.stringify(fileList));
+    cursor = 0;
+    props.setProperty(STATE_KEYS.CURSOR, "0");
+    Logger.log(`New pass started: ${fileList.length} forms.`);
   }
 
-  // Idempotent rewrites: повна заміна вмісту нижче header'а.
-  rewriteSheet(formsSheet, allMetadata);
-  rewriteSheet(tsSheet, allTimestamps);
+  const newTimestamps = [];
+  const newMetadata = [];
+  const formIdsProcessed = [];
+  const errors = [];
 
-  // Errors — append-only (хочемо історію збоїв).
+  while (cursor < fileList.length) {
+    if (Date.now() - startTime > CONFIG.BATCH_TIME_LIMIT_MS) break;
+
+    const entry = fileList[cursor];
+    try {
+      // Drive.Files.list повертає plain JSON без методів DriveApp.File,
+      // тому беремо file окремим викликом.
+      const file = DriveApp.getFileById(entry.id);
+      const form = FormApp.openById(entry.id);
+      newMetadata.push(buildFormMetadata(file, form));
+      const tsRows = buildTimestampRows(entry.id, form);
+      for (const r of tsRows) newTimestamps.push(r);
+      formIdsProcessed.push(entry.id);
+    } catch (e) {
+      errors.push([entry.id, e.toString(), formatNow()]);
+    }
+    cursor++;
+  }
+
+  // Atomic batch commit: один read + один write на Timestamps, незалежно
+  // від кількості форм у пакеті.
+  if (formIdsProcessed.length > 0) {
+    batchReplaceTimestamps(tsSheet, formIdsProcessed, newTimestamps);
+  }
+  for (const meta of newMetadata) upsertFormRow(formsSheet, meta);
   if (errors.length > 0) appendRows(errSheet, errors);
+
+  if (cursor >= fileList.length) {
+    props.deleteProperty(STATE_KEYS.FILE_LIST);
+    props.deleteProperty(STATE_KEYS.CURSOR);
+    Logger.log(`Pass complete: ${fileList.length} forms processed.`);
+  } else {
+    props.setProperty(STATE_KEYS.CURSOR, cursor.toString());
+    const pct = ((cursor / fileList.length) * 100).toFixed(1);
+    Logger.log(
+      `Partial pass: ${cursor}/${fileList.length} (${pct}%). Re-run collectAll to continue.`
+    );
+  }
 }
 
 /**
@@ -97,15 +149,25 @@ function refreshForm(formId) {
   try {
     const file = DriveApp.getFileById(formId);
     const form = FormApp.openById(formId);
-
     upsertFormRow(formsSheet, buildFormMetadata(file, form));
-    replaceTimestampsFor(tsSheet, formId, buildTimestampRows(formId, form));
-
+    batchReplaceTimestamps(tsSheet, [formId], buildTimestampRows(formId, form));
     return { success: true, formId: formId };
   } catch (e) {
     appendRows(errSheet, [[formId, e.toString(), formatNow()]]);
     return { success: false, formId: formId, error: e.toString() };
   }
+}
+
+/**
+ * Manual reset: скинути cursor + кеш file list, щоб наступний collectAll
+ * почав свіжий повний пас. Викликати, якщо щось пішло не так і хочеш
+ * почати з нуля.
+ */
+function resetCollectionState() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty(STATE_KEYS.FILE_LIST);
+  props.deleteProperty(STATE_KEYS.CURSOR);
+  Logger.log("Collection state reset. Next collectAll() starts fresh pass.");
 }
 
 /* =========================================================================
@@ -120,7 +182,7 @@ function doPost(e) {
   return jsonResponse(refreshForm(params.formId));
 }
 
-function doGet(e) {
+function doGet(_e) {
   return jsonResponse({
     service: "master-collector",
     routes: ["POST ?formId=<id>"],
@@ -131,6 +193,10 @@ function doGet(e) {
  * Form processing
  * ========================================================================= */
 
+/**
+ * @param {DriveApp.File} file - повноцінний DriveApp.File (НЕ Drive.Files.list result).
+ * @param {FormApp.Form} form
+ */
 function buildFormMetadata(file, form) {
   const tz = Session.getScriptTimeZone();
   const responses = form.getResponses();
@@ -143,6 +209,13 @@ function buildFormMetadata(file, form) {
     if (destSheetId) sheetLink = `https://docs.google.com/spreadsheets/d/${destSheetId}/edit`;
   } catch (_) { /* form has no destination */ }
 
+  // getOwner() може повернути null для Shared Drive файлів.
+  let ownerEmail = "";
+  try {
+    const owner = file.getOwner();
+    if (owner) ownerEmail = owner.getEmail();
+  } catch (_) { /* no permission to owner */ }
+
   const sections = form.getItems(FormApp.ItemType.PAGE_BREAK).length;
   const accepting = form.isAcceptingResponses();
   const formId = file.getId();
@@ -152,7 +225,7 @@ function buildFormMetadata(file, form) {
     `https://docs.google.com/forms/d/${formId}/edit`,
     file.getName(),
     form.getTitle(),
-    file.getOwner() ? file.getOwner().getEmail() : "",
+    ownerEmail,
     fmt(file.getDateCreated()),
     n > 0 ? fmt(responses[0].getTimestamp()) : "",
     n > 0 ? fmt(responses[n - 1].getTimestamp()) : "",
@@ -182,7 +255,7 @@ function buildTimestampRows(formId, form) {
 }
 
 /* =========================================================================
- * Sheet helpers (idempotent operations)
+ * Sheet helpers
  * ========================================================================= */
 
 function ensureSheet(ss, spec) {
@@ -197,7 +270,6 @@ function ensureSheet(ss, spec) {
 
 /**
  * Повна заміна вмісту нижче header'а на нові рядки.
- * Idempotent: повторний виклик з тими самими даними дає той самий sheet.
  */
 function rewriteSheet(sheet, rows) {
   const lastRow = sheet.getLastRow();
@@ -219,26 +291,34 @@ function appendRows(sheet, rows) {
  * Upsert одного рядка у Forms за Form ID (стовпець 1).
  */
 function upsertFormRow(sheet, row) {
-  const data = sheet.getRange(2, 1, Math.max(sheet.getLastRow() - 1, 0), 1).getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][0] === row[0]) {
-      sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
-      return;
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i][0] === row[0]) {
+        sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
+        return;
+      }
     }
   }
   appendRows(sheet, [row]);
 }
 
 /**
- * Видалити всі Timestamp-рядки даної форми і дописати нові.
- * Робиться через read → filter → rewrite, щоб уникнути deleteRow у циклі.
+ * Batch-replace: видалити всі рядки з formId ∈ formIds і дописати newRows.
+ * Один read + один write незалежно від кількості форм у пакеті.
  */
-function replaceTimestampsFor(sheet, formId, newRows) {
+function batchReplaceTimestamps(sheet, formIds, newRows) {
+  const idSet = {};
+  for (const id of formIds) idSet[id] = true;
+
   const lastRow = sheet.getLastRow();
   let kept = [];
   if (lastRow > 1) {
     const all = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
-    kept = all.filter((r) => r[0] !== formId);
+    for (const r of all) {
+      if (!idSet[r[0]]) kept.push(r);
+    }
   }
   rewriteSheet(sheet, kept.concat(newRows));
 }
@@ -281,18 +361,42 @@ function formatNow() {
   );
 }
 
+function readJsonProp(props, key) {
+  const raw = props.getProperty(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
 /* =========================================================================
  * Trigger setup (run once manually)
  * ========================================================================= */
 
 function setupTrigger() {
-  // Видалити будь-які старі тригери на collectAll/collectFormTimestamps/Batch.
-  const obsolete = new Set(["collectAll", "collectFormTimestamps", "collectFormTimestampsBatch"]);
+  // Видалити обсолетні handler-імена від попередніх версій скрипта.
+  const obsolete = {
+    collectFormTimestamps: 1,
+    collectFormTimestampsBatch: 1,
+  };
+  let removed = 0;
   for (const t of ScriptApp.getProjectTriggers()) {
-    if (obsolete.has(t.getHandlerFunction())) ScriptApp.deleteTrigger(t);
+    if (obsolete[t.getHandlerFunction()]) {
+      ScriptApp.deleteTrigger(t);
+      removed++;
+    }
   }
-  ScriptApp.newTrigger("collectAll")
-    .timeBased()
-    .everyHours(CONFIG.TRIGGER_HOURS)
-    .create();
+  // Не дублюємо collectAll, якщо вже існує clock-trigger.
+  const hasCollectAll = ScriptApp.getProjectTriggers().some(
+    (t) => t.getHandlerFunction() === "collectAll"
+  );
+  if (!hasCollectAll) {
+    ScriptApp.newTrigger("collectAll")
+      .timeBased()
+      .everyHours(CONFIG.TRIGGER_HOURS)
+      .create();
+  }
+  Logger.log(`Trigger setup: removed ${removed} obsolete; collectAll periodic active.`);
 }
