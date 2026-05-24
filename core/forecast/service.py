@@ -105,8 +105,12 @@ def forecast_responses(
         fitted, t_future, last_observed=last_observed, n_sims=n_simulations, rng=rng
     )
 
-    # Точкова оцінка — model.predict з floor'ом на last_observed.
+    # Точкова оцінка — model.predict з floor'ом на last_observed і clamp'ом
+    # до [ci_lower, ci_upper], щоб final_estimate завжди консистентний з PI
+    # (без clamp'у деформент-крива може опинитись поза CI на коротких префіксах
+    # через параметричну uncertainty у симуляціях).
     future_cum_arr = np.maximum.accumulate(np.maximum(model_mean, float(last_observed)))
+    future_cum_arr = np.clip(future_cum_arr, ci_lower_arr, ci_upper_arr)
 
     future_cum = pd.Series(future_cum_arr, index=future_dates, name="future_cum")
     ci_lower = pd.Series(ci_lower_arr, index=future_dates, name="ci_lower")
