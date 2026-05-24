@@ -311,8 +311,9 @@ def _figure_auc_vs_t50(features: list[FormFeatures]) -> go.Figure:
         title="t50 vs auc_excess (виявляє форму кривої)",
     )
     fig.add_hline(y=0, line_dash="dot", line_color="gray")
-    fig.add_hline(y=-0.20, line_dash="dash", line_color="red",
-                  annotation_text="late_burst threshold")
+    fig.add_hline(
+        y=-0.20, line_dash="dash", line_color="red", annotation_text="late_burst threshold"
+    )
     return fig
 
 
@@ -320,9 +321,11 @@ def _figure_r2_comparison(features: list[FormFeatures]) -> go.Figure:
     df = pd.DataFrame([f.__dict__ for f in features])
     df = df[df["shape"] != "insufficient"]
     fig = go.Figure()
-    for col, name in [("r2_linear", "linear"),
-                       ("r2_asymp_exp", "asymp_exp"),
-                       ("r2_logistic", "logistic")]:
+    for col, name in [
+        ("r2_linear", "linear"),
+        ("r2_asymp_exp", "asymp_exp"),
+        ("r2_logistic", "logistic"),
+    ]:
         fig.add_trace(go.Box(y=df[col].clip(lower=0), name=name, boxmean=True))
     fig.update_layout(
         title="R² distribution per parametric family (clipped at 0)",
@@ -393,8 +396,7 @@ def _render_markdown(
 ) -> str:
     summary_table = _md_table_summary(features)
     n_dist = ", ".join(
-        f"{shape}: {sum(1 for f in features if f.shape == shape)}"
-        for shape in _SHAPE_ORDER
+        f"{shape}: {sum(1 for f in features if f.shape == shape)}" for shape in _SHAPE_ORDER
     )
 
     top10 = sorted(features, key=lambda f: f.n, reverse=True)[:10]

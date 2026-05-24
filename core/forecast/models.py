@@ -43,16 +43,40 @@ class SaturationModel(Protocol):
     ) -> tuple[tuple[float, ...], tuple[float, ...]]: ...
 
 
+K_MIN_RELAXATION = 1.30
+# Bias-correction factor для нижньої межі K. Емпірично підібрано на
+# 288 backtest-точках (96 форм × 3 cutoff'и) — див.
+# research/reports/03_bias_investigation.md + 03b_relaxation_sweep.md.
+#
+# З K_min = last модель форсована до плато на поточному факті, що дає
+# систематичний bias -15% (модель занижує майбутнє cumulative). Sweep
+# по {1.0, 1.1, 1.2, 1.3, 1.5, 1.75, 2.0} показав:
+#
+#   factor=1.0:   bias=-15.0%  cov=47.6%  MAPE=25.6%  (baseline)
+#   factor=1.3:   bias=-11.6%  cov=50.0%  MAPE=24.6%  ← обраний sweet spot
+#   factor=2.0:   bias=-10.7%  cov=54.9%  MAPE=25.0%
+#
+# 1.30 — найкращий компроміс bias↓ і MAPE↓ без overshoot до позитивного
+# bias. Залишковий bias має інші джерела (вибір моделі, t_future grid)
+# і потребує окремої investigation.
+
+
 def _capacity_bounds(y: np.ndarray, target: int | None) -> tuple[float, float]:
     """K_min, K_max — м'який prior на стелю (асимптоту) кумулятивної кривої.
 
-    Якщо `target` задано — обмежуємо [0.3·target, 3·target] (з floor на
-    останній факт). Без target — широкі дефолти [last, 10·last].
+    K_min = last·1.30 (а не просто last) — говорить моделі "будь готова,
+    що буде ще принаймні 30% росту понад те, що бачимо". Це дозволяє
+    curve_fit'у знайти кращу інтерпретацію траєкторії на префіксах,
+    які ще не досягли плато.
+
+    Якщо `target` задано — bound [0.3·target, 3·target] з floor'ом
+    на last·1.30. Без target — [last·1.30, 10·last].
     """
     last = float(y[-1])
+    last_relaxed = last * K_MIN_RELAXATION
     if target is not None and target > 0:
-        return max(last, 0.3 * target), max(last * 1.05, 3.0 * target)
-    return max(last, 1.0), max(last * 10.0, 10.0)
+        return max(last_relaxed, 0.3 * target), max(last * 1.05, 3.0 * target)
+    return max(last_relaxed, 1.0), max(last * 10.0, 10.0)
 
 
 class LogisticModel:
