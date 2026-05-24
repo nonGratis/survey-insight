@@ -223,7 +223,7 @@ __marimo__/
 config/credentials.json
 config/*.json
 config/token.json
-data/raw/
+data/
 *.xlsx
 .vscode/
 .idea/
@@ -231,4 +231,5 @@ data/raw/
 # research/ — сирі дані з PII (form_id чужих форм) у git не комітимо
 research/data/
 research/reports/figures/
+research/reports/*.html
 *.ipynb_checkpoints/
