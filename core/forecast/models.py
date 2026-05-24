@@ -66,7 +66,8 @@ class LogisticModel:
     n_params = 3
 
     def predict(self, t: np.ndarray, K: float, r: float, t0: float) -> np.ndarray:  # noqa: N803
-        return K / (1.0 + np.exp(-r * (t - t0)))
+        # Clip аргумент exp щоб запобігти overflow при extreme param-samples з NHPP.
+        return K / (1.0 + np.exp(np.clip(-r * (t - t0), -500.0, 500.0)))
 
     def initial_guess(
         self, t: np.ndarray, y: np.ndarray, target: int | None
@@ -94,7 +95,9 @@ class GompertzModel:
     n_params = 3
 
     def predict(self, t: np.ndarray, K: float, r: float, t0: float) -> np.ndarray:  # noqa: N803
-        return K * np.exp(-np.exp(-r * (t - t0)))
+        # Подвійний exp може overflow'ити; clip обох рівнів.
+        inner = np.clip(-r * (t - t0), -500.0, 500.0)
+        return K * np.exp(-np.clip(np.exp(inner), 0.0, 1e150))
 
     def initial_guess(
         self, t: np.ndarray, y: np.ndarray, target: int | None
@@ -168,12 +171,19 @@ def fit_model(
     t: np.ndarray,
     y: np.ndarray,
     target: int | None,
-) -> tuple[float, ...]:
-    """Знайти параметри моделі curve_fit'ом. ForecastError при non-convergence."""
+) -> tuple[tuple[float, ...], np.ndarray | None]:
+    """Знайти параметри моделі curve_fit'ом і повернути (params, pcov).
+
+    pcov — параметрична коваріаційна матриця. None, якщо curve_fit не зміг
+    її оцінити (трапляється при погано-зумовлених фітах: повертає матрицю
+    з inf-діагоналлю). NHPP-CI використовує pcov для parameter sampling.
+
+    Raises ForecastError при non-convergence.
+    """
     p0 = model.initial_guess(t, y, target)
     bounds = model.bounds(y, target)
     try:
-        popt, _ = curve_fit(
+        popt, pcov = curve_fit(
             model.predict,
             t,
             y,
@@ -183,4 +193,8 @@ def fit_model(
         )
     except (RuntimeError, ValueError) as exc:
         raise ForecastError(f"{model.name} не зійшовся: {exc}") from exc
-    return tuple(float(p) for p in popt)
+    params = tuple(float(p) for p in popt)
+    # pcov може містити inf/nan коли covariance не оцінилась — повертаємо None.
+    if pcov is None or not np.all(np.isfinite(pcov)):
+        return params, None
+    return params, pcov

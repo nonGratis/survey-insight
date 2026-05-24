@@ -74,21 +74,24 @@ def test_initial_guess_within_bounds(model_cls):
 def test_logistic_recovers_true_capacity(logistic_data):
     t, y = logistic_data
     model = LogisticModel()
-    k_est, _r, _t0 = fit_model(model, t, y, target=None)
+    params, _pcov = fit_model(model, t, y, target=None)
+    k_est, _r, _t0 = params
     assert 80.0 <= k_est <= 130.0, f"K={k_est} too far from true 100"
 
 
 def test_gompertz_recovers_true_capacity(gompertz_data):
     t, y = gompertz_data
     model = GompertzModel()
-    k_est, _r, _t0 = fit_model(model, t, y, target=None)
+    params, _pcov = fit_model(model, t, y, target=None)
+    k_est, _r, _t0 = params
     assert 70.0 <= k_est <= 95.0
 
 
 def test_asymptotic_exp_recovers_asymptote(asympt_exp_data):
     t, y = asympt_exp_data
     model = AsymptoticExpModel()
-    a, _b, c = fit_model(model, t, y, target=None)
+    params, _pcov = fit_model(model, t, y, target=None)
+    a, _b, c = params
     asymptote = a + c
     assert 75.0 <= asymptote <= 95.0
 
@@ -98,9 +101,10 @@ def test_target_constrains_capacity():
     t = np.arange(10, dtype=float)
     y = np.linspace(2.0, 30.0, 10)
     model = LogisticModel()
-    _k_no_target, *_ = fit_model(model, t, y, target=None)
-    k_with_target, *_ = fit_model(model, t, y, target=50)
+    (k_no_target, *_), _ = fit_model(model, t, y, target=None)
+    (k_with_target, *_), _ = fit_model(model, t, y, target=50)
     assert k_with_target <= 3.0 * 50 + 1e-6
+    _ = k_no_target  # not asserted, just confirms fit didn't fail
 
 
 def test_fit_raises_on_degenerate_input():
