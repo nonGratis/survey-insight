@@ -48,7 +48,8 @@ def plot_timeline_with_forecast(
     fig = go.Figure()
 
     _add_fact_traces(fig, timeline, excluded_mask)
-    _add_forecast_traces(fig, forecast)
+    boundary = _compute_forecast_boundary(timeline, excluded_mask)
+    _add_forecast_traces(fig, forecast, boundary)
 
     fig.update_layout(
         title="Динаміка надходження відповідей",
@@ -121,14 +122,54 @@ def _add_fact_traces(
         )
 
 
-def _add_forecast_traces(fig: go.Figure, forecast: ForecastResult | None) -> None:
+def _compute_forecast_boundary(
+    timeline: TimelineSeries, excluded_mask: np.ndarray | None
+) -> tuple | None:
+    """Останній факт-point, від якого має «стартувати» forecast-крива.
+
+    Без mask — останній timestamp і його глобальна y-координата (= N).
+    З mask — останній *включений* timestamp і його глобальний індекс.
+    Потрібно, щоб прогноз візуально продовжував факт, а не висів окремо.
+    """
+    if timeline.timestamps.empty:
+        return None
+    if excluded_mask is None or not bool(np.asarray(excluded_mask).any()):
+        return timeline.timestamps.iloc[-1], len(timeline.timestamps)
+    mask = np.asarray(excluded_mask, dtype=bool)
+    included_idx = np.where(~mask)[0]
+    if len(included_idx) == 0:
+        return None
+    last_inc = int(included_idx[-1])
+    return timeline.timestamps.iloc[last_inc], last_inc + 1
+
+
+def _add_forecast_traces(
+    fig: go.Figure,
+    forecast: ForecastResult | None,
+    boundary: tuple | None,
+) -> None:
     if forecast is None or forecast.future_cum.empty:
         return
+
+    # Приплюсовуємо boundary-point (останній факт): дає візуальну неперервність
+    # між фактом і прогнозом, і гарантує ≥ 2 точки навіть для horizon=1
+    # (інакше mode="lines" нічого не малює, CI-polygon degenerate).
+    future_dates = list(forecast.future_dates)
+    future_cum = list(forecast.future_cum.values)
+    ci_lower = list(forecast.ci_lower.values)
+    ci_upper = list(forecast.ci_upper.values)
+    if boundary is not None:
+        b_ts, b_y = boundary
+        future_dates = [b_ts] + future_dates
+        future_cum = [float(b_y)] + future_cum
+        ci_lower = [float(b_y)] + ci_lower
+        ci_upper = [float(b_y)] + ci_upper
+
     # CI band — додаємо першим, щоб лінія прогнозу була зверху.
     fig.add_trace(
         go.Scatter(
-            x=list(forecast.future_dates) + list(forecast.future_dates[::-1]),
-            y=list(forecast.ci_upper.values) + list(forecast.ci_lower.values[::-1]),
+            x=future_dates + future_dates[::-1],
+            y=ci_upper + ci_lower[::-1],
             fill="toself",
             fillcolor="rgba(31, 119, 180, 0.15)",
             line=dict(color="rgba(0,0,0,0)"),
@@ -139,10 +180,11 @@ def _add_forecast_traces(fig: go.Figure, forecast: ForecastResult | None) -> Non
     )
     fig.add_trace(
         go.Scatter(
-            x=forecast.future_dates,
-            y=forecast.future_cum.values,
-            mode="lines",
+            x=future_dates,
+            y=future_cum,
+            mode="lines+markers",  # markers — щоб single-point horizon було видно
             name=f"Прогноз ({forecast.model})",
             line=dict(color=_INCLUDED_COLOR, width=2, dash="dash"),
+            marker=dict(size=6, symbol="diamond-open"),
         )
     )
