@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 if TYPE_CHECKING:
@@ -25,6 +26,9 @@ class FittedModel:
         aicc: AICc на тренувальних даних (менше — краще).
         rmse: RMSE на тренувальних даних.
         r_squared: R² на тренувальних даних.
+        pcov: параметрична коваріаційна матриця з curve_fit (n_params×n_params).
+            NHPP використовує її для пробрасування parameter uncertainty
+            у CI. None → fallback на point-estimate (без param-noise).
     """
 
     model: SaturationModel
@@ -32,6 +36,7 @@ class FittedModel:
     aicc: float
     rmse: float
     r_squared: float
+    pcov: np.ndarray | None = field(default=None)
 
 
 @dataclass(frozen=True)

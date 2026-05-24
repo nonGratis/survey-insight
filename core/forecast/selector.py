@@ -47,7 +47,7 @@ def select_best_model(
     failures: list[tuple[str, str]] = []
     for model in models:
         try:
-            params = fit_model(model, t, y, target)
+            params, pcov = fit_model(model, t, y, target)
         except ForecastError as exc:
             failures.append((model.name, str(exc)))
             continue
@@ -59,6 +59,7 @@ def select_best_model(
                 aicc=aicc(y, y_fitted, model.n_params),
                 rmse=rmse(y, y_fitted),
                 r_squared=r_squared(y, y_fitted),
+                pcov=pcov,
             )
         )
 
