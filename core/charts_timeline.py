@@ -11,45 +11,43 @@ from __future__ import annotations
 import numpy as np
 import plotly.graph_objects as go
 
+from core.detection import Changepoint
 from core.forecast import ForecastResult
 from core.timeline import TimelineSeries
 
 _INCLUDED_COLOR = "#1f77b4"
 _EXCLUDED_COLOR = "rgba(150, 150, 150, 0.55)"
+_CHANGEPOINT_COLOR = "#ff7f0e"  # помаранчевий — хвилі агітації
 
 
 def plot_timeline_with_forecast(
     timeline: TimelineSeries,
     forecast: ForecastResult | None,
     excluded_mask: np.ndarray | None = None,
+    changepoints: list[Changepoint] | None = None,
 ) -> go.Figure:
-    """Скомпонувати чарт кумулятиву + прогнозу.
+    """Скомпонувати чарт кумулятиву + прогнозу + хвиль агітації.
 
     Лейаут:
-    - Step-крива з маркерами: кожна відповідь — окрема точка, y стрибає +1
-      у момент її timestamp'у (shape="hv" — горизонталь, потім вертикаль).
-    - Якщо передано `excluded_mask` — точки з True малюються сірими
-      напівпрозорими (виключені з фіту прогнозу), інші — синіми.
+    - Step-крива з маркерами: кожна відповідь — окрема точка.
+    - Якщо `excluded_mask` — точки з True сірі (виключені з фіту).
     - Пунктирна синя лінія: прогнозний future_cum (якщо forecast).
-    - Затемнена зона: 95% prediction interval (ci_lower..ci_upper).
-
-    Горизонт прогнозу визначає сама модель — 25% від тривалості опитування
-    (див. core.forecast.forecast_responses).
-
-    Графік малюється з `timeline.timestamps` (per-response), тоді як прогноз
-    усе ще працює на denoised daily — це дві незалежні концерни.
+    - Затемнена зона: 95% prediction interval.
+    - Помаранчеві вертикальні dashed-лінії: виявлені CP (хвилі агітації).
 
     Args:
-        timeline: побудована TimelineSeries з повним списком timestamps.
+        timeline: повний timeline з усіма timestamps.
         forecast: результат прогнозу або None.
-        excluded_mask: bool-масив довжини len(timeline.timestamps); True
-            означає "виключено з вікна прогнозу". None → усе включено.
+        excluded_mask: bool-масив довжини N; True → виключено з фіту.
+        changepoints: список виявлених CP для візуалізації. None або
+            пустий → не малюємо маркери.
     """
     fig = go.Figure()
 
     _add_fact_traces(fig, timeline, excluded_mask)
     boundary = _compute_forecast_boundary(timeline, excluded_mask)
     _add_forecast_traces(fig, forecast, boundary)
+    _add_changepoint_markers(fig, changepoints)
 
     fig.update_layout(
         title="Динаміка надходження відповідей",
@@ -187,4 +185,36 @@ def _add_forecast_traces(
             line=dict(color=_INCLUDED_COLOR, width=2, dash="dash"),
             marker=dict(size=6, symbol="diamond-open"),
         )
+    )
+
+
+def _add_changepoint_markers(fig: go.Figure, changepoints: list[Changepoint] | None) -> None:
+    """Вертикальні dashed-лінії на timestamp'ах виявлених хвиль агітації.
+
+    Малюємо як shapes (на paper-y-axis), не як scatter — щоб не з'являлись
+    у legend і не "ламались" hovermode="x unified".
+    """
+    if not changepoints:
+        return
+    for cp in changepoints:
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=cp.timestamp,
+            x1=cp.timestamp,
+            y0=0,
+            y1=1,
+            line=dict(color=_CHANGEPOINT_COLOR, width=1, dash="dash"),
+        )
+    # Один annotation на ВСІ маркери — щоб не дублювати legend-noise.
+    fig.add_annotation(
+        x=changepoints[-1].timestamp,
+        y=1.02,
+        xref="x",
+        yref="paper",
+        text=f"🔶 хвиль виявлено: {len(changepoints)}",
+        showarrow=False,
+        font=dict(color=_CHANGEPOINT_COLOR, size=10),
+        xanchor="right",
     )
