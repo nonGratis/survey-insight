@@ -19,7 +19,8 @@ import streamlit as st
 
 from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
-from core.forecast import ForecastError, ForecastResult, forecast_responses
+from core.detection import Changepoint
+from core.forecast import ForecastError, ForecastResult, forecast_with_segmentation
 from core.forms_api import (
     FormsApiError,
     get_form_structure,
@@ -147,25 +148,22 @@ def _cached_forecast(
     end_idx: int,
     horizon_until: datetime | None,
     _timestamps: list[datetime],
-) -> tuple[ForecastResult | None, str | None]:
-    """Кешований прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
+) -> tuple[ForecastResult | None, list[Changepoint], str | None]:
+    """Кешований CP-aware прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
 
     Cache key: (form_id, n_responses, first_ts, last_ts, start_idx, end_idx,
                 horizon_until).
-    `_timestamps` з підкреслення — Streamlit пропускає його в hashing,
-    передаємо як payload (вже відрізаний субсет).
 
-    horizon_until: explicit горизонт від UI (наприклад, кінець full timeline
-    + 25%), щоб trim'нутий префікс проектувався далеко вперед, а не лише
-    на 25% свого мікроскопічного span'у.
-
-    Результат — у subset-локальних координатах; UI зсуває на `start_idx-1`.
+    Повертає (forecast, changepoints, error_msg). Список CP завжди
+    валідний (може бути порожній) — для рендеру маркерів на графіку
+    навіть коли модель робила fallback на повний timeline.
     """
     timeline = build_timeline_from_timestamps(_timestamps)
     try:
-        return forecast_responses(timeline, horizon_until=horizon_until), None
+        fc, cps = forecast_with_segmentation(timeline, horizon_until=horizon_until)
+        return fc, cps, None
     except ForecastError as exc:
-        return None, str(exc)
+        return None, [], str(exc)
 
 
 def _shift_forecast(forecast: ForecastResult, offset: int) -> ForecastResult:
@@ -243,7 +241,7 @@ with tab_overview:
         horizon_until = timestamps[-1] + _td(days=extra_days)
 
         if subset_timestamps:
-            forecast, forecast_error = _cached_forecast(
+            forecast, changepoints, forecast_error = _cached_forecast(
                 _form_id=form_id,
                 n_responses=len(timestamps),
                 first_ts=timestamps[0],
@@ -257,7 +255,7 @@ with tab_overview:
             if forecast is not None:
                 forecast = _shift_forecast(forecast, offset=start_idx - 1)
         else:
-            forecast, forecast_error = None, None
+            forecast, changepoints, forecast_error = None, [], None
 
         # Рядок 1: BANs — "Зараз" і "Прогноз".
         ban_cols = st.columns(2)
@@ -274,11 +272,12 @@ with tab_overview:
         else:
             ban_cols[1].metric("Прогноз", "—")
 
-        # Рядок 2: графік.
+        # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
         fig = plot_timeline_with_forecast(
             timeline=timeline,
             forecast=forecast,
             excluded_mask=excluded_mask,
+            changepoints=changepoints,
         )
         st.plotly_chart(fig, width="stretch")
 
@@ -300,9 +299,10 @@ with tab_overview:
                 ),
             )
 
-        # Рядок 5: caption — модель/якість фіту/горизонт.
+        # Рядок 5: caption — модель/якість фіту/горизонт + хвилі.
         n_used = end_idx - start_idx + 1
         window_suffix = f" · використано {n_used} з {n_ts} відповідей" if n_used < n_ts else ""
+        cp_suffix = f" · виявлено хвиль агітації: {len(changepoints)}" if changepoints else ""
         if forecast is not None:
             horizon_end = forecast.future_dates[-1].date()
             st.caption(
@@ -310,7 +310,7 @@ with tab_overview:
                 f"горизонт до {horizon_end:%d.%m.%Y} (25% тривалості) · "
                 f"95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
                 f"RMSE={forecast.rmse:.2f} · R²={forecast.r_squared:.3f}"
-                f"{window_suffix}"
+                f"{cp_suffix}{window_suffix}"
             )
         elif forecast_error:
             # Якщо помилка — "замало точок" І користувач звузив вікно — пораду
