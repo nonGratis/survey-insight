@@ -82,12 +82,70 @@ def nhpp_prediction_interval(
     - mean_cum — детермінований model.predict (тенденція).
     - median_cum — 50-й перцентиль симуляцій (центр розподілу, robust
       до MVN-tails) — основа для point estimate.
-    - ci_lower, ci_upper — 2.5/97.5 перцентилі симуляцій.
+    - ci_lower, ci_upper — `ci_lower_pct`/`ci_upper_pct` перцентилі.
+    """
+    if not 0.0 <= ci_lower_pct < ci_upper_pct <= 100.0:
+        raise ValueError(f"Invalid percentiles: {ci_lower_pct}, {ci_upper_pct}")
+    mean_cum, sim_cum = _simulate_nhpp_trajectories(
+        fitted, t_future, last_observed, n_sims=n_sims, rng=rng
+    )
+    ci_lower = np.percentile(sim_cum, ci_lower_pct, axis=0)
+    median_cum = np.percentile(sim_cum, 50.0, axis=0)
+    ci_upper = np.percentile(sim_cum, ci_upper_pct, axis=0)
+    return mean_cum, median_cum, ci_lower, ci_upper
+
+
+def nhpp_prediction_multi_level(
+    fitted: FittedModel,
+    t_future: np.ndarray,
+    last_observed: int,
+    levels: tuple[float, ...] = (0.50, 0.80, 0.90, 0.95),
+    n_sims: int = 2000,
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[float, tuple[np.ndarray, np.ndarray]]]:
+    """Багаторівневі CI з одного прогону симуляції.
+
+    Для кожного рівня L ∈ levels повертає двосторонні квантилі
+    (1-L)/2 і 1-(1-L)/2. Приклад: L=0.80 → 10%/90%.
+
+    Returns:
+        (mean_cum, median_cum, levels_dict):
+        - mean_cum, median_cum — як у `nhpp_prediction_interval`.
+        - levels_dict[L] = (ci_lower_arr, ci_upper_arr) для рівня L.
+
+    Reference: research/11_multi_level_reliability.py
+    """
+    for level in levels:
+        if not 0.0 < level < 1.0:
+            raise ValueError(f"Invalid CI level: {level} (must be in (0, 1))")
+    mean_cum, sim_cum = _simulate_nhpp_trajectories(
+        fitted, t_future, last_observed, n_sims=n_sims, rng=rng
+    )
+    median_cum = np.percentile(sim_cum, 50.0, axis=0)
+    out: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+    for level in levels:
+        lo_pct = (1.0 - level) / 2.0 * 100.0
+        hi_pct = (1.0 - (1.0 - level) / 2.0) * 100.0
+        lo = np.percentile(sim_cum, lo_pct, axis=0)
+        hi = np.percentile(sim_cum, hi_pct, axis=0)
+        out[float(level)] = (lo, hi)
+    return mean_cum, median_cum, out
+
+
+def _simulate_nhpp_trajectories(
+    fitted: FittedModel,
+    t_future: np.ndarray,
+    last_observed: int,
+    n_sims: int = 2000,
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Спільне ядро для всіх PI-обгорток. Повертає (mean_cum, sim_cum).
+
+    `sim_cum` shape = (n_sims, len(t_future)), int64. `mean_cum` — детермінована
+    тренд-крива model.predict без шуму.
     """
     if len(t_future) == 0:
         raise ValueError("t_future is empty")
-    if not 0.0 <= ci_lower_pct < ci_upper_pct <= 100.0:
-        raise ValueError(f"Invalid percentiles: {ci_lower_pct}, {ci_upper_pct}")
     if rng is None:
         rng = np.random.default_rng()
 
@@ -107,17 +165,12 @@ def nhpp_prediction_interval(
     cap_absolute = float(last_observed) + _absolute_cap(last_observed)
     cap_rate = float(last_observed) + observed_rate * horizon_days * REALITY_CAP_RATE_MULTIPLIER
     min_cap = float(last_observed + MIN_GROWTH_ALLOWANCE)
-    # Беремо мінімум з cap_multiplier / cap_absolute / cap_rate, але не нижче
-    # min_cap. Для N >= 100 cap_absolute = inf, тож не впливає.
     reality_cap = int(max(min_cap, min(cap_multiplier, cap_absolute, cap_rate)))
-    # Per-day λ cap: 10× model-predicted lambda (з MVN-tail protection), з підлогою.
-    # Раніше було reality_cap/horizon → на великих N з cap=11000 + horizon=1 давало
-    # лямбду 11000, Poisson(11000)>>5690 → ВСІ sim trajectories clamp у cap.
+
     model_lambdas = np.diff(fitted.model.predict(t_anchor, *theta_hat))
     model_lambda_max = float(max(np.max(model_lambdas) if len(model_lambdas) > 0 else 0.0, 1.0))
     lambda_cap = max(model_lambda_max * 10.0, 5.0)
 
-    # Bounded MVN sampling: відкидаємо samples поза model.bounds().
     thetas = _sample_bounded_params(fitted, theta_hat, n_sims, rng, last_observed)
 
     sim_cum = np.empty((n_sims, n_t), dtype=np.int64)
@@ -133,13 +186,9 @@ def nhpp_prediction_interval(
             lambdas_k = np.clip(np.diff(mean_k), 0.0, lambda_cap)
             daily_k = rng.poisson(lam=lambdas_k)
         cum_k = last_observed + np.cumsum(daily_k)
-        # Reality cap: не може зрости вище фізично-розумної межі.
         sim_cum[k] = np.clip(cum_k, last_observed, reality_cap)
 
-    ci_lower = np.percentile(sim_cum, ci_lower_pct, axis=0)
-    median_cum = np.percentile(sim_cum, 50.0, axis=0)
-    ci_upper = np.percentile(sim_cum, ci_upper_pct, axis=0)
-    return mean_cum, median_cum, ci_lower, ci_upper
+    return mean_cum, sim_cum
 
 
 def _sample_bounded_params(
