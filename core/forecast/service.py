@@ -19,7 +19,7 @@ import pandas as pd
 
 from core.timeline import TimelineSeries
 
-from .calibration import apply_calibration_arrays
+from .calibration import apply_calibration_arrays, apply_sample_size_scaling
 from .intervals import nhpp_prediction_interval
 from .models import models_for_n_points
 from .priors import load_priors
@@ -138,12 +138,25 @@ def forecast_responses(
     ci_lower_arr, ci_upper_arr = apply_calibration_arrays(
         future_cum_arr, ci_lower_arr, ci_upper_arr
     )
-    # Минимум ширина CI: ±10% від point estimate (захист від width=0 cases).
+    # Мінімум ширина CI: ±10% від point estimate (захист від width=0 cases).
     min_half_width = np.maximum(future_cum_arr * 0.10, 5.0)
     ci_lower_arr = np.minimum(ci_lower_arr, future_cum_arr - min_half_width)
     ci_upper_arr = np.maximum(ci_upper_arr, future_cum_arr + min_half_width)
     # Гарантуємо: ci_lower не нижче last_observed (cumulative-floor).
     ci_lower_arr = np.maximum(ci_lower_arr, float(last_observed))
+    # P10: sample-size-залежне розширення CI на малих N. Promoted з
+    # research/10_variance_reduction_ab.py — на повному датасеті 590 backtest
+    # points +1.9pp coverage без зміни MAPE/bias, point estimate не торкаємо.
+    # Найбільший ефект на ранніх cutoffs і shape=late_burst (+18.2pp coverage
+    # на n_train≤15). Застосовується ОСТАННІМ, ПІСЛЯ floor'у і cumulative-floor,
+    # бо A/B harness scale(post_processed_ci) — а не scale(pre_floor).
+    ci_lower_arr, ci_upper_arr = apply_sample_size_scaling(
+        future_cum_arr,
+        ci_lower_arr,
+        ci_upper_arr,
+        n_train=n_points,
+        last_observed=last_observed,
+    )
 
     future_cum = pd.Series(future_cum_arr, index=future_dates, name="future_cum")
     ci_lower = pd.Series(ci_lower_arr, index=future_dates, name="ci_lower")
