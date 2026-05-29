@@ -57,11 +57,15 @@ def test_no_cp_on_clean_log_curve_falls_back_to_full_timeline():
     assert fc.final_estimate >= sum(daily)
 
 
-def test_segmentation_disabled_returns_empty_cps():
+def test_segmentation_default_off_still_returns_cps_for_viz():
+    """auto_segment=False (default після research/05) — фіт на повному
+    timeline, але CPs повертаються для рендеру маркерів на чарті."""
     daily = [5] * 20
     tl = _build_timeline(daily)
-    fc, cps = forecast_with_segmentation(tl, auto_segment=False)
-    assert cps == []
+    fc, cps = forecast_with_segmentation(tl)
+    # Не вимагаємо порожній список — PELT може щось знайти у шумі,
+    # ці маркери просто візуалізуються, не впливаючи на фіт.
+    assert isinstance(cps, list)
     assert fc.final_estimate >= sum(daily)
 
 
@@ -76,9 +80,9 @@ def test_too_short_series_returns_empty_cps():
 
 def test_two_wave_timeline_detects_cp_and_uses_post_cp_subset():
     """Step-change синтетика: PELT повинен знайти ≥1 CP, training subset =
-    останній сегмент."""
+    останній сегмент (auto_segment=True явно)."""
     tl, _expected_burst_start = _build_two_waves_timeline()
-    fc, cps = forecast_with_segmentation(tl, cp_penalty=5.0, cp_min_segment=5)
+    fc, cps = forecast_with_segmentation(tl, cp_penalty=5.0, cp_min_segment=5, auto_segment=True)
     # PELT на rate-серії з трьома phases (тиха-хвиля-тиха) повинен знайти CP.
     assert len(cps) >= 1, f"Очікували ≥1 CP, отримано {len(cps)}"
     for cp in cps:
