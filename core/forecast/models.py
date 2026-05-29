@@ -195,17 +195,23 @@ def fit_model(
     t: np.ndarray,
     y: np.ndarray,
     target: int | None,
+    bounds_override: tuple[tuple[float, ...], tuple[float, ...]] | None = None,
 ) -> tuple[tuple[float, ...], np.ndarray | None]:
     """Знайти параметри моделі curve_fit'ом і повернути (params, pcov).
 
-    pcov — параметрична коваріаційна матриця. None, якщо curve_fit не зміг
-    її оцінити (трапляється при погано-зумовлених фітах: повертає матрицю
-    з inf-діагоналлю). NHPP-CI використовує pcov для parameter sampling.
+    Args:
+        model, t, y, target: standard fit inputs.
+        bounds_override: якщо задано — використати ці bounds замість
+            model.bounds(y, target). Використовується для emp. Bayes priors
+            (P9), які звужують bounds до prior_median ± Nσ.
 
     Raises ForecastError при non-convergence.
     """
     p0 = model.initial_guess(t, y, target)
-    bounds = model.bounds(y, target)
+    bounds = bounds_override if bounds_override is not None else model.bounds(y, target)
+    # Sanitize p0 → всередині bounds.
+    low, high = bounds
+    p0 = tuple(min(max(p, low[i]), high[i]) for i, p in enumerate(p0))
     try:
         popt, pcov = curve_fit(
             model.predict,
@@ -218,7 +224,6 @@ def fit_model(
     except (RuntimeError, ValueError) as exc:
         raise ForecastError(f"{model.name} не зійшовся: {exc}") from exc
     params = tuple(float(p) for p in popt)
-    # pcov може містити inf/nan коли covariance не оцінилась — повертаємо None.
     if pcov is None or not np.all(np.isfinite(pcov)):
         return params, None
     return params, pcov
