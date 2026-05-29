@@ -42,7 +42,7 @@ def forecast_responses(
     n_simulations: int = DEFAULT_N_SIMULATIONS,
     random_seed: int = DEFAULT_RANDOM_SEED,
     horizon_until: pd.Timestamp | None = None,
-    use_priors: bool = True,
+    use_priors: bool = False,
 ) -> ForecastResult:
     """Спрогнозувати cumulative на ~`horizon_fraction` від тривалості опитування.
 
@@ -122,20 +122,26 @@ def forecast_responses(
     t_future = _to_days_from(pd.Series(future_dates), first_ts)
 
     rng = np.random.default_rng(random_seed)
-    _model_mean, median_arr, ci_lower_arr, ci_upper_arr = nhpp_prediction_interval(
+    model_mean, _median_arr, ci_lower_arr, ci_upper_arr = nhpp_prediction_interval(
         fitted, t_future, last_observed=last_observed, n_sims=n_simulations, rng=rng
     )
 
-    # Точкова оцінка — median симуляції (P8): robust до MVN-tails, природньо
-    # консистентний з [ci_lower, ci_upper] бо обчислений з того ж розподілу.
-    # Floor на last_observed + monotonic accumulate для стабільності.
-    future_cum_arr = np.maximum.accumulate(np.maximum(median_arr, float(last_observed)))
+    # Точкова оцінка — детермінована model.predict (model_mean), floor'нута на
+    # last_observed. Відкат від median симуляції бо median пулиться MVN-tail'ами
+    # на нестабільних фітах і призводить до огидних overshoots (95 для N=19,
+    # 12352 для N=6176).
+    future_cum_arr = np.maximum.accumulate(np.maximum(model_mean, float(last_observed)))
 
     # P7: empirical calibration — розширюємо CI bands навколо точкової оцінки
-    # до близького до 95% coverage (baseline 30.9% → ~73% з multiplier=10.0).
+    # до близького до 95% coverage. Додатковий MIN_CI_WIDTH_FRAC = 0.10
+    # гарантує, що ширина CI ≥ 10% від point estimate (інакше width=0 cases).
     ci_lower_arr, ci_upper_arr = apply_calibration_arrays(
         future_cum_arr, ci_lower_arr, ci_upper_arr
     )
+    # Минимум ширина CI: ±10% від point estimate (захист від width=0 cases).
+    min_half_width = np.maximum(future_cum_arr * 0.10, 5.0)
+    ci_lower_arr = np.minimum(ci_lower_arr, future_cum_arr - min_half_width)
+    ci_upper_arr = np.maximum(ci_upper_arr, future_cum_arr + min_half_width)
     # Гарантуємо: ci_lower не нижче last_observed (cumulative-floor).
     ci_lower_arr = np.maximum(ci_lower_arr, float(last_observed))
 
