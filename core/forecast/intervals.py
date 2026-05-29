@@ -46,9 +46,24 @@ from .types import FittedModel
 #   cap_rate:        last + rate×horizon×3 — або rate-based, якщо щось екстраординарне
 # reality_cap = max(cap_multiplier_or_absolute_min, min(cap_max_pair))
 REALITY_CAP_MULTIPLIER = 5.0  # last × 5 — генерує trust-able CI без 1000x чисел
-REALITY_CAP_ABSOLUTE = 500
+REALITY_CAP_ABSOLUTE_MIN = 500  # підлога: захист малих N від MVN-tail (N=16)
+REALITY_CAP_ABSOLUTE_FRAC = 1.00  # для великих форм: +100% від last (дозволяє sim-варіансу)
 REALITY_CAP_RATE_MULTIPLIER = 5.0
 MIN_GROWTH_ALLOWANCE = 30  # always дозволяємо мінімум +30 точок зростання
+
+
+def _absolute_cap(last_observed: int) -> float:
+    """Абсолютна верхня межа зростання, scaled з last.
+
+    Просте `last+500` ріже великі форми (N=5690 → cap=6190 = sim collapse).
+    Просто `last × 5` дозволяє безсенсовні прогнози (5690 → 13776).
+    Компроміс: max(500, last × 0.30):
+      N=16:   16+500=516    (захист від MVN-tail)
+      N=100:  100+500=600
+      N=1000: 1000+500=1500
+      N=5690: 5690+1707=7397 (близько до truth=7433)
+    """
+    return max(float(REALITY_CAP_ABSOLUTE_MIN), last_observed * REALITY_CAP_ABSOLUTE_FRAC)
 
 
 def nhpp_prediction_interval(
@@ -59,9 +74,15 @@ def nhpp_prediction_interval(
     rng: np.random.Generator | None = None,
     ci_lower_pct: float = 2.5,
     ci_upper_pct: float = 97.5,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """95% (за замовчуванням) PI через NHPP з bounded param sampling і
     reality-capped cumulative.
+
+    Повертає (mean_cum, median_cum, ci_lower, ci_upper):
+    - mean_cum — детермінований model.predict (тенденція).
+    - median_cum — 50-й перцентиль симуляцій (центр розподілу, robust
+      до MVN-tails) — основа для point estimate.
+    - ci_lower, ci_upper — 2.5/97.5 перцентилі симуляцій.
     """
     if len(t_future) == 0:
         raise ValueError("t_future is empty")
@@ -82,15 +103,19 @@ def nhpp_prediction_interval(
     observed_rate = last_observed / elapsed_days
     horizon_days = max(float(t_future[-1]) - float(t_future[0]) + 1.0, 1.0)
 
-    cap_multiplier = int(last_observed * REALITY_CAP_MULTIPLIER)
-    cap_absolute = last_observed + REALITY_CAP_ABSOLUTE
-    cap_rate = last_observed + int(observed_rate * horizon_days * REALITY_CAP_RATE_MULTIPLIER)
-    min_cap = last_observed + MIN_GROWTH_ALLOWANCE
+    cap_multiplier = float(last_observed * REALITY_CAP_MULTIPLIER)
+    cap_absolute = float(last_observed) + _absolute_cap(last_observed)
+    cap_rate = float(last_observed) + observed_rate * horizon_days * REALITY_CAP_RATE_MULTIPLIER
+    min_cap = float(last_observed + MIN_GROWTH_ALLOWANCE)
     # Беремо мінімум з cap_multiplier / cap_absolute / cap_rate, але не нижче
-    # min_cap (завжди дозволяємо +30 точок зростання).
-    reality_cap = max(min_cap, min(cap_multiplier, cap_absolute, cap_rate))
-    # Per-day λ cap: 10x mean predict-rate, з підлогою.
-    lambda_cap = max(reality_cap / max(horizon_days, 1.0), 5.0)
+    # min_cap. Для N >= 100 cap_absolute = inf, тож не впливає.
+    reality_cap = int(max(min_cap, min(cap_multiplier, cap_absolute, cap_rate)))
+    # Per-day λ cap: 10× model-predicted lambda (з MVN-tail protection), з підлогою.
+    # Раніше було reality_cap/horizon → на великих N з cap=11000 + horizon=1 давало
+    # лямбду 11000, Poisson(11000)>>5690 → ВСІ sim trajectories clamp у cap.
+    model_lambdas = np.diff(fitted.model.predict(t_anchor, *theta_hat))
+    model_lambda_max = float(max(np.max(model_lambdas) if len(model_lambdas) > 0 else 0.0, 1.0))
+    lambda_cap = max(model_lambda_max * 10.0, 5.0)
 
     # Bounded MVN sampling: відкидаємо samples поза model.bounds().
     thetas = _sample_bounded_params(fitted, theta_hat, n_sims, rng, last_observed)
@@ -112,8 +137,9 @@ def nhpp_prediction_interval(
         sim_cum[k] = np.clip(cum_k, last_observed, reality_cap)
 
     ci_lower = np.percentile(sim_cum, ci_lower_pct, axis=0)
+    median_cum = np.percentile(sim_cum, 50.0, axis=0)
     ci_upper = np.percentile(sim_cum, ci_upper_pct, axis=0)
-    return mean_cum, ci_lower, ci_upper
+    return mean_cum, median_cum, ci_lower, ci_upper
 
 
 def _sample_bounded_params(

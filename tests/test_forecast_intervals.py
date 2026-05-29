@@ -35,7 +35,7 @@ def rng():
 def test_ci_lower_never_below_last_observed(rng):
     fitted = _make_fitted()
     t_future = np.arange(14.0, 21.0)
-    _, ci_lower, _ = nhpp_prediction_interval(
+    _, _med, ci_lower, _ = nhpp_prediction_interval(
         fitted, t_future, last_observed=47, n_sims=2000, rng=rng
     )
     assert np.all(ci_lower >= 47), f"ci_lower={ci_lower} dipped below 47"
@@ -44,7 +44,7 @@ def test_ci_lower_never_below_last_observed(rng):
 def test_ci_bands_are_monotonic(rng):
     fitted = _make_fitted()
     t_future = np.arange(10.0, 25.0)
-    _, ci_lower, ci_upper = nhpp_prediction_interval(
+    _, _med, ci_lower, ci_upper = nhpp_prediction_interval(
         fitted, t_future, last_observed=20, n_sims=2000, rng=rng
     )
     assert np.all(np.diff(ci_lower) >= 0), "ci_lower not monotonic"
@@ -54,7 +54,7 @@ def test_ci_bands_are_monotonic(rng):
 def test_mean_is_within_ci_band(rng):
     fitted = _make_fitted()
     t_future = np.arange(14.0, 21.0)
-    mean_cum, ci_lower, ci_upper = nhpp_prediction_interval(
+    mean_cum, _med, ci_lower, ci_upper = nhpp_prediction_interval(
         fitted, t_future, last_observed=47, n_sims=2000, rng=rng
     )
     # Mean — детермінований predict; CI — симуляційний з last_observed як база.
@@ -69,7 +69,7 @@ def test_ci_width_grows_with_horizon(rng):
     """Невизначеність зростає з горизонтом (cumulative-варіанс росте з t)."""
     fitted = _make_fitted()
     t_future = np.arange(14.0, 30.0)
-    _, ci_lower, ci_upper = nhpp_prediction_interval(
+    _, _med, ci_lower, ci_upper = nhpp_prediction_interval(
         fitted, t_future, last_observed=47, n_sims=4000, rng=rng
     )
     widths = ci_upper - ci_lower
@@ -97,8 +97,8 @@ def test_reproducibility_with_seed():
     t_future = np.arange(14.0, 21.0)
     rng1 = np.random.default_rng(123)
     rng2 = np.random.default_rng(123)
-    _, lo1, hi1 = nhpp_prediction_interval(fitted, t_future, 47, n_sims=500, rng=rng1)
-    _, lo2, hi2 = nhpp_prediction_interval(fitted, t_future, 47, n_sims=500, rng=rng2)
+    _, _m1, lo1, hi1 = nhpp_prediction_interval(fitted, t_future, 47, n_sims=500, rng=rng1)
+    _, _m2, lo2, hi2 = nhpp_prediction_interval(fitted, t_future, 47, n_sims=500, rng=rng2)
     np.testing.assert_array_equal(lo1, lo2)
     np.testing.assert_array_equal(hi1, hi2)
 
@@ -121,7 +121,7 @@ def test_flat_curve_gives_zero_lambda(rng):
 
     fitted = FittedModel(model=FlatModel(), params=(50.0,), aicc=0, rmse=0, r_squared=1)
     t_future = np.arange(14.0, 21.0)
-    mean_cum, ci_lower, ci_upper = nhpp_prediction_interval(
+    mean_cum, _med, ci_lower, ci_upper = nhpp_prediction_interval(
         fitted, t_future, last_observed=50, n_sims=2000, rng=rng
     )
     assert np.all(ci_lower == 50)

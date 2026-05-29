@@ -111,16 +111,14 @@ def forecast_responses(
     t_future = _to_days_from(pd.Series(future_dates), first_ts)
 
     rng = np.random.default_rng(random_seed)
-    model_mean, ci_lower_arr, ci_upper_arr = nhpp_prediction_interval(
+    _model_mean, median_arr, ci_lower_arr, ci_upper_arr = nhpp_prediction_interval(
         fitted, t_future, last_observed=last_observed, n_sims=n_simulations, rng=rng
     )
 
-    # Точкова оцінка — model.predict з floor'ом на last_observed і clamp'ом
-    # до [ci_lower, ci_upper], щоб final_estimate завжди консистентний з PI
-    # (без clamp'у деформент-крива може опинитись поза CI на коротких префіксах
-    # через параметричну uncertainty у симуляціях).
-    future_cum_arr = np.maximum.accumulate(np.maximum(model_mean, float(last_observed)))
-    future_cum_arr = np.clip(future_cum_arr, ci_lower_arr, ci_upper_arr)
+    # Точкова оцінка — median симуляції (P8): robust до MVN-tails, природньо
+    # консистентний з [ci_lower, ci_upper] бо обчислений з того ж розподілу.
+    # Floor на last_observed + monotonic accumulate для стабільності.
+    future_cum_arr = np.maximum.accumulate(np.maximum(median_arr, float(last_observed)))
 
     future_cum = pd.Series(future_cum_arr, index=future_dates, name="future_cum")
     ci_lower = pd.Series(ci_lower_arr, index=future_dates, name="ci_lower")
