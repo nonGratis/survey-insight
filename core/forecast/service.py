@@ -19,6 +19,7 @@ import pandas as pd
 
 from core.timeline import TimelineSeries
 
+from .calibration import apply_calibration_arrays
 from .intervals import nhpp_prediction_interval
 from .models import models_for_n_points
 from .selector import select_best_model
@@ -119,6 +120,14 @@ def forecast_responses(
     # консистентний з [ci_lower, ci_upper] бо обчислений з того ж розподілу.
     # Floor на last_observed + monotonic accumulate для стабільності.
     future_cum_arr = np.maximum.accumulate(np.maximum(median_arr, float(last_observed)))
+
+    # P7: empirical calibration — розширюємо CI bands навколо точкової оцінки
+    # до близького до 95% coverage (baseline 30.9% → ~73% з multiplier=10.0).
+    ci_lower_arr, ci_upper_arr = apply_calibration_arrays(
+        future_cum_arr, ci_lower_arr, ci_upper_arr
+    )
+    # Гарантуємо: ci_lower не нижче last_observed (cumulative-floor).
+    ci_lower_arr = np.maximum(ci_lower_arr, float(last_observed))
 
     future_cum = pd.Series(future_cum_arr, index=future_dates, name="future_cum")
     ci_lower = pd.Series(ci_lower_arr, index=future_dates, name="ci_lower")
