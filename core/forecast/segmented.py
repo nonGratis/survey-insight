@@ -51,10 +51,16 @@ def forecast_with_segmentation(
     cp_min_segment: int = DEFAULT_CP_MIN_SEGMENT,
     rate_freq: str = DEFAULT_RATE_FREQ,
     smooth_window: int = DEFAULT_SMOOTH_WINDOW,
-    auto_segment: bool = True,
+    auto_segment: bool = False,
     **forecast_kwargs: Any,
 ) -> tuple[ForecastResult, list[Changepoint]]:
     """Прогноз з автоматичною сегментацією на знайдених CP.
+
+    NB: research/05 показав, що при дефолтних параметрах PELT segmentation
+    погіршує MAPE з 22.7% до 54.0% на 288 backtest-точках (96 форм). Тому
+    auto_segment=False за замовчуванням. CP detection все ще запускається
+    у візуальному режимі (повертає список CP для рендеру маркерів), але
+    модель тренується на повному timeline.
 
     Args:
         timeline: повний timeline з усіма timestamps.
@@ -64,16 +70,18 @@ def forecast_with_segmentation(
         cp_min_segment: мінімальний розмір сегменту в bucket'ах.
         rate_freq: pandas-офсет для resample у rate-серію ("1h", "15min", ...).
         smooth_window: вікно median-фільтра проти разових spike'ів.
-        auto_segment: вимкнути CP detection, тренувати на повному timeline.
+        auto_segment: якщо True — тренувати на post-CP сегменті; інакше
+            повний timeline (за замовчуванням). CP-список завжди детектується
+            для візуалізації.
         **forecast_kwargs: інші аргументи forecast_responses (n_simulations, ...).
 
     Returns:
         (forecast_result, changepoints). Список CP завжди валідний (може
-        бути порожній), навіть коли fallback на повний timeline.
+        бути порожній). Прогноз завжди на повному timeline, якщо
+        auto_segment=False (default).
     """
-    # Якщо segmentation вимкнено або серія закоротка для CP detection —
-    # одразу повний timeline + порожній CP-список.
-    if not auto_segment or len(timeline.timestamps) < 2 * cp_min_segment:
+    # Серія занадто коротка для CP detection — повний timeline, порожній CP.
+    if len(timeline.timestamps) < 2 * cp_min_segment:
         result = forecast_responses(
             timeline,
             target=target,
@@ -82,7 +90,7 @@ def forecast_with_segmentation(
         )
         return result, []
 
-    # CP detection: timestamps → rate → smooth → PELT.
+    # CP detection (завжди робимо для візуалізації, навіть якщо не використовуємо для фіту).
     try:
         rate = to_rate_series(timeline.timestamps, freq=rate_freq)
     except InsufficientDataError:
@@ -101,16 +109,18 @@ def forecast_with_segmentation(
         min_segment=cp_min_segment,
     )
 
-    if not changepoints:
+    # auto_segment=False (default після research/05): фіт на повному timeline,
+    # але CPs повертаємо для рендеру маркерів на графіку.
+    if not auto_segment or not changepoints:
         result = forecast_responses(
             timeline,
             target=target,
             horizon_until=horizon_until,
             **forecast_kwargs,
         )
-        return result, []
+        return result, changepoints
 
-    # Беремо timestamps після ОСТАННЬОГО CP як training subset.
+    # auto_segment=True: тренування на post-CP сегменті.
     last_cp_ts = changepoints[-1].timestamp
     ts_full = pd.to_datetime(timeline.timestamps).sort_values()
     post_cp_ts = [t.to_pydatetime() for t in ts_full if t >= last_cp_ts]
