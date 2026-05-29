@@ -22,7 +22,9 @@ from core.timeline import TimelineSeries
 from .calibration import apply_calibration_arrays
 from .intervals import nhpp_prediction_interval
 from .models import models_for_n_points
+from .priors import load_priors
 from .selector import select_best_model
+from .shape_classifier import classify_timeline
 from .types import ForecastError, ForecastResult
 
 DEFAULT_N_SIMULATIONS = 2000
@@ -40,6 +42,7 @@ def forecast_responses(
     n_simulations: int = DEFAULT_N_SIMULATIONS,
     random_seed: int = DEFAULT_RANDOM_SEED,
     horizon_until: pd.Timestamp | None = None,
+    use_priors: bool = True,
 ) -> ForecastResult:
     """Спрогнозувати cumulative на ~`horizon_fraction` від тривалості опитування.
 
@@ -100,7 +103,14 @@ def forecast_responses(
     # Tiered model selection: малий N → лише AsymptoticExp (стабільний),
     # достатній N → усі три моделі через AICc.
     models = models_for_n_points(n_points)
-    fitted = select_best_model(t_train, y_train, target=target, models=models)
+
+    # P9: emp. Bayes priors з історії — звужують bounds → стабільніший фіт.
+    priors = load_priors() if use_priors else None
+    shape = classify_timeline(timeline.timestamps) if (use_priors and priors) else None
+
+    fitted = select_best_model(
+        t_train, y_train, target=target, models=models, priors=priors, shape=shape
+    )
 
     # Future grid: щодоби, від наступного дня після last_ts.
     last_known_day = pd.Timestamp(last_ts.date())

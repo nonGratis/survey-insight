@@ -16,6 +16,7 @@ from core.logger import get_logger
 
 from .metrics import aicc, r_squared, rmse
 from .models import DEFAULT_MODELS, SaturationModel, fit_model
+from .priors import ShapePrior, narrow_bounds_with_prior
 from .types import FittedModel, ForecastError
 
 log = get_logger(__name__)
@@ -26,6 +27,8 @@ def select_best_model(
     y: np.ndarray,
     target: int | None = None,
     models: Sequence[SaturationModel] = DEFAULT_MODELS,
+    priors: dict[tuple[str, str], ShapePrior] | None = None,
+    shape: str | None = None,
 ) -> FittedModel:
     """Фіт кожну модель з `models`, повернути найкращу за AICc.
 
@@ -46,8 +49,17 @@ def select_best_model(
     candidates: list[FittedModel] = []
     failures: list[tuple[str, str]] = []
     for model in models:
+        # P9: звужуємо bounds через emp. Bayes prior, якщо переданий.
+        bounds_override = None
+        if priors and shape:
+            prior = priors.get((model.name, shape))
+            if prior is not None:
+                default_bounds = model.bounds(y, target)
+                bounds_override = narrow_bounds_with_prior(
+                    default_bounds[0], default_bounds[1], prior
+                )
         try:
-            params, pcov = fit_model(model, t, y, target)
+            params, pcov = fit_model(model, t, y, target, bounds_override=bounds_override)
         except ForecastError as exc:
             failures.append((model.name, str(exc)))
             continue

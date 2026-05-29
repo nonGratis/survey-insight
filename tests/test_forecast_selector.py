@@ -72,13 +72,14 @@ def test_raises_when_all_models_fail():
         n_params = 3
 
         def predict(self, t, a, b, c):
-            return a * t + b + c
+            # NaN з predict → curve_fit гарантовано не зійдеться.
+            return np.full_like(np.asarray(t, dtype=float), np.nan)
 
         def initial_guess(self, t, y, target):
-            return (-1000.0, -1000.0, -1000.0)
+            return (1.0, 1.0, 1.0)
 
         def bounds(self, y, target):
-            return (0.0, 0.0, 0.0), (1.0, 1.0, 1.0)
+            return (0.0, 0.0, 0.0), (10.0, 10.0, 10.0)
 
     t = np.arange(10, dtype=float)
     y = np.linspace(1, 10, 10)
