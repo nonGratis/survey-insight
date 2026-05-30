@@ -19,7 +19,11 @@ import pandas as pd
 
 from core.timeline import TimelineSeries
 
-from .calibration import apply_calibration_arrays, apply_sample_size_scaling
+from .calibration import (
+    apply_calibration_arrays,
+    apply_sample_size_scaling,
+    get_calibration_multiplier,
+)
 from .intervals import nhpp_prediction_interval
 from .models import models_for_n_points
 from .priors import load_priors
@@ -43,6 +47,7 @@ def forecast_responses(
     random_seed: int = DEFAULT_RANDOM_SEED,
     horizon_until: pd.Timestamp | None = None,
     use_priors: bool = False,
+    form_type: str | None = None,
 ) -> ForecastResult:
     """Спрогнозувати cumulative на ~`horizon_fraction` від тривалості опитування.
 
@@ -132,11 +137,12 @@ def forecast_responses(
     # 12352 для N=6176).
     future_cum_arr = np.maximum.accumulate(np.maximum(model_mean, float(last_observed)))
 
-    # P7: empirical calibration — розширюємо CI bands навколо точкової оцінки
-    # до близького до 95% coverage. Додатковий MIN_CI_WIDTH_FRAC = 0.10
-    # гарантує, що ширина CI ≥ 10% від point estimate (інакше width=0 cases).
+    # P7 (+ P11): empirical calibration. Якщо переданий form_type — застосовується
+    # per-type multiplier з research/11_, 12_; інакше глобальний x10 (backward-compat).
+    # MIN_CI_WIDTH_FRAC = 0.10 гарантує ширину CI ≥ 10% від point estimate.
+    multiplier = get_calibration_multiplier(form_type)
     ci_lower_arr, ci_upper_arr = apply_calibration_arrays(
-        future_cum_arr, ci_lower_arr, ci_upper_arr
+        future_cum_arr, ci_lower_arr, ci_upper_arr, multiplier=multiplier
     )
     # Мінімум ширина CI: ±10% від point estimate (захист від width=0 cases).
     min_half_width = np.maximum(future_cum_arr * 0.10, 5.0)

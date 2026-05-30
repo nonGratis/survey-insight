@@ -29,6 +29,40 @@ import numpy as np
 CALIBRATION_MULTIPLIER = 10.0
 DERIVED_COVERAGE = 0.726  # empirical coverage на 288 backtest-точках
 
+# Per-form-type multipliers (P11). Підстава:
+# research/11_multi_level_reliability.py показав що різні form_type мають
+# радикально різну RAW-калібровку NHPP (raw cov@95% варіюється 15-52%),
+# тому глобальний x10 multiplier пере-калібрує одні типи і недо-калібрує інші.
+# research/12_prod_realistic_horizons.py показав calibrated cov per type:
+#   event_registration: 89.6%, creative_submission: 90.5% (близько до 95%)
+#   recruitment: 81%, volunteer_donor: 88%, event_feedback: 85% (недо-калібровка)
+#   holiday: 78%, political: 80% (помітна недо-калібровка)
+#   service: 67%, survey: 53% (сильна недо-калібровка)
+#   other: 96% (легка над-калібровка)
+# Multipliers обрані щоб таргетувати ~92% emp coverage на кожному типі без
+# над-роздуття CI. Капи [5, 30] для запобігання absurd width.
+PER_TYPE_MULTIPLIER: dict[str, float] = {
+    "event_registration": 11.0,
+    "event_feedback": 12.0,
+    "survey": 28.0,
+    "recruitment": 14.0,
+    "service": 20.0,
+    "volunteer_donor": 12.0,
+    "political": 14.0,
+    "creative_submission": 11.0,
+    "holiday": 16.0,
+    "other": 8.0,
+    "unknown": 13.0,  # fallback для форм поза катологом
+}
+
+
+def get_calibration_multiplier(form_type: str | None) -> float:
+    """Multiplier для form_type. None → глобальний дефолт (backward compat)."""
+    if form_type is None:
+        return CALIBRATION_MULTIPLIER
+    return PER_TYPE_MULTIPLIER.get(form_type, CALIBRATION_MULTIPLIER)
+
+
 # Sample-size-залежне розширення CI на малих N. Підібрано у
 # research/10_variance_reduction_ab.py: на повному датасеті 141 форм × 5
 # cutoffs це додає +1.9pp coverage глобально без зміни MAPE/bias, і
