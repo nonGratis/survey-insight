@@ -28,6 +28,7 @@ from .calibration import (
     apply_sample_size_scaling,
     get_calibration_multiplier,
 )
+from .conformal import apply_conformal_adjustment
 from .delta_ci import cap_width, delta_method_ci
 from .intervals import nhpp_prediction_interval
 from .models import models_for_n_points
@@ -62,6 +63,7 @@ def forecast_responses(
     use_priors: bool = False,
     form_type: str | None = None,
     ci_method: CIMethod = "delta",
+    apply_conformal: bool = True,
 ) -> ForecastResult:
     """Прогноз cumulative responses з CI у `ci_method`-flavoured calibration.
 
@@ -162,6 +164,23 @@ def forecast_responses(
         )
     else:
         raise ValueError(f"Unknown ci_method: {ci_method}")
+
+    # P14: conformal calibration — empirical quantile multiplier на delta-CI
+    # half-width per (n_class × horizon_bucket). Відновлює coverage до ~95%
+    # nominal без uniform multipliers. Тільки для delta path; nhpp legacy
+    # уже має P7/P11 multipliers, double-adjustment не доречне.
+    if apply_conformal and method == "delta":
+        # horizon_days array — днів від last_observed для кожного future point.
+        # t_future вже days from first_ts → віднімаємо days(first_ts → last_ts).
+        last_observed_day = (last_ts - first_ts).total_seconds() / 86400.0
+        horizon_days_arr = t_future - last_observed_day
+        ci_lower_arr, ci_upper_arr = apply_conformal_adjustment(
+            future_cum_arr,
+            ci_lower_arr,
+            ci_upper_arr,
+            n_train=n_points,
+            horizon_days_arr=horizon_days_arr,
+        )
 
     # Cumulative floor: ci_lower не нижче last_observed.
     ci_lower_arr = np.maximum(ci_lower_arr, float(last_observed))
