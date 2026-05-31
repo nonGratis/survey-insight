@@ -1,5 +1,7 @@
 # Variant γ refactor — Roadmap
 
+**Статус: ЗАВЕРШЕНО (P12 + P14 + P16).** P13 відкладено (optional safety net), P15 — negative result (reverted).
+
 **Прийнято:** 2026-05-30. Користувач погодив повну архітектурну переробку CI subsystem замість косметичних multiplier-тюнів.
 
 **Мотивація:** Поточний CI flow (9 шарів post-hoc корекцій) на формі з R²=0.92 видавав CI [62, 818] width=756, тоді як справжня pcov-uncertainty width ~12. Multipliers працюють незалежно від fit-quality → структурно неправильно.
@@ -119,7 +121,7 @@ forecast_responses(timeline)
 - [ ] P13 — Bootstrap fallback (optional safety net; tractable після P15)
 - [x] P14 — Conformal calibration (commit `29a16d0`) — **coverage 91.8% global, 95% @ 2h**
 - [ ] P15 — Model arsenal: **NEGATIVE result, reverted.** See "P15 attempt" нижче.
-- [ ] P16 — Cleanup + tests
+- [x] P16 — Cleanup + tests (commit `4fadb32`) — service.py spрощено, 37 нових тестів, 109/109 pass.
 
 ## Post-P14 prod numbers (3710 backtest points)
 
