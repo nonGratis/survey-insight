@@ -115,8 +115,28 @@ forecast_responses(timeline)
 
 ## Status
 
-- [x] P12 — Delta-method CI primary
-- [ ] P13 — Bootstrap fallback
-- [ ] P14 — Conformal calibration
-- [ ] P15 — Model arsenal
-- [ ] P16 — Cleanup
+- [x] P12 — Delta-method CI primary (commit `0a1bf99`)
+- [ ] P13 — Bootstrap fallback (optional safety net; tractable після P15)
+- [x] P14 — Conformal calibration (commit `29a16d0`) — **coverage 91.8% global, 95% @ 2h**
+- [ ] P15 — Model arsenal (drop Gompertz, add Linear + Bass for huge/multi-wave)
+- [ ] P16 — Cleanup + tests
+
+## Post-P14 prod numbers (3710 backtest points)
+
+| | Pre-γ | After P14 | Δ |
+|---|---:|---:|---:|
+| MAPE | 37.2% | 37.2% | 0 |
+| Coverage | 81.6% | **91.8%** | **+10pp** |
+| width_p50 | 158 | 98 | -38% |
+| Winkler_p50 | 234 | 135 | **-42%** |
+
+**Per horizon at user's prod-scenario (2h):**
+- Coverage: 83% → **95.0%** (nominal!)
+- width_p50: 158 → 54 (3× narrower)
+- Winkler: 212 → 62 (-71%)
+
+**Screenshot scenario (R²=0.92):** CI width 1097 → 27 (40× narrower, properly calibrated).
+
+## Лишається
+
+P15 (Bass/Linear models) закриє останнє слабке місце: huge n_class (cov 54%) + survey (cov 82%, width 1121). Усе інше — у robust nominal territory.
