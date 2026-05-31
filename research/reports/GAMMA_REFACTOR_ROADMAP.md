@@ -118,7 +118,7 @@ forecast_responses(timeline)
 - [x] P12 — Delta-method CI primary (commit `0a1bf99`)
 - [ ] P13 — Bootstrap fallback (optional safety net; tractable після P15)
 - [x] P14 — Conformal calibration (commit `29a16d0`) — **coverage 91.8% global, 95% @ 2h**
-- [ ] P15 — Model arsenal (drop Gompertz, add Linear + Bass for huge/multi-wave)
+- [ ] P15 — Model arsenal: **NEGATIVE result, reverted.** See "P15 attempt" нижче.
 - [ ] P16 — Cleanup + tests
 
 ## Post-P14 prod numbers (3710 backtest points)
@@ -137,6 +137,45 @@ forecast_responses(timeline)
 
 **Screenshot scenario (R²=0.92):** CI width 1097 → 27 (40× narrower, properly calibrated).
 
-## Лишається
+## P15 attempt — NEGATIVE result
 
-P15 (Bass/Linear models) закриє останнє слабке місце: huge n_class (cov 54%) + survey (cov 82%, width 1121). Усе інше — у robust nominal territory.
+Спроба: drop Gompertz, add LinearModel + BassDiffusionModel.
+
+**Результат на full benchmark (3710 точок):**
+
+| | P14 (current) | P15 attempt | Δ |
+|---|---:|---:|---:|
+| MAPE | 37.2% | **60.6%** | **+23pp** ❌ |
+| Coverage | 91.8% | **78.8%** | **−13pp** ❌ |
+| Winkler | 135 | 156 | +16 |
+
+**Що зламалося:**
+- **LinearModel extrapolates без saturation cap.** AICc обирає Linear у ранній фазі (parsimony bonus від 2-х параметрів vs 3), але на long horizon Linear розходиться. MAPE@72h = 98%, MAPE@168h = 200%.
+- **BassDiffusionModel identifiability issues** на ~28 точках. Параметри (p, q, m) часто нестабільні, pcov ill-conditioned. Не покращив survey/event_feedback (як гіпотеза очікувала); навпаки погіршив (survey MAPE 54%→165%).
+
+**Лекції:**
+- AICc — це in-sample fit criterion. Для **extrapolation** треба cross-validation або out-of-sample selection.
+- Linear without saturation cap небезпечний у DEFAULT_MODELS.
+- Bass потребує **довшої історії** (≥50 точок) для стабільної ідентифікації, тоді як наш use-case — short-prefix forecasting на 5-30 точках.
+
+**Можливі варіанти P15-v2 для майбутнього (НЕ робив зараз):**
+
+1. **LinearModel з K_max cap у predict** — `predict = min(a*t + b, K_max)`, де K_max з `_capacity_bounds`. Розв'язує extrapolation issue.
+2. **Bass тільки при n ≥ 50** — додати threshold у `models_for_n_points`.
+3. **Cross-validation замість AICc** для selector — дорого compute-wise але теоретично правильно для extrapolation.
+4. **Тільки drop Gompertz** (без додавання). Per 16_, Gompertz pcov ill-conditioned у 26% випадків. Можливо AsympExp + Logistic покриють без втрат. Окремий test.
+
+**Поточне рішення:** залишити P14 як final γ-кадр. Huge n_class (54% cov) і survey (82% cov, 1121 width) — fundamental limits, які потребують **окремих research-сесій з ретельними safety guards**.
+
+## Поточний фінал γ-refactor (P12 + P14)
+
+| | Pre-γ | **Final γ (P14)** | Δ |
+|---|---:|---:|---:|
+| MAPE | 37.2% | 37.2% | 0 (point intact) |
+| Coverage | 81.6% | **91.8%** | **+10pp** |
+| width_p50 | 158 | 98 | -38% |
+| Winkler_p50 | 234 | 135 | -42% |
+| **Cov@2h** | 83% | **95.0%** | nominal! |
+| **Screenshot CI width** | 1097 | 27 | **40× narrower** |
+
+Це **головна перемога γ-refactor**. Решта (huge cov, survey) — fundamental model limits, не cosmetic fix-able.
