@@ -89,9 +89,10 @@ class LogisticModel:
     name = "logistic"
     n_params = 3
 
-    def predict(self, t: np.ndarray, K: float, r: float, t0: float) -> np.ndarray:  # noqa: N803
+    def predict(self, t: np.ndarray, *params: float) -> np.ndarray:
+        k, r, t0 = params
         # Clip аргумент exp щоб запобігти overflow при extreme param-samples з NHPP.
-        return K / (1.0 + np.exp(np.clip(-r * (t - t0), -500.0, 500.0)))
+        return k / (1.0 + np.exp(np.clip(-r * (t - t0), -500.0, 500.0)))
 
     def initial_guess(
         self, t: np.ndarray, y: np.ndarray, target: int | None
@@ -118,10 +119,11 @@ class GompertzModel:
     name = "gompertz"
     n_params = 3
 
-    def predict(self, t: np.ndarray, K: float, r: float, t0: float) -> np.ndarray:  # noqa: N803
+    def predict(self, t: np.ndarray, *params: float) -> np.ndarray:
+        k, r, t0 = params
         # Подвійний exp може overflow'ити; clip обох рівнів.
         inner = np.clip(-r * (t - t0), -500.0, 500.0)
-        return K * np.exp(-np.clip(np.exp(inner), 0.0, 1e150))
+        return k * np.exp(-np.clip(np.exp(inner), 0.0, 1e150))
 
     def initial_guess(
         self, t: np.ndarray, y: np.ndarray, target: int | None
@@ -148,7 +150,8 @@ class AsymptoticExpModel:
     name = "asymptotic_exp"
     n_params = 3
 
-    def predict(self, t: np.ndarray, a: float, b: float, c: float) -> np.ndarray:
+    def predict(self, t: np.ndarray, *params: float) -> np.ndarray:
+        a, b, c = params
         return a * (1.0 - np.exp(-b * t)) + c
 
     def initial_guess(
