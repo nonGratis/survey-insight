@@ -20,7 +20,12 @@ import streamlit as st
 from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
 from core.detection import Changepoint
-from core.forecast import ForecastError, ForecastResult, forecast_with_segmentation
+from core.forecast import (
+    ForecastError,
+    ForecastResult,
+    classify_form_type,
+    forecast_current_wave,
+)
 from core.forms_api import (
     FormsApiError,
     get_form_structure,
@@ -147,20 +152,22 @@ def _cached_forecast(
     start_idx: int,
     end_idx: int,
     horizon_until: datetime | None,
+    form_type: str,
     _timestamps: list[datetime],
 ) -> tuple[ForecastResult | None, list[Changepoint], str | None]:
-    """Кешований CP-aware прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
+    """Кешований current-wave прогноз для subset'у `_timestamps[start_idx-1:end_idx]`.
 
     Cache key: (form_id, n_responses, first_ts, last_ts, start_idx, end_idx,
-                horizon_until).
+                horizon_until, form_type).
 
-    Повертає (forecast, changepoints, error_msg). Список CP завжди
-    валідний (може бути порожній) — для рендеру маркерів на графіку
-    навіть коли модель робила fallback на повний timeline.
+    Прогноз посадки ПОТОЧНОЇ хвилі (`forecast_current_wave`): CUSUM-детектор
+    хвиль агітації + within-wave saturation fit + Mondrian-conformal CI.
+    Повертає (forecast, changepoints, error_msg); CP = старти хвиль агітації
+    (окрім першої) для маркерів на графіку.
     """
     timeline = build_timeline_from_timestamps(_timestamps)
     try:
-        fc, cps = forecast_with_segmentation(timeline, horizon_until=horizon_until)
+        fc, cps = forecast_current_wave(timeline, form_type=form_type, horizon_until=horizon_until)
         return fc, cps, None
     except ForecastError as exc:
         return None, [], str(exc)
@@ -249,6 +256,7 @@ with tab_overview:
                 start_idx=start_idx,
                 end_idx=end_idx,
                 horizon_until=horizon_until,
+                form_type=classify_form_type(form_title),
                 _timestamps=subset_timestamps,
             )
             # Subset → global coordinate shift.
@@ -257,20 +265,24 @@ with tab_overview:
         else:
             forecast, changepoints, forecast_error = None, [], None
 
-        # Рядок 1: BANs — "Зараз" і "Прогноз".
+        # Рядок 1: BANs — "Зараз" і "Прогноз (ця хвиля)".
         ban_cols = st.columns(2)
         current = int(timeline.cumulative.iloc[-1])
         ban_cols[0].metric("Зараз", current)
         if forecast is not None:
             ci_half = (forecast.final_ci[1] - forecast.final_ci[0]) // 2
             ban_cols[1].metric(
-                "Прогноз",
+                "Прогноз (ця хвиля)",
                 forecast.final_estimate,
                 delta=f"±{ci_half}",
                 delta_color="off",
+                help=(
+                    "Скільки набере ПОТОЧНА хвиля, якщо без нової агітації. "
+                    "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
+                ),
             )
         else:
-            ban_cols[1].metric("Прогноз", "—")
+            ban_cols[1].metric("Прогноз (ця хвиля)", "—")
 
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
         fig = plot_timeline_with_forecast(
@@ -306,10 +318,10 @@ with tab_overview:
         if forecast is not None:
             horizon_end = forecast.future_dates[-1].date()
             st.caption(
-                f"Прогноз: {forecast.model} (AICc={forecast.aicc:.1f}) · "
-                f"горизонт до {horizon_end:%d.%m.%Y} (25% тривалості) · "
+                f"Прогноз поточної хвилі (без нової агітації): {forecast.model} · "
+                f"горизонт посадки до {horizon_end:%d.%m.%Y} · "
                 f"95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
-                f"RMSE={forecast.rmse:.2f} · R²={forecast.r_squared:.3f}"
+                f"R²={forecast.r_squared:.3f}"
                 f"{cp_suffix}{window_suffix}"
             )
         elif forecast_error:
