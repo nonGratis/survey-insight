@@ -86,18 +86,18 @@ def _delta_method_ci(
 
     y_pred = np.asarray(model.predict(t_future, *params_arr), dtype=float)
 
-    # Numerical Jacobian: J[i, j] = d y(t_i) / d theta_j.
-    J = np.zeros((len(t_future), n_params))
+    # Numerical Jacobian: jac[i, j] = d y(t_i) / d theta_j.
+    jac = np.zeros((len(t_future), n_params))
     for j in range(n_params):
         d = np.zeros(n_params)
         # Relative step для робастності навіть на параметрах різного scale.
         d[j] = step * max(1.0, abs(params_arr[j]))
         y_plus = np.asarray(model.predict(t_future, *(params_arr + d)), dtype=float)
         y_minus = np.asarray(model.predict(t_future, *(params_arr - d)), dtype=float)
-        J[:, j] = (y_plus - y_minus) / (2.0 * d[j])
+        jac[:, j] = (y_plus - y_minus) / (2.0 * d[j])
 
     # var(y(t)) = J pcov J^T (per-row).
-    var_y = np.einsum("ij,jk,ik->i", J, pcov, J)
+    var_y = np.einsum("ij,jk,ik->i", jac, pcov, jac)
     var_y = np.maximum(var_y, 0.0)
     se_y = np.sqrt(var_y)
 

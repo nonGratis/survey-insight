@@ -39,10 +39,10 @@ def _suspect_test_responses(ts: list) -> bool:
     later_med = np.median(gaps[3:]) if len(gaps) > 3 else np.median(gaps)
     if later_med <= 0:
         return False
-    for k in range(min(3, len(gaps))):
-        if gaps[k] > 20 * later_med and gaps[k] > 3600:
-            return True
-    return False
+    return any(
+        gaps[k] > 20 * later_med and gaps[k] > 3600
+        for k in range(min(3, len(gaps)))
+    )
 
 
 def _build_form_card(fid: str, ts_list: list, title: str, form_type: str, shape: str) -> str:
@@ -126,18 +126,18 @@ def main() -> None:
     ftmap = {}
     if form_types_csv.exists():
         ft = pd.read_csv(form_types_csv)
-        ftmap = dict(zip(ft["form_id"], ft["form_type"]))
+        ftmap = dict(zip(ft["form_id"], ft["form_type"], strict=False))
 
     shmap = {}
     if shapes_csv.exists():
         sh = pd.read_csv(shapes_csv)
-        shmap = dict(zip(sh["form_id"], sh["shape"]))
+        shmap = dict(zip(sh["form_id"], sh["shape"], strict=False))
 
     # Sort by N descending so big forms come first
     form_sizes = df.groupby("FORM_ID").size().sort_values(ascending=False)
 
     cards = []
-    for fid, n in form_sizes.items():
+    for fid, _n in form_sizes.items():
         ts_list = df[df["FORM_ID"] == fid]["TIMESTAMP"].sort_values().tolist()
         title = catalog.get(fid, "")
         ftype = ftmap.get(fid, "unknown")

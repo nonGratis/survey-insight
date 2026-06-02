@@ -14,7 +14,7 @@ class StratifiedShuffleSplit:
         self.test_size = test_size
         self.rs = random_state
 
-    def split(self, X, y):
+    def split(self, x, y):
         rng = np.random.RandomState(self.rs)
         y = np.array(y)
         classes = np.unique(y)
@@ -28,9 +28,9 @@ class StratifiedShuffleSplit:
         yield np.array(train_idx), np.array(test_idx)
 
 
-from core.forecast import forecast_responses
-from core.forecast.wave_estimator import estimate_wave
-from core.timeline import build_timeline_from_timestamps
+from core.forecast import forecast_responses  # noqa: E402
+from core.forecast.wave_estimator import estimate_wave  # noqa: E402
+from core.timeline import build_timeline_from_timestamps  # noqa: E402
 
 np.random.seed(42)
 HORIZON_H = 2.0

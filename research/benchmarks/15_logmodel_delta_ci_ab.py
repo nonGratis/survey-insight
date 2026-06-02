@@ -127,20 +127,20 @@ def _fit_log_with_delta_ci(
     r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
     mse = ss_res / max(1, n_train - n_params)
 
-    # Delta-method: numerical Jacobian J[i, j] = d y(t_i) / d theta_j.
+    # Delta-method: numerical Jacobian jac[i, j] = d y(t_i) / d theta_j.
     step = 1e-6
-    J = np.zeros((len(t_future), n_params))
+    jac = np.zeros((len(t_future), n_params))
     for j in range(n_params):
         d = np.zeros(n_params)
         d[j] = step
         y_plus = _log_predict(t_future, *(popt + d))
         y_minus = _log_predict(t_future, *(popt - d))
-        J[:, j] = (y_plus - y_minus) / (2.0 * step)
+        jac[:, j] = (y_plus - y_minus) / (2.0 * step)
 
     # var(y(t)) = J(t) · pcov · J(t)^T (для кожного t — діагональ).
     # pcov scipy curve_fit (absolute_sigma=False default) уже включає mse,
     # тому var_y вже у правильних одиницях.
-    var_y = np.einsum("ij,jk,ik->i", J, pcov, J)
+    var_y = np.einsum("ij,jk,ik->i", jac, pcov, jac)
     var_y = np.maximum(var_y, 0.0)
     se_y = np.sqrt(var_y)
 

@@ -202,11 +202,11 @@ def main():
     ftmap = {}
     if form_types_csv.exists():
         ft = pd.read_csv(form_types_csv)
-        ftmap = dict(zip(ft["form_id"], ft["form_type"]))
+        ftmap = dict(zip(ft["form_id"], ft["form_type"], strict=False))
     shmap = {}
     if shapes_csv.exists():
         sh = pd.read_csv(shapes_csv)
-        shmap = dict(zip(sh["form_id"], sh["shape"]))
+        shmap = dict(zip(sh["form_id"], sh["shape"], strict=False))
 
     form_sizes = df.groupby("FORM_ID").size().sort_values(ascending=False)
     forms_data = []

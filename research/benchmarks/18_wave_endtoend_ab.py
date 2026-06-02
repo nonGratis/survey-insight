@@ -281,8 +281,8 @@ def main():
     print("Evaluating on HOLDOUT...")
     ho_rows = run_split(holdout_ids, "holdout")
 
-    TR = pd.DataFrame([{f.name: getattr(r, f.name) for f in fields(r)} for r in train_rows])
-    R = pd.DataFrame([{f.name: getattr(r, f.name) for f in fields(r)} for r in ho_rows])
+    train_df = pd.DataFrame([{f.name: getattr(r, f.name) for f in fields(r)} for r in train_rows])
+    holdout_df = pd.DataFrame([{f.name: getattr(r, f.name) for f in fields(r)} for r in ho_rows])
 
     # Conformal q from TRAIN (normalized residual on cumulative).
     def conformal_q(rowset: pd.DataFrame, col: str, half_col: str) -> tuple[float, dict]:
@@ -292,22 +292,22 @@ def main():
         q_t = ok.groupby("ftype")["nr"].quantile(0.95).to_dict()
         return q_g, q_t
 
-    qB_g, qB_t = conformal_q(TR, "b_detected", "b_half")
-    qC_g, qC_t = conformal_q(TR, "c_oracle", "c_half")
-    print(f"Conformal q (B detected): global={qB_g:.2f}")
-    print(f"Conformal q (C oracle):   global={qC_g:.2f}")
+    q_b_g, q_b_t = conformal_q(train_df, "b_detected", "b_half")
+    q_c_g, q_c_t = conformal_q(train_df, "c_oracle", "c_half")
+    print(f"Conformal q (B detected): global={q_b_g:.2f}")
+    print(f"Conformal q (C oracle):   global={q_c_g:.2f}")
 
     # ---------- metrics ----------
     out = []
-    out.append(f"Train: {len(train_ids)} forms / {len(TR)} points")
-    out.append(f"Holdout: {len(holdout_ids)} forms / {len(R)} points")
-    out.append(f"Conformal q_0.95: B(detected)={qB_g:.2f}  C(oracle)={qC_g:.2f}")
+    out.append(f"Train: {len(train_ids)} forms / {len(train_df)} points")
+    out.append(f"Holdout: {len(holdout_ids)} forms / {len(holdout_df)} points")
+    out.append(f"Conformal q_0.95: B(detected)={q_b_g:.2f}  C(oracle)={q_c_g:.2f}")
     out.append("")
 
     methods = {
         "A prod": ("a_prod", "a_lo", "a_hi", None, None),
-        "B wave_detected": ("b_detected", "b_lo", "b_hi", "b_half", (qB_g, qB_t)),
-        "C wave_oracle": ("c_oracle", "c_lo", "c_hi", "c_half", (qC_g, qC_t)),
+        "B wave_detected": ("b_detected", "b_lo", "b_hi", "b_half", (q_b_g, q_b_t)),
+        "C wave_oracle": ("c_oracle", "c_lo", "c_hi", "c_half", (q_c_g, q_c_t)),
         "D naive_recent": ("d_naive_recent", None, None, None, None),
         "E naive_overall": ("e_naive_overall", None, None, None, None),
     }
@@ -317,17 +317,23 @@ def main():
     out.append(hdr)
     metric_store = {}
     for name, (col, lo_c, hi_c, half_c, q) in methods.items():
-        ok = R[R[col] >= 0].copy()
+        ok = holdout_df[holdout_df[col] >= 0].copy()
         if not len(ok):
             continue
         ape = (ok[col] - ok["truth_cum"]).abs() / ok["truth_cum"].clip(lower=1)
-        smape = ok.apply(lambda r: _smape(r[col] - r["n_train"], r["truth_inc"]), axis=1)
+        smape = ok.apply(
+            lambda r, col=col: _smape(r[col] - r["n_train"], r["truth_inc"]),
+            axis=1,
+        )
         bias = (ok[col] - ok["truth_cum"]).median()
         cov = cov_cf = wink = width = np.nan
         if lo_c and hi_c:
             hit = (ok[lo_c] <= ok["truth_cum"]) & (ok["truth_cum"] <= ok[hi_c])
             cov = hit.mean() * 100
-            wink = ok.apply(lambda r: _winkler(r["truth_cum"], r[lo_c], r[hi_c]), axis=1).median()
+            wink = ok.apply(
+                lambda r, lo_c=lo_c, hi_c=hi_c: _winkler(r["truth_cum"], r[lo_c], r[hi_c]),
+                axis=1,
+            ).median()
             width = (ok[hi_c] - ok[lo_c]).median()
         if half_c and q:
             q_g, q_t = q
@@ -349,7 +355,7 @@ def main():
         )
 
     # Detection penalty
-    both = R[(R["b_detected"] >= 0) & (R["c_oracle"] >= 0)]
+    both = holdout_df[(holdout_df["b_detected"] >= 0) & (holdout_df["c_oracle"] >= 0)]
     if len(both):
         b_ape = ((both["b_detected"] - both["truth_cum"]).abs() / both["truth_cum"].clip(lower=1)).median()
         c_ape = ((both["c_oracle"] - both["truth_cum"]).abs() / both["truth_cum"].clip(lower=1)).median()
@@ -364,7 +370,7 @@ def main():
     out.append("=== SIGNIFICANCE (Wilcoxon signed-rank, paired cum APE) ===")
 
     def paired_wilcoxon(c1: str, c2: str, label: str):
-        sub = R[(R[c1] >= 0) & (R[c2] >= 0)]
+        sub = holdout_df[(holdout_df[c1] >= 0) & (holdout_df[c2] >= 0)]
         if len(sub) < 10:
             out.append(f"  {label}: n<10, skip")
             return
@@ -394,11 +400,11 @@ def main():
     out.append("")
     out.append("=== PER TYPE (cum MAPE, holdout) ===")
     out.append(f"{'ftype':<22}{'A prod':>9}{'B det':>9}{'C orac':>9}{'D naive':>9}{'n':>6}")
-    for ft, g in R.groupby("ftype"):
+    for ft, g in holdout_df.groupby("ftype"):
         if len(g) < 5:
             continue
 
-        def m(col):
+        def m(col, g=g):
             ok = g[g[col] >= 0]
             if not len(ok):
                 return "  -"
@@ -413,9 +419,9 @@ def main():
     out.append("")
     out.append("=== PER HORIZON (cum MAPE, holdout) ===")
     out.append(f"{'horizon_h':<12}{'A prod':>9}{'B det':>9}{'C orac':>9}{'D naive':>9}{'n':>6}")
-    for h, g in R.groupby("horizon_h"):
+    for h, g in holdout_df.groupby("horizon_h"):
 
-        def m(col):
+        def m(col, g=g):
             ok = g[g[col] >= 0]
             if not len(ok):
                 return "  -"
@@ -432,7 +438,7 @@ def main():
 
     fig_dir = REPO / "research" / "reports" / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
-    R.to_csv(fig_dir / "18_endtoend_points.csv", index=False)
+    holdout_df.to_csv(fig_dir / "18_endtoend_points.csv", index=False)
     (REPO / "research" / "reports" / "18_wave_endtoend.md").write_text(
         f"# 18 — Wave estimator end-to-end (no oracle)\n\n```\n{report}\n```\n",
         encoding="utf-8",
