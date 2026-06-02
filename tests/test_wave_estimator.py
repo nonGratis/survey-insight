@@ -94,3 +94,21 @@ def test_estimate_final_all_waves_seen_no_future():
 def test_estimate_wave_accepts_pandas_series():
     wf = estimate_wave(pd.Series(DECAY_WAVE), horizon_h=2.0)
     assert wf.point >= len(DECAY_WAVE)
+
+
+def test_estimate_wave_ci_respects_cap_policy():
+    # Conformal CI (benchmark 19_ winner) caps half-width at point
+    # (cap_width max_relative=2.0). Interval must never be absurd:
+    # ci_upper <= 2*point (+ rounding tolerance), at every horizon.
+    for h in (0.5, 1.0, 2.0, 6.0, 24.0):
+        wf = estimate_wave(DECAY_WAVE, horizon_h=h, form_type="survey")
+        assert wf.ci_upper <= 2 * wf.point + 2, (
+            f"absurd upper at h={h}: {wf.ci_upper} vs point {wf.point}"
+        )
+        assert wf.ci_lower >= len(DECAY_WAVE)
+
+
+def test_estimate_wave_ci_widens_vs_degenerate():
+    # Calibrated conformal must produce a non-degenerate interval (not a point).
+    wf = estimate_wave(DECAY_WAVE, horizon_h=6.0, form_type="survey")
+    assert wf.ci_upper > wf.ci_lower
