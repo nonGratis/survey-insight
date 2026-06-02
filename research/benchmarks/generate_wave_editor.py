@@ -10,8 +10,10 @@
     .venv/Scripts/python.exe research/benchmarks/generate_wave_editor.py
 """
 from __future__ import annotations
+
 import json
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks

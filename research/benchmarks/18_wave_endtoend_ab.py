@@ -437,7 +437,7 @@ def main():
         f"# 18 — Wave estimator end-to-end (no oracle)\n\n```\n{report}\n```\n",
         encoding="utf-8",
     )
-    print(f"\nSaved: figures/18_endtoend_points.csv + 18_wave_endtoend.md")
+    print("\nSaved: figures/18_endtoend_points.csv + 18_wave_endtoend.md")
 
 
 if __name__ == "__main__":

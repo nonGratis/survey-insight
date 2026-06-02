@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from core.forecast.wave_detector import (
     WaveStart,
