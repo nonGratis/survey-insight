@@ -135,5 +135,24 @@
       "detector_min_silence_h": 24,
       "detector_mult": 15
     }
+  },
+  "ci_calibration": {
+    "schema": 1,
+    "method": "mondrian_capped",
+    "confidence": 0.95,
+    "bucket_var": "within_wave_point",
+    "bucket_edges": [
+      9.0,
+      20.0
+    ],
+    "bucket_q": [
+      6.0,
+      6.0,
+      6.0
+    ],
+    "cap_max_relative": 2.0,
+    "cap_min_absolute": 10.0,
+    "n_calib": 2428,
+    "holdout_coverage": 0.855
   }
 }
