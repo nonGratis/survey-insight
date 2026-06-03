@@ -21,9 +21,11 @@ from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
 from core.detection import Changepoint
 from core.forecast import (
+    FORM_TYPES,
     ForecastError,
     ForecastResult,
     classify_form_type,
+    detect_test_responses,
     forecast_current_wave,
 )
 from core.forms_api import (
@@ -207,12 +209,11 @@ except FormsApiError as exc:
     st.error(f"Не вдалося отримати timestamps відповідей: {exc}")
     st.stop()
 
-tab_overview, tab_per_q, tab_crosstabs, tab_quality, tab_repr = st.tabs(
+tab_overview, tab_per_q, tab_crosstabs, tab_repr = st.tabs(
     [
         "📈 Огляд",
         "📊 По питаннях",
         "🔀 Крос-таби",
-        "🔍 Якість",
         "🎯 Репрезентативність",
     ]
 )
@@ -227,7 +228,10 @@ with tab_overview:
         # значення (форма оновилась), тому clamp'имо у [1, n_ts].
         _window_key = f"analysis_window_{form_id}"
         n_ts = len(timestamps)
-        default_window = (1, max(n_ts, 1))
+        # Авто-пропуск провідних тестових відповідей (слайдер стартує після
+        # них; користувач може скоригувати вручну).
+        test_skip = detect_test_responses(timestamps)
+        default_window = (test_skip + 1, max(n_ts, 1))
         start_idx, end_idx = st.session_state.get(_window_key, default_window)
         start_idx = max(1, min(int(start_idx), n_ts))
         end_idx = max(start_idx, min(int(end_idx), n_ts))
@@ -247,6 +251,18 @@ with tab_overview:
         extra_days = max(int(full_span_days * 0.25), 1)
         horizon_until = timestamps[-1] + _td(days=extra_days)
 
+        # Тип форми: авто-класифікація за назвою + ручне коригування
+        # (визначає per-type пороги детектора хвиль).
+        _auto_ft = classify_form_type(form_title)
+        _ft_idx = FORM_TYPES.index(_auto_ft) if _auto_ft in FORM_TYPES else len(FORM_TYPES) - 1
+        form_type_choice = st.selectbox(
+            "Тип форми (для детекції хвиль)",
+            options=FORM_TYPES,
+            index=_ft_idx,
+            key=f"ftype_{form_id}",
+            help="Авто-визначено за назвою форми. Скоригуй, якщо неправильно.",
+        )
+
         if subset_timestamps:
             forecast, changepoints, forecast_error = _cached_forecast(
                 _form_id=form_id,
@@ -256,7 +272,7 @@ with tab_overview:
                 start_idx=start_idx,
                 end_idx=end_idx,
                 horizon_until=horizon_until,
-                form_type=classify_form_type(form_title),
+                form_type=form_type_choice,
                 _timestamps=subset_timestamps,
             )
             # Subset → global coordinate shift.
@@ -265,8 +281,8 @@ with tab_overview:
         else:
             forecast, changepoints, forecast_error = None, [], None
 
-        # Рядок 1: BANs — "Зараз" і "Прогноз (ця хвиля)".
-        ban_cols = st.columns(2)
+        # Рядок 1: BANs — "Зараз", "Прогноз (ця хвиля)", "Стан хвилі" (порадник).
+        ban_cols = st.columns(3)
         current = int(timeline.cumulative.iloc[-1])
         ban_cols[0].metric("Зараз", current)
         if forecast is not None:
@@ -281,8 +297,30 @@ with tab_overview:
                     "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
                 ),
             )
+            # Порадник агітації: % поточної хвилі вже зібрано → коли ~вичерпано,
+            # для більшого потрібна нова агітація (рішення оператора).
+            landing = max(forecast.final_estimate, current, 1)
+            pct = min(int(round(current / landing * 100)), 100)
+            remaining = max(forecast.final_estimate - current, 0)
+            if remaining <= 0:
+                hint, label = "хвиля вичерпана", "потрібна агітація"
+            elif pct >= 80:
+                hint, label = f"ще ~{remaining}", "майже вичерпана"
+            else:
+                hint, label = f"ще ~{remaining}", "набирає"
+            ban_cols[2].metric(
+                "Стан хвилі",
+                f"{pct}% · {label}",
+                delta=hint,
+                delta_color="off",
+                help=(
+                    "Скільки поточної хвилі вже зібрано. Близько 100% → ця хвиля "
+                    "майже вичерпана; для більшого запусти нову агітацію."
+                ),
+            )
         else:
             ban_cols[1].metric("Прогноз (ця хвиля)", "—")
+            ban_cols[2].metric("Стан хвилі", "—")
 
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
         fig = plot_timeline_with_forecast(
@@ -337,9 +375,6 @@ with tab_per_q:
 
 with tab_crosstabs:
     st.info("Скоро у PR5: крос-табуляції питання × питання + χ²-тест.")
-
-with tab_quality:
-    st.info("Скоро у PR6: час заповнення, drop-out rate, виявлення підозрілих патернів відповідей.")
 
 with tab_repr:
     st.info(
