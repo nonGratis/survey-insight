@@ -156,6 +156,15 @@ def _stratified_split(forms: pd.DataFrame) -> tuple[set, set]:
 
 
 def main():
+    # Ідемпотентність: residual нормуємо на RAW delta-півширину (cap, без
+    # conformal). Інакше estimate_wave застосував би вже-завантажений q →
+    # калібрування залежало б від попереднього стану (не відтворювано).
+    import core.forecast.wave_estimator as _we
+
+    base = json.loads(PRIORS_PATH.read_text(encoding="utf-8"))
+    base.pop("ci_calibration", None)
+    _we._PRIORS_CACHE = base  # estimate_wave тепер дає raw-capped CI
+
     ann = pd.read_csv(REPO / "data" / "wave_annotations.csv")
     df = pd.read_csv(REPO / "data" / "Form Timestamp Collection.csv")
     df["TIMESTAMP"] = pd.to_datetime(df["TIMESTAMP"])
