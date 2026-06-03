@@ -186,6 +186,9 @@ CATEGORY_PATTERNS: list[tuple[str, list[str]]] = [
     ("survey", SURVEY_PATTERNS),
 ]
 
+# Усі категорії (для ручного вибору в UI). "other" — fallback.
+FORM_TYPES: list[str] = [cat for cat, _ in CATEGORY_PATTERNS] + ["other"]
+
 
 def classify_form_type(title: str, short_name: str = "", description: str = "") -> str:
     """Класифікувати форму за keyword-rules. Повертає категорію (або 'other').
