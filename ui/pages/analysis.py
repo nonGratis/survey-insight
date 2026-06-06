@@ -21,7 +21,6 @@ from core.auth import credentials_from_dict
 from core.charts_timeline import plot_timeline_with_forecast
 from core.detection import Changepoint
 from core.forecast import (
-    FORM_TYPES,
     ForecastError,
     ForecastResult,
     classify_form_type,
@@ -251,17 +250,9 @@ with tab_overview:
         extra_days = max(int(full_span_days * 0.25), 1)
         horizon_until = timestamps[-1] + _td(days=extra_days)
 
-        # Тип форми: авто-класифікація за назвою + ручне коригування
-        # (визначає per-type пороги детектора хвиль).
-        _auto_ft = classify_form_type(form_title)
-        _ft_idx = FORM_TYPES.index(_auto_ft) if _auto_ft in FORM_TYPES else len(FORM_TYPES) - 1
-        form_type_choice = st.selectbox(
-            "Тип форми (для детекції хвиль)",
-            options=FORM_TYPES,
-            index=_ft_idx,
-            key=f"ftype_{form_id}",
-            help="Авто-визначено за назвою форми. Скоригуй, якщо неправильно.",
-        )
+        # Тип форми визначається автоматично за назвою (per-type пороги
+        # детектора хвиль). Ручний вибір прибрано — алгоритм обирає краще.
+        form_type_choice = classify_form_type(form_title)
 
         if subset_timestamps:
             forecast, changepoints, forecast_error = _cached_forecast(
@@ -297,30 +288,36 @@ with tab_overview:
                     "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
                 ),
             )
-            # Порадник агітації: % поточної хвилі вже зібрано → коли ~вичерпано,
-            # для більшого потрібна нова агітація (рішення оператора).
-            landing = max(forecast.final_estimate, current, 1)
-            pct = min(int(round(current / landing * 100)), 100)
-            remaining = max(forecast.final_estimate - current, 0)
-            if remaining <= 0:
-                hint, label = "хвиля вичерпана", "потрібна агітація"
-            elif pct >= 80:
-                hint, label = f"ще ~{remaining}", "майже вичерпана"
-            else:
-                hint, label = f"ще ~{remaining}", "набирає"
+            # Порадник: % посадки, досягнутий на КІНЕЦЬ ВІКНА прогнозу
+            # (не глобальний current — інакше при звуженні вікна завжди 100%).
+            wave_now = end_idx  # к-сть відповідей на кінець вікна (глобальна нумерація)
+            landing = max(forecast.final_estimate, wave_now, 1)
+            pct = min(int(round(wave_now / landing * 100)), 100)
+            status = "на плато" if pct >= 100 else ("майже" if pct >= 80 else "набирає")
             ban_cols[2].metric(
                 "Стан хвилі",
-                f"{pct}% · {label}",
-                delta=hint,
+                f"{pct}%",
+                delta=status,
                 delta_color="off",
                 help=(
-                    "Скільки поточної хвилі вже зібрано. Близько 100% → ця хвиля "
-                    "майже вичерпана; для більшого запусти нову агітацію."
+                    "Скільки прогнозованої посадки хвилі вже зібрано (на кінець "
+                    "вікна). 100% «на плато» → модель вважає цю хвилю сталою; для "
+                    "більшого потрібна нова агітація (майбутні хвилі тут не враховані)."
                 ),
             )
         else:
             ban_cols[1].metric("Прогноз (ця хвиля)", "—")
             ban_cols[2].metric("Стан хвилі", "—")
+
+        # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
+        _last = timestamps[-1]
+        _ago_s = max((datetime.now(tz=_last.tzinfo) - _last).total_seconds(), 0)
+        if _ago_s < 3600:
+            _fresh = f"{int(_ago_s // 60)} хв тому"
+        elif _ago_s < 86400:
+            _fresh = f"{int(_ago_s // 3600)} год тому"
+        else:
+            _fresh = f"{int(_ago_s // 86400)} дн тому"
 
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
         fig = plot_timeline_with_forecast(
@@ -329,7 +326,38 @@ with tab_overview:
             excluded_mask=excluded_mask,
             changepoints=changepoints,
         )
+        fig.add_annotation(
+            text=f"Оновлено {_fresh}",
+            xref="paper",
+            yref="paper",
+            x=1.0,
+            y=0.0,
+            xanchor="right",
+            yanchor="bottom",
+            showarrow=False,
+            font=dict(color="#888", size=10),
+        )
         st.plotly_chart(fig, width="stretch")
+
+        # Рядок 3: маленька іконка-завантаження прогнозу у CSV.
+        if forecast is not None:
+            _rows = ["date,forecast,ci_lower,ci_upper"]
+            for _d, _c, _lo, _hi in zip(
+                forecast.future_dates,
+                forecast.future_cum,
+                forecast.ci_lower,
+                forecast.ci_upper,
+                strict=False,
+            ):
+                _rows.append(f"{_d.isoformat()},{int(_c)},{int(_lo)},{int(_hi)}")
+            st.download_button(
+                ":material/download:",
+                data="\n".join(_rows),
+                file_name=f"forecast_{form_id}.csv",
+                mime="text/csv",
+                help="Завантажити прогнозну криву (дата, прогноз, нижня/верхня межа CI) у CSV",
+                width="content",
+            )
 
         # Рядок 4: range-slider — обирає вікно для фіту прогнозу. Full-width
         # під графіком; рендериться завжди (а не лише при n_ts ≥ 2), щоб
@@ -355,9 +383,18 @@ with tab_overview:
         cp_suffix = f" · виявлено хвиль агітації: {len(changepoints)}" if changepoints else ""
         if forecast is not None:
             horizon_end = forecast.future_dates[-1].date()
+            _last_obs = timestamps[end_idx - 1]
+            _ahead_h = (
+                forecast.future_dates[-1].to_pydatetime() - _last_obs
+            ).total_seconds() / 3600.0
+            _proj = (
+                f"~{int(round(_ahead_h))} год вперед"
+                if _ahead_h < 48
+                else f"~{int(round(_ahead_h / 24))} дн вперед"
+            )
             st.caption(
                 f"Прогноз поточної хвилі (без нової агітації): {forecast.model} · "
-                f"горизонт посадки до {horizon_end:%d.%m.%Y} · "
+                f"проєкція {_proj} (до {horizon_end:%d.%m.%Y}, 3× тривалості хвилі) · "
                 f"95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
                 f"R²={forecast.r_squared:.3f}"
                 f"{cp_suffix}{window_suffix}"
