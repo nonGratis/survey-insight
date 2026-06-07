@@ -32,11 +32,11 @@ from core.forms_api import (
     get_form_structure,
     get_linked_sheet_id,
     list_response_timestamps,
-    list_user_forms,
 )
 from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
 from ui.components.auth_widget import ensure_api_access
+from ui.components.form_picker import render_form_picker
 
 log = get_logger(__name__)
 
@@ -47,66 +47,11 @@ if not ensure_api_access():
 
 creds = credentials_from_dict(st.session_state["credentials"])
 
-# Selectbox-driven form picker. URL `?form_id=` (з Каталог-кнопки 📊) і
-# `preselected_form_id` (legacy) використовуємо ЛИШЕ як default-індекс —
-# завжди показуємо selectbox зі списку всіх форм, бо cross-tab auth поки
-# не зберігається і LinkColumn у Каталозі відкриває новий tab з порожнім
-# session_state.
-
-
-@st.cache_data(ttl=120, show_spinner="Завантажую список форм…")
-def _cached_forms(_creds_token: str) -> list[dict]:
-    """Список форм користувача, кешований на 2 хв за access_token."""
-    return list_user_forms(creds)
-
-
-try:
-    forms = _cached_forms(creds.token or "")
-except FormsApiError as exc:
-    log.exception("ui_analysis_list_forms_failed", extra={"status": exc.status})
-    st.error(f"Не вдалося отримати список форм: {exc}")
-    st.stop()
-
-if not forms:
-    st.info(
-        "На цьому акаунті не знайдено жодної Google Form. "
-        "Створи форму в google.com/forms і повернись сюди."
-    )
-    st.stop()
-
-# Preselect із URL (з Каталог-кнопки) або session_state (legacy fallback).
-preselected_id = st.query_params.get("form_id") or st.session_state.get("preselected_form_id")
-default_idx = 0
-if preselected_id:
-    matched = next((i for i, f in enumerate(forms) if f["id"] == preselected_id), None)
-    if matched is not None:
-        default_idx = matched
-    # Прибираємо обидва preselect-джерела, щоб юзер міг вільно міняти selectbox
-    # без "залипання" URL/session_state при наступному rerun.
-    if "form_id" in st.query_params:
-        del st.query_params["form_id"]
-    st.session_state.pop("preselected_form_id", None)
-
-form_col, refresh_col = st.columns([12, 1], vertical_alignment="bottom")
-with form_col:
-    choice = st.selectbox(
-        "Форма для аналізу",
-        options=forms,
-        format_func=lambda f: f["name"],
-        index=default_idx,
-    )
-with refresh_col:
-    if st.button(
-        ":material/refresh:",
-        key="refresh_page",
-        width="content",
-        help="Скинути кеш і перечитати свіжі дані з Forms API",
-    ):
-        st.cache_data.clear()
-        st.rerun()
+# Форма обирається ГЛОБАЛЬНО (спільний sidebar-пікер) — один раз на всі
+# сторінки. ?form_id= із Каталогу підхоплюється всередині пікера.
+choice = render_form_picker(creds)
 if not choice:
     st.stop()
-
 form_id = choice["id"]
 
 
@@ -208,16 +153,9 @@ except FormsApiError as exc:
     st.error(f"Не вдалося отримати timestamps відповідей: {exc}")
     st.stop()
 
-tab_overview, tab_per_q, tab_crosstabs, tab_repr = st.tabs(
-    [
-        "📈 Огляд",
-        "📊 По питаннях",
-        "🔀 Крос-таби",
-        "🎯 Репрезентативність",
-    ]
-)
-
-with tab_overview:
+# Ця сторінка — лише ДИНАМІКА (прогноз надходження). Якість питань і аналіз
+# відповідей живуть на сторінці «Питання». Дизайн-аналіз форми — там само.
+with st.container():
     timeline = build_timeline_from_timestamps(timestamps)
 
     if timeline.cumulative.empty:
@@ -406,15 +344,3 @@ with tab_overview:
             if "Замало точок" in forecast_error and n_used < n_ts:
                 hint = f" Розширте вікно — повний набір має {n_ts} відповідей."
             st.caption(f"Прогноз недоступний: {forecast_error}{hint}{window_suffix}")
-
-with tab_per_q:
-    st.info("Скоро у PR4: дескриптивна статистика по кожному питанню.")
-
-with tab_crosstabs:
-    st.info("Скоро у PR5: крос-табуляції питання × питання + χ²-тест.")
-
-with tab_repr:
-    st.info(
-        "Скоро у PR7: постстратифікаційне зважування, DEFF Кіша, метрика "
-        "«ще треба X відповідей з страти Y»."
-    )
