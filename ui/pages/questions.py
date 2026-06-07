@@ -67,21 +67,41 @@ def _sort_distribution_items(
     distribution: dict[str, int],
     sort_mode: str,
     form_options: list[str],
+    keep_label_last: bool,
+    label_last_value: str,
 ) -> list[tuple[str, int]]:
     """Сортувати розподіл за величиною, алфавітом або порядком у формі."""
     items = list(distribution.items())
+
+    def _label_last_flag(value: str) -> int:
+        return 1 if keep_label_last and value == label_last_value else 0
+
     if sort_mode == "Алфавіт":
-        return sorted(items, key=lambda kv: _normalize_text(kv[0]))
+        return sorted(
+            items,
+            key=lambda kv: (
+                _label_last_flag(kv[0]),
+                _normalize_text(kv[0]),
+            ),
+        )
     if sort_mode == "Порядок у формі":
         order_map = {_normalize_text(option): index for index, option in enumerate(form_options)}
         return sorted(
             items,
             key=lambda kv: (
+                _label_last_flag(kv[0]),
                 order_map.get(_normalize_text(kv[0]), len(order_map)),
                 _normalize_text(kv[0]),
             ),
         )
-    return sorted(items, key=lambda kv: (-kv[1], _normalize_text(kv[0])))
+    return sorted(
+        items,
+        key=lambda kv: (
+            _label_last_flag(kv[0]),
+            -kv[1],
+            _normalize_text(kv[0]),
+        ),
+    )
 
 st.title("Питання")
 
@@ -163,6 +183,10 @@ with tab_responses:
                 value=False,
             )
             anonymized_label = st.text_input("Мітка для інших", value="Інше*")
+            keep_other_last = st.checkbox(
+                'Тримати "Інше*" в кінці графіка',
+                value=True,
+            )
         sort_mode = st.selectbox(
             "Сортування",
             options=["За величиною", "Алфавіт", "Порядок у формі"],
@@ -191,6 +215,8 @@ with tab_responses:
                         chart_distribution,
                         sort_mode,
                         options_by_id.get(qid, []),
+                        keep_other_last,
+                        anonymized_label,
                     )[:30]
                     top_items = sorted_items
                     chart_df = pd.DataFrame(top_items, columns=["Відповідь", "Кількість"])
