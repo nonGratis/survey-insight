@@ -187,6 +187,10 @@ with tab_responses:
                 'Тримати "Інше*" в кінці графіка',
                 value=True,
             )
+            hide_only_other_questions = st.checkbox(
+                'Прибирати питання, де лишилось лише "Інше*"',
+                value=False,
+            )
         sort_mode = st.selectbox(
             "Сортування",
             options=["За величиною", "Алфавіт", "Порядок у формі"],
@@ -211,6 +215,8 @@ with tab_responses:
                             options_by_id.get(qid, []),
                             anonymized_label,
                         )
+                    if hide_only_other_questions and set(chart_distribution) == {anonymized_label}:
+                        continue
                     sorted_items = _sort_distribution_items(
                         chart_distribution,
                         sort_mode,
