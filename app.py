@@ -72,7 +72,7 @@ pages = [
     ),
     st.Page(
         "ui/pages/questions.py",
-        title="Питання",
+        title="Запитання",
         icon=":material/quiz:",
         url_path="questions",
     ),
