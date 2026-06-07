@@ -72,8 +72,17 @@ def _records(ann, df):
                     wf = estimate_wave(obs.tolist(), horizon_h=WINDOW_H, form_type=ftype)
                 except ForecastError:
                     continue
-                rows.append({"fid": fid, "ftype": ftype, "n": n, "span_h": span_h,
-                             "fit": wf.point, "truth": truth, "mat": mat})
+                rows.append(
+                    {
+                        "fid": fid,
+                        "ftype": ftype,
+                        "n": n,
+                        "span_h": span_h,
+                        "fit": wf.point,
+                        "truth": truth,
+                        "mat": mat,
+                    }
+                )
     return pd.DataFrame(rows)
 
 

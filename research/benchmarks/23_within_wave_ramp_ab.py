@@ -113,8 +113,16 @@ def _collect(ann, df, ids):
                 h_ws = (he - ws).total_seconds() / 3600.0
                 truth = int((ts <= he).sum())
                 out.append(
-                    {"ftype": ftype, "n": n, "span_h": span_h, "pre": pre,
-                     "h_ws": h_ws, "horizon": h, "truth": truth, "cum": cum}
+                    {
+                        "ftype": ftype,
+                        "n": n,
+                        "span_h": span_h,
+                        "pre": pre,
+                        "h_ws": h_ws,
+                        "horizon": h,
+                        "truth": truth,
+                        "cum": cum,
+                    }
                 )
     return out
 
@@ -206,8 +214,12 @@ def main():
         ba = [abs(predict(r, best_np, "blend") - r["truth"]) / max(r["truth"], 1) for r in sub]
         print(f"{h:>8}{np.median(fa) * 100:>7.0f}%{np.median(ba) * 100:>7.0f}%{len(sub):>7}")
 
-    fa = np.array([abs(predict(r, best_np, "fit") - r["truth"]) / max(r["truth"], 1) for r in ho_eval])
-    ba = np.array([abs(predict(r, best_np, "blend") - r["truth"]) / max(r["truth"], 1) for r in ho_eval])
+    fa = np.array(
+        [abs(predict(r, best_np, "fit") - r["truth"]) / max(r["truth"], 1) for r in ho_eval]
+    )
+    ba = np.array(
+        [abs(predict(r, best_np, "blend") - r["truth"]) / max(r["truth"], 1) for r in ho_eval]
+    )
     stat, p = wilcoxon(fa, ba)
     win = "ramp" if np.median(ba) < np.median(fa) else "fit"
     print(

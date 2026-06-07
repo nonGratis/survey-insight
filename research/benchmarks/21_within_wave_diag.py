@@ -94,11 +94,15 @@ def main():
     for ft, g in res.groupby("ftype"):
         if len(g) < 8:
             continue
-        print(f"  {ft:<22} wave {g.ape.median() * 100:>3.0f}%  naive {g.ape_naive.median() * 100:>3.0f}%  (n={len(g)})")
+        print(
+            f"  {ft:<22} wave {g.ape.median() * 100:>3.0f}%  naive {g.ape_naive.median() * 100:>3.0f}%  (n={len(g)})"
+        )
 
     print("\n=== model chosen (within-wave) ===")
     print(res["model"].value_counts().to_string())
-    print(f"\nGLOBAL within-wave MAPE: wave={res.ape.median() * 100:.1f}%  naive={res.ape_naive.median() * 100:.1f}%")
+    print(
+        f"\nGLOBAL within-wave MAPE: wave={res.ape.median() * 100:.1f}%  naive={res.ape_naive.median() * 100:.1f}%"
+    )
 
 
 if __name__ == "__main__":

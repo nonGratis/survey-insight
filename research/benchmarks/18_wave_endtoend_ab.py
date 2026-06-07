@@ -357,8 +357,12 @@ def main():
     # Detection penalty
     both = holdout_df[(holdout_df["b_detected"] >= 0) & (holdout_df["c_oracle"] >= 0)]
     if len(both):
-        b_ape = ((both["b_detected"] - both["truth_cum"]).abs() / both["truth_cum"].clip(lower=1)).median()
-        c_ape = ((both["c_oracle"] - both["truth_cum"]).abs() / both["truth_cum"].clip(lower=1)).median()
+        b_ape = (
+            (both["b_detected"] - both["truth_cum"]).abs() / both["truth_cum"].clip(lower=1)
+        ).median()
+        c_ape = (
+            (both["c_oracle"] - both["truth_cum"]).abs() / both["truth_cum"].clip(lower=1)
+        ).median()
         out.append("")
         out.append(
             f"DETECTION PENALTY (paired n={len(both)}): "

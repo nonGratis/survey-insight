@@ -80,7 +80,8 @@ def _wave_records(ann: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
                 continue
             # maturation: fraction reached at each knot (for calibration)
             mat = {
-                f"k{kh}": int((in_wave < wt + pd.Timedelta(hours=kh)).sum()) / truth for kh in KNOTS_H
+                f"k{kh}": int((in_wave < wt + pd.Timedelta(hours=kh)).sum()) / truth
+                for kh in KNOTS_H
             }
             for n in N_OBS:
                 if n >= truth:
@@ -95,8 +96,13 @@ def _wave_records(ann: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
                     continue
                 rows.append(
                     {
-                        "fid": fid, "ftype": ftype, "n": n, "span_h": span_h,
-                        "fit": wf.point, "truth": truth, **mat,
+                        "fid": fid,
+                        "ftype": ftype,
+                        "n": n,
+                        "span_h": span_h,
+                        "fit": wf.point,
+                        "truth": truth,
+                        **mat,
                     }
                 )
     return pd.DataFrame(rows)
@@ -175,14 +181,18 @@ def main():
         mask = ho["n"].to_numpy() == n
         if mask.sum() == 0:
             continue
-        print(f"{n:>5}{np.median(fit_ape[mask]) * 100:>7.0f}%{np.median(blend_ape[mask]) * 100:>7.0f}%{mask.sum():>7}")
+        print(
+            f"{n:>5}{np.median(fit_ape[mask]) * 100:>7.0f}%{np.median(blend_ape[mask]) * 100:>7.0f}%{mask.sum():>7}"
+        )
 
     print("\n=== HOLDOUT MAPE by form_type ===")
     for ft in sorted(ho["ftype"].unique()):
         mask = ho["ftype"].to_numpy() == ft
         if mask.sum() < 8:
             continue
-        print(f"  {ft:<22} fit {np.median(fit_ape[mask]) * 100:>3.0f}%  blend {np.median(blend_ape[mask]) * 100:>3.0f}%  (n={mask.sum()})")
+        print(
+            f"  {ft:<22} fit {np.median(fit_ape[mask]) * 100:>3.0f}%  blend {np.median(blend_ape[mask]) * 100:>3.0f}%  (n={mask.sum()})"
+        )
 
     stat, p = wilcoxon(fit_ape, blend_ape)
     winner = "blend" if np.median(blend_ape) < np.median(fit_ape) else "fit"

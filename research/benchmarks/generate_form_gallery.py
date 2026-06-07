@@ -39,10 +39,7 @@ def _suspect_test_responses(ts: list) -> bool:
     later_med = np.median(gaps[3:]) if len(gaps) > 3 else np.median(gaps)
     if later_med <= 0:
         return False
-    return any(
-        gaps[k] > 20 * later_med and gaps[k] > 3600
-        for k in range(min(3, len(gaps)))
-    )
+    return any(gaps[k] > 20 * later_med and gaps[k] > 3600 for k in range(min(3, len(gaps))))
 
 
 def _build_form_card(fid: str, ts_list: list, title: str, form_type: str, shape: str) -> str:
@@ -64,27 +61,37 @@ def _build_form_card(fid: str, ts_list: list, title: str, form_type: str, shape:
     rate_y = counts.values.tolist()
 
     fig = make_subplots(
-        rows=1, cols=2,
+        rows=1,
+        cols=2,
         subplot_titles=["Cumulative", "Hourly rate"],
         column_widths=[0.6, 0.4],
     )
     fig.add_trace(
-        go.Scatter(x=cum_x, y=cum_y, mode="lines+markers",
-                   marker=dict(size=3), line=dict(color="#1f77b4")),
-        row=1, col=1,
+        go.Scatter(
+            x=cum_x, y=cum_y, mode="lines+markers", marker=dict(size=3), line=dict(color="#1f77b4")
+        ),
+        row=1,
+        col=1,
     )
     fig.add_trace(
         go.Bar(x=rate_x, y=rate_y, marker_color="#ff7f0e"),
-        row=1, col=2,
+        row=1,
+        col=2,
     )
     fig.update_layout(
-        height=260, margin=dict(l=40, r=20, t=30, b=40),
+        height=260,
+        margin=dict(l=40, r=20, t=30, b=40),
         showlegend=False,
     )
-    plot_html = fig.to_html(include_plotlyjs=False, full_html=False,
-                            config={"displayModeBar": False})
+    plot_html = fig.to_html(
+        include_plotlyjs=False, full_html=False, config={"displayModeBar": False}
+    )
 
-    suspect_badge = '<span style="background:#e74c3c;color:white;padding:2px 6px;border-radius:3px;font-size:11px">⚠ тест?</span>' if suspect else ""
+    suspect_badge = (
+        '<span style="background:#e74c3c;color:white;padding:2px 6px;border-radius:3px;font-size:11px">⚠ тест?</span>'
+        if suspect
+        else ""
+    )
     short_id = fid[:24] + "…"
 
     card = f"""
@@ -95,7 +102,7 @@ def _build_form_card(fid: str, ts_list: list, title: str, form_type: str, shape:
     &nbsp;|&nbsp; type:<b>{form_type}</b>
     &nbsp;|&nbsp; shape:<b>{shape}</b>
     &nbsp;|&nbsp; N={n} &nbsp;|&nbsp; span={span_h:.0f}h
-    &nbsp;|&nbsp; t0={t0.strftime('%Y-%m-%d %H:%M')}
+    &nbsp;|&nbsp; t0={t0.strftime("%Y-%m-%d %H:%M")}
   </div>
   <div style="margin-top:4px;font-size:11px;color:#888">
     <b>Мітки (заповни вручну):</b>

@@ -9,6 +9,7 @@
 Запуск:
     .venv/Scripts/python.exe research/benchmarks/generate_wave_editor.py
 """
+
 from __future__ import annotations
 
 import json
@@ -22,34 +23,95 @@ REPO = Path(__file__).resolve().parents[2]
 
 # ── user's partial ground truth ─────────────────────────────────────────────
 GROUND_TRUTH = {
-    "1GM-api8tg1DaVEE_NJ203b9K01TA4_uCW_3c2gkkh0c": {"waves_n": 1, "test_resp": 0, "notes": "одна агітація, природня ранкова хвиля наступного дня"},
-    "15EZp01e49mqyyrZfncLNXe2fpbtoCh-muer_s568Eow":  {"waves_n": 6, "test_resp": 2, "notes": "довго відкрита, 98% після 4 днів, 6 агітаційних хвиль"},
-    "1_zS99FyaYl2eNPl9pG_4KrbRjbRJxc10b3Z3JLfeBzc": {"waves_n": 7, "test_resp": 0, "notes": "близькі хвилі"},
-    "1p0ERtAe-_c4J_EL0H-f3Ykbbc6GBbWmqY4-SX1r9I3Y": {"waves_n": 5, "test_resp": 0, "notes": "5 хвиль, деякі важко детектити"},
-    "1ci4V9v25Ifn2qojemQvXNgZH4i0SmG5wtmfCn15sVy4":  {"waves_n": 8, "test_resp": 3, "notes": "8 хвиль, 3 тестові на початку"},
-    "1IUps2ikeV37yMz9saxC7EZ-qlc5u9_XQSJhBXMoSHM8": {"waves_n": 4, "test_resp": 3, "notes": "4 хвилі, 3 тестові"},
-    "1mTWRQ_TjLDkpPTRRFjZ0D5WUWo4F9js7k5-jyDv2YQA": {"waves_n": 2, "test_resp": 10, "notes": "2 хвилі, 10 тестових"},
-    "1UB0wdRgRKeifVdqWOv8_uW4NExdLRxi7FZhp1e8Dfuw":  {"waves_n": 6, "test_resp": 0, "notes": "6 хвиль"},
-    "1tBbO1LJWg0D8gcsjKKOFwYVXsFyKjmqZX9q5NcqZy-s": {"waves_n": 2, "test_resp": 0, "notes": "2 чисті хвилі"},
+    "1GM-api8tg1DaVEE_NJ203b9K01TA4_uCW_3c2gkkh0c": {
+        "waves_n": 1,
+        "test_resp": 0,
+        "notes": "одна агітація, природня ранкова хвиля наступного дня",
+    },
+    "15EZp01e49mqyyrZfncLNXe2fpbtoCh-muer_s568Eow": {
+        "waves_n": 6,
+        "test_resp": 2,
+        "notes": "довго відкрита, 98% після 4 днів, 6 агітаційних хвиль",
+    },
+    "1_zS99FyaYl2eNPl9pG_4KrbRjbRJxc10b3Z3JLfeBzc": {
+        "waves_n": 7,
+        "test_resp": 0,
+        "notes": "близькі хвилі",
+    },
+    "1p0ERtAe-_c4J_EL0H-f3Ykbbc6GBbWmqY4-SX1r9I3Y": {
+        "waves_n": 5,
+        "test_resp": 0,
+        "notes": "5 хвиль, деякі важко детектити",
+    },
+    "1ci4V9v25Ifn2qojemQvXNgZH4i0SmG5wtmfCn15sVy4": {
+        "waves_n": 8,
+        "test_resp": 3,
+        "notes": "8 хвиль, 3 тестові на початку",
+    },
+    "1IUps2ikeV37yMz9saxC7EZ-qlc5u9_XQSJhBXMoSHM8": {
+        "waves_n": 4,
+        "test_resp": 3,
+        "notes": "4 хвилі, 3 тестові",
+    },
+    "1mTWRQ_TjLDkpPTRRFjZ0D5WUWo4F9js7k5-jyDv2YQA": {
+        "waves_n": 2,
+        "test_resp": 10,
+        "notes": "2 хвилі, 10 тестових",
+    },
+    "1UB0wdRgRKeifVdqWOv8_uW4NExdLRxi7FZhp1e8Dfuw": {
+        "waves_n": 6,
+        "test_resp": 0,
+        "notes": "6 хвиль",
+    },
+    "1tBbO1LJWg0D8gcsjKKOFwYVXsFyKjmqZX9q5NcqZy-s": {
+        "waves_n": 2,
+        "test_resp": 0,
+        "notes": "2 чисті хвилі",
+    },
     "1OGdtkgxm8pQIxgzN4Rk5qwKhu6cHsc6XJAzL4Jtyb3E": {"waves_n": 2, "test_resp": 1, "notes": ""},
-    "1vGlYyxrvRbui3bp9FM2iyk0-c4i_rJGitTRXK_hHExI":  {"waves_n": 2, "test_resp": 0, "notes": ""},
-    "1q8Qla8GbBpvOecdeDrWPVFFKZjsZ2uoUu6tWs9c2e_U":  {"waves_n": 2, "test_resp": 0, "notes": ""},
-    "1a1kthX0P5wN14oDlviTpXHNHTiLKvcMctctrulwoRpo":  {"waves_n": 3, "test_resp": 1, "notes": "3 хвилі"},
-    "1Tw_K22VdkSmUGpDY9g4JD03or1of94y3-4hK_dkoH2c":  {"waves_n": 5, "test_resp": 1, "notes": ""},
+    "1vGlYyxrvRbui3bp9FM2iyk0-c4i_rJGitTRXK_hHExI": {"waves_n": 2, "test_resp": 0, "notes": ""},
+    "1q8Qla8GbBpvOecdeDrWPVFFKZjsZ2uoUu6tWs9c2e_U": {"waves_n": 2, "test_resp": 0, "notes": ""},
+    "1a1kthX0P5wN14oDlviTpXHNHTiLKvcMctctrulwoRpo": {
+        "waves_n": 3,
+        "test_resp": 1,
+        "notes": "3 хвилі",
+    },
+    "1Tw_K22VdkSmUGpDY9g4JD03or1of94y3-4hK_dkoH2c": {"waves_n": 5, "test_resp": 1, "notes": ""},
     "1asTOD6MbE4oCX8gexU0lwrP6xVr7JaIsout-kx58Qs8": {"waves_n": 3, "test_resp": 0, "notes": ""},
     "160qXOXUowJAvCVmRzBOROT5QCxr_NQKb4J5rqYzVYPE": {"waves_n": 2, "test_resp": 0, "notes": ""},
-    "1mfL4VNf6XIwylD78AtTDANju6xevE-Zc9ifZ_Z7qPYs":  {"waves_n": 4, "test_resp": 0, "notes": ""},
-    "1gX_YqOPw7oRrPgEvaehaiBWuz-pyNKkvuI-ez7kamZw":   {"waves_n": None, "test_resp": 0, "notes": "exponential overall, many mini-log waves"},
-    "1cJPzf6bMkNulhX16CPzt0yGQK8DUY2ZHkXSSMDT08fE":  {"waves_n": None, "test_resp": 0, "notes": "з 92 починається друга хвиля"},
-    "1qOYJsx8rtZcImp4ODnJSfIgPCbTojLgM_UlsdnzhlP8":  {"waves_n": 4, "test_resp": 0, "notes": "вкрай складний, кілька відкриттів форми"},
-    "1uBn4wyNG5LlIfdymzXe_rpx5-qMmuXrCRbdzl_Y9rMs":  {"waves_n": None, "test_resp": 0, "notes": "4+ хвилі, можливо закриття на час"},
-    "13Lbv-OpFHnwMdkzlt0tO72wSqjCeWmFyuRIWJL5UJhw":  {"waves_n": None, "test_resp": 0, "notes": ""},
+    "1mfL4VNf6XIwylD78AtTDANju6xevE-Zc9ifZ_Z7qPYs": {"waves_n": 4, "test_resp": 0, "notes": ""},
+    "1gX_YqOPw7oRrPgEvaehaiBWuz-pyNKkvuI-ez7kamZw": {
+        "waves_n": None,
+        "test_resp": 0,
+        "notes": "exponential overall, many mini-log waves",
+    },
+    "1cJPzf6bMkNulhX16CPzt0yGQK8DUY2ZHkXSSMDT08fE": {
+        "waves_n": None,
+        "test_resp": 0,
+        "notes": "з 92 починається друга хвиля",
+    },
+    "1qOYJsx8rtZcImp4ODnJSfIgPCbTojLgM_UlsdnzhlP8": {
+        "waves_n": 4,
+        "test_resp": 0,
+        "notes": "вкрай складний, кілька відкриттів форми",
+    },
+    "1uBn4wyNG5LlIfdymzXe_rpx5-qMmuXrCRbdzl_Y9rMs": {
+        "waves_n": None,
+        "test_resp": 0,
+        "notes": "4+ хвилі, можливо закриття на час",
+    },
+    "13Lbv-OpFHnwMdkzlt0tO72wSqjCeWmFyuRIWJL5UJhw": {"waves_n": None, "test_resp": 0, "notes": ""},
 }
 
+
 # ── wave auto-detector ──────────────────────────────────────────────────────
-def auto_detect_waves(ts_list: list, test_skip: int = 0,
-                      prominence_frac: float = 0.15,
-                      min_dist_h: float = 0.5, smooth_w: int = 2) -> list[str]:
+def auto_detect_waves(
+    ts_list: list,
+    test_skip: int = 0,
+    prominence_frac: float = 0.15,
+    min_dist_h: float = 0.5,
+    smooth_w: int = 2,
+) -> list[str]:
     """Return list of ISO-format timestamps where waves start."""
     ts = sorted(ts_list)[test_skip:]
     if len(ts) < 5:
@@ -73,8 +135,7 @@ def auto_detect_waves(ts_list: list, test_skip: int = 0,
     if max_r == 0:
         return [t0.isoformat()]
     min_dist_slots = max(1, int(min_dist_h / slot_h))
-    peaks, _ = find_peaks(counts_s, prominence=max_r * prominence_frac,
-                          distance=min_dist_slots)
+    peaks, _ = find_peaks(counts_s, prominence=max_r * prominence_frac, distance=min_dist_slots)
     if len(peaks) == 0:
         return [t0.isoformat()]
     slot_secs = int(slot_h * 3600)
@@ -104,8 +165,16 @@ def build_chart_data(fid: str, ts_list: list, test_skip: int) -> dict:
         pre_y = list(range(1, test_skip + 1))
     else:
         pre_x, pre_y = [], []
-    return {"cum_x": cum_x, "cum_y": cum_y, "rate_x": rate_x, "rate_y": rate_y,
-            "pre_x": pre_x, "pre_y": pre_y, "n": len(ts), "span_h": round(span_h, 1)}
+    return {
+        "cum_x": cum_x,
+        "cum_y": cum_y,
+        "rate_x": rate_x,
+        "rate_y": rate_y,
+        "pre_x": pre_x,
+        "pre_y": pre_y,
+        "n": len(ts),
+        "span_h": round(span_h, 1),
+    }
 
 
 def main() -> None:
@@ -144,21 +213,32 @@ def main() -> None:
         # Suspect test responses
         ia = np.diff([t.timestamp() for t in sorted(ts_list)])
         ia_pos = ia[ia > 0]
-        suspect = bool(len(ia_pos) > 4 and ia_pos[0] > 20 * np.median(ia_pos[3:]) and ia_pos[0] > 3600)
-        forms_data.append({
-            "fid": fid, "title": catalog.get(fid, ""), "n": n,
-            "form_type": ftmap.get(fid, "unknown"), "shape": shmap.get(fid, "unknown"),
-            "span_h": chart["span_h"], "suspect_test": suspect,
-            "waves_auto": waves_auto, "waves_auto_n": len(waves_auto),
-            "waves_n": gt.get("waves_n"), "test_resp": test_skip,
-            "notes": gt.get("notes", ""),
-            "chart": chart,
-        })
+        suspect = bool(
+            len(ia_pos) > 4 and ia_pos[0] > 20 * np.median(ia_pos[3:]) and ia_pos[0] > 3600
+        )
+        forms_data.append(
+            {
+                "fid": fid,
+                "title": catalog.get(fid, ""),
+                "n": n,
+                "form_type": ftmap.get(fid, "unknown"),
+                "shape": shmap.get(fid, "unknown"),
+                "span_h": chart["span_h"],
+                "suspect_test": suspect,
+                "waves_auto": waves_auto,
+                "waves_auto_n": len(waves_auto),
+                "waves_n": gt.get("waves_n"),
+                "test_resp": test_skip,
+                "notes": gt.get("notes", ""),
+                "chart": chart,
+            }
+        )
 
     # Embed as JSON, render with Plotly.js + vanilla JS editor
     forms_json = json.dumps(forms_data, default=str)
 
-    html = r"""<!DOCTYPE html>
+    html = (
+        r"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -219,7 +299,9 @@ body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; margin: 0; padd
 <div id="container"></div>
 
 <script>
-const FORMS = """ + forms_json + r""";
+const FORMS = """
+        + forms_json
+        + r""";
 
 // State: per-form edits
 const state = {};
@@ -389,6 +471,7 @@ updateProgress();
 </script>
 </body>
 </html>""".replace("const FORMS = ;", f"const FORMS = {forms_json};")
+    )
 
     output_html.write_text(html, encoding="utf-8")
     print(f"Editor written: {output_html}")

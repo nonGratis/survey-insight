@@ -112,7 +112,9 @@ def main():
     nm = np.array([r["naive_mape"] for r in rows])
     cv = np.array([r["wave_cov"] for r in rows])
     print()
-    print(f"wave  MAPE: mean={wm.mean():.1f}%  std={wm.std():.1f}%  range=[{wm.min():.1f}, {wm.max():.1f}]")
+    print(
+        f"wave  MAPE: mean={wm.mean():.1f}%  std={wm.std():.1f}%  range=[{wm.min():.1f}, {wm.max():.1f}]"
+    )
     print(f"naive MAPE: mean={nm.mean():.1f}%  std={nm.std():.1f}%")
     print(f"wave  cov : mean={cv.mean():.1f}%  std={cv.std():.1f}%")
     print(f"wave beats naive in {int((wm < nm).sum())}/{len(SEEDS)} seeds")
