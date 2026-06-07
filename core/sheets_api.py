@@ -74,6 +74,70 @@ def find_response_sheet_name(service, sheet_id: str) -> str:
     raise SheetsApiError(f"У spreadsheet {sheet_id} не знайдено жодного GRID-аркуша.")
 
 
+def _grid_sheet_titles(service, sheet_id: str) -> list[str]:
+    """Назви ВСІХ GRID-аркушів привʼязаного Spreadsheet (для скану контексту)."""
+    try:
+        meta = (
+            service.spreadsheets()
+            .get(spreadsheetId=sheet_id, fields="sheets(properties(title,sheetType))")
+            .execute()
+        )
+    except HttpError as exc:
+        raise SheetsApiError(
+            f"Не вдалося прочитати metadata Sheet {sheet_id}: {exc.reason or exc}",
+            status=exc.resp.status,
+        ) from exc
+    return [
+        s["properties"]["title"]
+        for s in meta.get("sheets", [])
+        if s.get("properties", {}).get("sheetType", "GRID") == "GRID"
+    ]
+
+
+def fetch_all_grids(creds: Credentials, sheet_id: str) -> dict[str, list[list[str]]]:
+    """Прочитати значення ВСІХ GRID-аркушів як матриці рядків.
+
+    Потрібно для авто-детекту контекстних таблиць популяції, які можуть жити
+    на будь-якому аркуші (не лише на аркуші відповідей). Один batchGet на всі
+    аркуші — економно за квотою. Рядки НЕ нормалізуються по ширині (детектор
+    `core.context_tables` працює з рваними рядками коректно).
+
+    Returns:
+        {назва_аркуша: [[cell, …], …]}. Порожні аркуші → [].
+
+    Raises:
+        SheetsApiError: на 403/404 та інші HTTP-помилки Sheets API.
+    """
+    service = build("sheets", "v4", credentials=creds, cache_discovery=False)
+    titles = _grid_sheet_titles(service, sheet_id)
+    if not titles:
+        return {}
+    ranges = [f"'{t}'!{DEFAULT_COLUMN_RANGE}" for t in titles]
+    try:
+        with log_call(
+            "api_call_ok",
+            target="sheets.values.batchGet",
+            scope="all_grids",
+            sheet_id=sheet_id,
+            logger=log,
+        ):
+            resp = (
+                service.spreadsheets()
+                .values()
+                .batchGet(spreadsheetId=sheet_id, ranges=ranges)
+                .execute()
+            )
+    except HttpError as exc:
+        raise SheetsApiError(
+            f"Не вдалося прочитати аркуші Sheet {sheet_id}: {exc.reason or exc}",
+            status=exc.resp.status,
+        ) from exc
+    out: dict[str, list[list[str]]] = {}
+    for title, value_range in zip(titles, resp.get("valueRanges", []), strict=False):
+        out[title] = value_range.get("values", [])
+    return out
+
+
 def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
     """Завантажити всі відповіді з привʼязаного Sheet у DataFrame.
 
