@@ -101,7 +101,6 @@ def _render_login_button(location: str = "sidebar") -> None:
     container.caption("Demo в Testing-режимі: працює лише для test users.")
 
 
-
 def _render_logged_in(location: str = "sidebar") -> None:
     user = st.session_state.get("user", {})
     email = user.get("email", "—")

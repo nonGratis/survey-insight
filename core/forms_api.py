@@ -8,6 +8,7 @@ Forms API дає структуру форми: питання, типи, вар
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from google.oauth2.credentials import Credentials
@@ -116,6 +117,96 @@ def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
             f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",
             status=exc.resp.status,
         ) from exc
+
+
+def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]:
+    """Завантажити всі timestamps відповідей форми через Forms API.
+
+    Використовує `forms.responses.list` з pagination через `nextPageToken`.
+    Повертає список naive UTC datetime, відсортований за зростанням.
+    Працює навіть для форм без linked Sheet — канонічне джерело
+    timestamps це поле `createTime`, яке Google виставляє при submit.
+
+    Scope: достатньо `https://www.googleapis.com/auth/forms.responses.readonly`
+    (read-only для responses). Цей scope уже в `core.auth.API_SCOPES`.
+
+    Raises:
+        FormsApiError: 403 (нема scope), 404 (форма видалена), інші
+            HTTP-помилки Forms API.
+    """
+    service = build("forms", "v1", credentials=creds, cache_discovery=False)
+    timestamps: list[datetime] = []
+    page_token: str | None = None
+    try:
+        while True:
+            with log_call(
+                "api_call_ok",
+                target="forms.forms.responses.list",
+                form_id=form_id,
+                logger=log,
+            ):
+                resp = (
+                    service.forms().responses().list(formId=form_id, pageToken=page_token).execute()
+                )
+            for r in resp.get("responses", []):
+                ct = r.get("createTime")
+                if not ct:
+                    continue
+                # RFC 3339 ("2026-05-15T14:30:45.123Z") → naive UTC datetime
+                # (повсюди у проєкті використовуємо naive UTC: core.store,
+                # core.timeline). `astimezone(UTC).replace(tzinfo=None)` нормалізує
+                # незалежно від суфіксу (Z, +00:00, +03:00 тощо).
+                timestamps.append(
+                    datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                    .astimezone(UTC)
+                    .replace(tzinfo=None)
+                )
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except HttpError as exc:
+        raise FormsApiError(
+            f"Не вдалося отримати відповіді форми {form_id}: {exc.reason or exc}",
+            status=exc.resp.status,
+        ) from exc
+    timestamps.sort()
+    return timestamps
+
+
+def list_form_responses(creds: Credentials, form_id: str) -> list[dict[str, Any]]:
+    """Завантажити повні відповіді форми (createTime + answers) через Forms API.
+
+    Той самий `forms.responses.list`, що й timestamps, але повертає сирі
+    об'єкти відповідей із полем `answers` (значення по кожному questionId).
+    Потрібно для per-question аналізу. Sheet НЕ потрібен.
+
+    Raises:
+        FormsApiError: 403 (нема scope), 404 (форма видалена), інші HTTP-помилки.
+    """
+    service = build("forms", "v1", credentials=creds, cache_discovery=False)
+    responses: list[dict[str, Any]] = []
+    page_token: str | None = None
+    try:
+        while True:
+            with log_call(
+                "api_call_ok",
+                target="forms.forms.responses.list",
+                form_id=form_id,
+                logger=log,
+            ):
+                resp = (
+                    service.forms().responses().list(formId=form_id, pageToken=page_token).execute()
+                )
+            responses.extend(resp.get("responses", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except HttpError as exc:
+        raise FormsApiError(
+            f"Не вдалося отримати відповіді форми {form_id}: {exc.reason or exc}",
+            status=exc.resp.status,
+        ) from exc
+    return responses
 
 
 def get_linked_sheet_id(form: dict[str, Any]) -> str | None:

@@ -194,7 +194,7 @@ def _build_dataframe(
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
         row = {
-            "📊": f"/analyze?form_id={f.id}",
+            "📊": f"/analysis?form_id={f.id}",
             "↗": f.edit_url,
             "FormName": f.name,
             "Title": enr.title if enr else "",
