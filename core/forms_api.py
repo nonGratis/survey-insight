@@ -173,6 +173,42 @@ def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]
     return timestamps
 
 
+def list_form_responses(creds: Credentials, form_id: str) -> list[dict[str, Any]]:
+    """Завантажити повні відповіді форми (createTime + answers) через Forms API.
+
+    Той самий `forms.responses.list`, що й timestamps, але повертає сирі
+    об'єкти відповідей із полем `answers` (значення по кожному questionId).
+    Потрібно для per-question аналізу. Sheet НЕ потрібен.
+
+    Raises:
+        FormsApiError: 403 (нема scope), 404 (форма видалена), інші HTTP-помилки.
+    """
+    service = build("forms", "v1", credentials=creds, cache_discovery=False)
+    responses: list[dict[str, Any]] = []
+    page_token: str | None = None
+    try:
+        while True:
+            with log_call(
+                "api_call_ok",
+                target="forms.forms.responses.list",
+                form_id=form_id,
+                logger=log,
+            ):
+                resp = (
+                    service.forms().responses().list(formId=form_id, pageToken=page_token).execute()
+                )
+            responses.extend(resp.get("responses", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except HttpError as exc:
+        raise FormsApiError(
+            f"Не вдалося отримати відповіді форми {form_id}: {exc.reason or exc}",
+            status=exc.resp.status,
+        ) from exc
+    return responses
+
+
 def get_linked_sheet_id(form: dict[str, Any]) -> str | None:
     """Повернути id привʼязаного Google Sheet або None.
 
