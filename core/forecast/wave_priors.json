@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "n_forms": 161,
+  "n_waves": 627,
+  "per_type": {
+    "creative_submission": {
+      "frac_1h_p25": 0.2,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 0.667,
+      "wave_size_p25": 1.0,
+      "wave_size_med": 4.0,
+      "wave_size_p75": 7.0,
+      "n_waves_med": 6.0,
+      "n_waves_p75": 7.0,
+      "detector_min_silence_h": 1,
+      "detector_mult": 8
+    },
+    "event_feedback": {
+      "frac_1h_p25": 0.581,
+      "frac_1h_med": 0.667,
+      "frac_1h_p75": 0.875,
+      "wave_size_p25": 1.2,
+      "wave_size_med": 7.5,
+      "wave_size_p75": 24.8,
+      "n_waves_med": 2.5,
+      "n_waves_p75": 4.0,
+      "detector_min_silence_h": 3,
+      "detector_mult": 3
+    },
+    "event_registration": {
+      "frac_1h_p25": 0.286,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 0.8,
+      "wave_size_p25": 3.0,
+      "wave_size_med": 5.0,
+      "wave_size_p75": 10.0,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 6.0,
+      "detector_min_silence_h": 1,
+      "detector_mult": 8
+    },
+    "holiday": {
+      "frac_1h_p25": 0.4,
+      "frac_1h_med": 0.556,
+      "frac_1h_p75": 0.714,
+      "wave_size_p25": 6.0,
+      "wave_size_med": 11.0,
+      "wave_size_p75": 23.0,
+      "n_waves_med": 3.0,
+      "n_waves_p75": 7.0,
+      "detector_min_silence_h": 3,
+      "detector_mult": 3
+    },
+    "other": {
+      "frac_1h_p25": 0.31,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 0.796,
+      "wave_size_p25": 2.0,
+      "wave_size_med": 3.0,
+      "wave_size_p75": 8.0,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 7.0,
+      "detector_min_silence_h": 6,
+      "detector_mult": 2
+    },
+    "political": {
+      "frac_1h_p25": 0.21,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 1.0,
+      "wave_size_p25": 1.0,
+      "wave_size_med": 4.0,
+      "wave_size_p75": 11.0,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 8.0,
+      "detector_min_silence_h": 3,
+      "detector_mult": 2
+    },
+    "recruitment": {
+      "frac_1h_p25": 0.229,
+      "frac_1h_med": 0.404,
+      "frac_1h_p75": 0.575,
+      "wave_size_p25": 3.0,
+      "wave_size_med": 5.5,
+      "wave_size_p75": 10.8,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 5.0,
+      "detector_min_silence_h": 3,
+      "detector_mult": 8
+    },
+    "service": {
+      "frac_1h_p25": 0.264,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 0.572,
+      "wave_size_p25": 1.0,
+      "wave_size_med": 2.0,
+      "wave_size_p75": 27.5,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 7.0,
+      "detector_min_silence_h": 24,
+      "detector_mult": 15
+    },
+    "survey": {
+      "frac_1h_p25": 0.255,
+      "frac_1h_med": 0.497,
+      "frac_1h_p75": 0.684,
+      "wave_size_p25": 5.0,
+      "wave_size_med": 20.5,
+      "wave_size_p75": 69.0,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 6.0,
+      "detector_min_silence_h": 12,
+      "detector_mult": 8
+    },
+    "unknown": {
+      "frac_1h_p25": 0.2,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 0.771,
+      "wave_size_p25": 1.2,
+      "wave_size_med": 5.0,
+      "wave_size_p75": 11.8,
+      "n_waves_med": 5.0,
+      "n_waves_p75": 7.0,
+      "detector_min_silence_h": 12,
+      "detector_mult": 2
+    },
+    "volunteer_donor": {
+      "frac_1h_p25": 0.397,
+      "frac_1h_med": 0.5,
+      "frac_1h_p75": 0.723,
+      "wave_size_p25": 3.0,
+      "wave_size_med": 7.0,
+      "wave_size_p75": 11.0,
+      "n_waves_med": 7.0,
+      "n_waves_p75": 22.0,
+      "detector_min_silence_h": 24,
+      "detector_mult": 15
+    }
+  },
+  "ci_calibration": {
+    "schema": 1,
+    "method": "mondrian_capped",
+    "confidence": 0.95,
+    "bucket_var": "within_wave_point",
+    "bucket_edges": [
+      9.0,
+      20.0
+    ],
+    "bucket_q": [
+      6.0,
+      6.0,
+      6.0
+    ],
+    "cap_max_relative": 2.0,
+    "cap_min_absolute": 10.0,
+    "n_calib": 2428,
+    "holdout_coverage": 0.855
+  }
+}

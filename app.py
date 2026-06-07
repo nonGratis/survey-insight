@@ -27,9 +27,7 @@ if not logged_in:
     hero_cols = st.columns([1, 2, 1], gap="large")
     with hero_cols[1]:
         st.subheader("Вхід")
-        st.write(
-            "Увійди через Google, щоб отримати доступ до сторінок з аналізом форм."
-        )
+        st.write("Увійди через Google, щоб отримати доступ до сторінок з аналізом форм.")
         render_login_button(location="main")
 
     st.divider()
@@ -48,16 +46,12 @@ if not logged_in:
                 "Увійди через Google. Після входу сторінки та функції системи стануть доступні."
             )
         with st.expander("Чому потрібні дозволи?"):
-            st.write(
-                "Доступ потрібен, щоб читати та редагувати форми та таблиці, які ти обираєш."
-            )
+            st.write("Доступ потрібен, щоб читати та редагувати форми та таблиці, які ти обираєш.")
         with st.expander("Чи зберігаються дані?"):
             st.write("Дані використовуються лише для побудови звітів у цій сесії.")
     with info_cols[2]:
         st.subheader("Підтримка")
-        st.write(
-            "Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua"
-        )
+        st.write("Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua")
 
     st.stop()
 
@@ -71,10 +65,16 @@ pages = [
         url_path="catalog",
     ),
     st.Page(
-        "ui/pages/analyze.py",
-        title="Аналіз",
-        icon=":material/analytics:",
-        url_path="analyze",
+        "ui/pages/analysis.py",
+        title="Динаміка",
+        icon=":material/show_chart:",
+        url_path="analysis",
+    ),
+    st.Page(
+        "ui/pages/questions.py",
+        title="Запитання",
+        icon=":material/quiz:",
+        url_path="questions",
     ),
     st.Page(
         "ui/pages/weighting.py",
