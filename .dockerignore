@@ -25,3 +25,8 @@ research/**/*.xlsx
 .streamlit/secrets.toml
 config/
 *.log
+
+# дослідницькі скрипти, артефакти й CI — у рантайм-образ не потрібні
+research/
+.github/
+*.ipynb
