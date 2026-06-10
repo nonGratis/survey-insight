@@ -22,8 +22,12 @@ log = get_logger(__name__)
 
 CREDENTIALS_PATH = Path("config") / "credentials.json"
 REDIRECT_URI = "http://localhost:8501"
-# PKCE verifier зберігаємо у temp-файлі, бо Streamlit session_state
-# не виживає browser redirect (TODO Week 4: cookie-based для Cloud Run).
+# PKCE verifier зберігаємо у temp-файлі, бо Streamlit session_state не виживає
+# browser redirect під час OAuth-обміну.
+# Відоме обмеження: і verifier (temp-файл інстанса), і токени (session_state)
+# прив'язані до одного процесу, тож на Cloud Run з кількома інстансами логін
+# розрахований на одну сесію/інстанс. Стійке рішення — cookie/підписаний токен
+# (винесено в окрему задачу, навмисно не реалізовано тут).
 VERIFIER_PATH = Path(tempfile.gettempdir()) / "survey-insight-oauth-verifier"
 
 IDENTITY_SCOPES = [
