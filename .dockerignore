@@ -10,3 +10,10 @@ README.md
 .vscode/
 .idea/
 data/
+
+# дослідницькі скрипти, артефакти й CI — у рантайм-образ не потрібні
+research/
+.github/
+*.docx
+*.ipynb
+export_code_to_docx.py
