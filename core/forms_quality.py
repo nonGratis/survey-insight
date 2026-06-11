@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from statistics import median
 from typing import Any
@@ -27,6 +28,12 @@ from typing import Any
 LONG_QUESTION_CHARS = 120  # > ~120 символів = висока когнітивна складність
 MAX_OPTIONS = 11  # оптимум шкали 5-11 (SQP); > 11 ускладнює вибір
 DOUBLE_BARRELED_MARKERS = (" та ", " або ", " і/або ")  # склейка двох об'єктів
+
+# Режими сортування розподілу (спільні для екрана та PDF-звіту).
+SORT_BY_COUNT = "За величиною"
+SORT_ALPHA = "Алфавіт"
+SORT_FORM_ORDER = "Порядок у формі"
+SORT_MODES = (SORT_BY_COUNT, SORT_ALPHA, SORT_FORM_ORDER)
 
 # Тип питання Forms API → людська назва.
 _QTYPE_LABEL = {
@@ -202,3 +209,71 @@ def analyze_responses(
             text_median_len=float(median(text_lens)) if text_lens else None,
         )
     return stats
+
+
+def normalize_label(value: str) -> str:
+    """Нормалізувати мітку для зіставлення: стиснути пробіли + casefold."""
+    return " ".join(str(value).split()).casefold()
+
+
+def anonymize_distribution(
+    distribution: Mapping[str, int],
+    allowed_options: Sequence[str],
+    anonymized_label: str,
+) -> dict[str, int]:
+    """Згорнути значення поза кодованими варіантами у спільну анонімну мітку.
+
+    Захищає персональні дані у вільних («Інше») відповідях: усе, чого немає
+    серед офіційних варіантів питання, об'єднується під `anonymized_label`.
+    """
+    allowed = {normalize_label(option): option for option in allowed_options}
+    output: dict[str, int] = {}
+    for raw_value, count in distribution.items():
+        canonical = allowed.get(normalize_label(raw_value))
+        key = canonical if canonical is not None else anonymized_label
+        output[key] = output.get(key, 0) + count
+    return output
+
+
+def sort_distribution(
+    distribution: Mapping[str, int],
+    sort_mode: str,
+    form_options: Sequence[str] = (),
+    keep_label_last: bool = False,
+    label_last_value: str = "",
+) -> list[tuple[str, int]]:
+    """Посортувати розподіл за величиною / алфавітом / порядком у формі.
+
+    `keep_label_last` тримає `label_last_value` (напр., «Інше*») в кінці.
+    """
+
+    def _last(value: str) -> int:
+        return 1 if keep_label_last and value == label_last_value else 0
+
+    items = list(distribution.items())
+    if sort_mode == SORT_ALPHA:
+        return sorted(items, key=lambda kv: (_last(kv[0]), normalize_label(kv[0])))
+    if sort_mode == SORT_FORM_ORDER:
+        order = {normalize_label(o): i for i, o in enumerate(form_options)}
+        return sorted(
+            items,
+            key=lambda kv: (
+                _last(kv[0]),
+                order.get(normalize_label(kv[0]), len(order)),
+                normalize_label(kv[0]),
+            ),
+        )
+    return sorted(items, key=lambda kv: (_last(kv[0]), -kv[1], normalize_label(kv[0])))
+
+
+def question_options(form: dict[str, Any]) -> dict[str, list[str]]:
+    """Кодовані варіанти кожного choice-питання: {question_id: [значення...]}.
+
+    Потрібно для анонімізації (відрізнити офіційні варіанти від вільних) і
+    для сортування «у порядку форми». Не-choice питання відсутні у словнику.
+    """
+    out: dict[str, list[str]] = {}
+    for qid, _title, q in _iter_questions(form):
+        if "choiceQuestion" in q:
+            out[qid] = [o.get("value", "") for o in q["choiceQuestion"].get("options", [])]
+    return out
