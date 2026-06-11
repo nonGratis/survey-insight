@@ -39,6 +39,8 @@ from core.forms_api import (
     parse_question_types,
 )
 from core.logger import get_logger
+from core.report import render_pdf
+from core.reports import representativeness_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
 from core.weighting import (
     RID_COLUMN,
@@ -408,4 +410,14 @@ with tab_export:
             "Повний кадр: R_ID, значення страт, ваги кожного виміру (статичні та "
             "таймлайн), композитна вага w і w_timeline. R_ID — у кожному рядку."
         ),
+    )
+
+    form_title = structure.get("info", {}).get("title", "")
+    pdf_bytes = render_pdf(representativeness_report(res, form_title))
+    st.download_button(
+        ":material/picture_as_pdf: Завантажити звіт про репрезентативність (PDF)",
+        data=pdf_bytes,
+        file_name=f"representativeness_{form_id}.pdf",
+        mime="application/pdf",
+        help="PDF-звіт: показники репрезентативності та таблиця ваг (за недопредставленістю).",
     )
