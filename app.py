@@ -84,8 +84,8 @@ pages = [
     ),
     st.Page(
         "ui/pages/export.py",
-        title="Експорт",
-        icon=":material/download:",
+        title="Звіт",
+        icon=":material/picture_as_pdf:",
         url_path="export",
     ),
 ]
