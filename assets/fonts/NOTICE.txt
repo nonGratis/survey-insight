@@ -1,0 +1,6 @@
+Bundled fonts
+=============
+
+assets/fonts/LiberationSans-Regular.ttf, LiberationSans-Bold.ttf
+— Liberation Sans, SIL Open Font License v1.1 (redistributable).
+Used by core/report.py for Cyrillic-capable PDF reports.
