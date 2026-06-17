@@ -37,6 +37,7 @@ from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
@@ -218,20 +219,21 @@ with st.container():
             forecast, changepoints, forecast_error = None, [], None
 
         # Рядок 1: BANs — "Зараз", "Прогноз (ця хвиля)", "Стан хвилі" (порадник).
-        ban_cols = st.columns(3)
         current = int(timeline.cumulative.iloc[-1])
-        ban_cols[0].metric("Зараз", current)
+        metric_items = [MetricItem("Зараз", current)]
         if forecast is not None:
             ci_half = (forecast.final_ci[1] - forecast.final_ci[0]) // 2
-            ban_cols[1].metric(
-                "Прогноз (ця хвиля)",
-                forecast.final_estimate,
-                delta=f"±{ci_half}",
-                delta_color="off",
-                help=(
-                    "Скільки набере ПОТОЧНА хвиля, якщо без нової агітації. "
-                    "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
-                ),
+            metric_items.append(
+                MetricItem(
+                    "Прогноз (ця хвиля)",
+                    forecast.final_estimate,
+                    delta=f"±{ci_half}",
+                    delta_color="off",
+                    help=(
+                        "Скільки набере ПОТОЧНА хвиля, якщо без нової агітації. "
+                        "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
+                    ),
+                )
             )
             # Порадник: % посадки, досягнутий на КІНЕЦЬ ВІКНА прогнозу
             # (не глобальний current — інакше при звуженні вікна завжди 100%).
@@ -239,20 +241,27 @@ with st.container():
             landing = max(forecast.final_estimate, wave_now, 1)
             pct = min(int(round(wave_now / landing * 100)), 100)
             status = "на плато" if pct >= 100 else ("майже" if pct >= 80 else "набирає")
-            ban_cols[2].metric(
-                "Стан хвилі",
-                f"{pct}%",
-                delta=status,
-                delta_color="off",
-                help=(
-                    "Скільки прогнозованої посадки хвилі вже зібрано (на кінець "
-                    "вікна). 100% «на плато» → модель вважає цю хвилю сталою; для "
-                    "більшого потрібна нова агітація (майбутні хвилі тут не враховані)."
-                ),
+            metric_items.append(
+                MetricItem(
+                    "Стан хвилі",
+                    f"{pct}%",
+                    delta=status,
+                    delta_color="off",
+                    help=(
+                        "Скільки прогнозованої посадки хвилі вже зібрано (на кінець "
+                        "вікна). 100% «на плато» → модель вважає цю хвилю сталою; для "
+                        "більшого потрібна нова агітація (майбутні хвилі тут не враховані)."
+                    ),
+                )
             )
         else:
-            ban_cols[1].metric("Прогноз (ця хвиля)", "—")
-            ban_cols[2].metric("Стан хвилі", "—")
+            metric_items.extend(
+                [
+                    MetricItem("Прогноз (ця хвиля)", "—"),
+                    MetricItem("Стан хвилі", "—"),
+                ]
+            )
+        render_metric_bar(metric_items, columns=3)
 
         # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
         _last = timestamps[-1]

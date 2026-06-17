@@ -50,6 +50,7 @@ from core.weighting import (
 )
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
@@ -278,38 +279,56 @@ if cap_value > 0:
 res = compute_weighting(frame, dimensions, moe=moe_pct / 100.0, caps=caps)
 
 with metrics_placeholder:
-    row1 = st.columns(4)
-    row1[0].metric(
-        "Репрезентативність",
-        f"{res.coverage_eff * 100:.0f}%",
-        help=(
-            "Частка цільового обсягу з урахуванням дизайну вибірки (DEFF). "
-            "≥100% = ефективна вибірка покриває ціль."
-        ),
+    render_metric_bar(
+        [
+            MetricItem(
+                "Репрезентативність",
+                f"{res.coverage_eff * 100:.0f}%",
+                help=(
+                    "Частка цільового обсягу з урахуванням дизайну вибірки (DEFF). "
+                    "≥100% = ефективна вибірка покриває ціль."
+                ),
+            ),
+            MetricItem(
+                "Без DEFF",
+                f"{res.coverage_raw * 100:.0f}%",
+                help="Сире покриття цілі без урахування нерівних ваг.",
+            ),
+            MetricItem(
+                "DEFF (Кіш)",
+                f"{res.deff:.2f}",
+                help="1 + CV²(ваг). Втрата ефективності.",
+            ),
+            MetricItem(
+                "Ефективний n",
+                f"{res.n_eff:.0f}",
+                help=f"Ефективний обсяг = відповіді / DEFF = {res.n} / {res.deff:.2f}",
+            ),
+        ],
+        columns=4,
     )
-    row1[1].metric(
-        "Без DEFF",
-        f"{res.coverage_raw * 100:.0f}%",
-        help="Сире покриття цілі без урахування нерівних ваг.",
-    )
-    row1[2].metric("DEFF (Кіш)", f"{res.deff:.2f}", help="1 + CV²(ваг). Втрата ефективності.")
-    # Ефективний обсяг вибірки (n_eff)
-    row1[3].metric(
-        "Ефективний n",
-        f"{res.n_eff:.0f}",
-        help=f"Ефективний обсяг = відповіді / DEFF = {res.n} / {res.deff:.2f}",
-    )
-
-    row2 = st.columns(4)
-    row2[0].metric("Відповідей (n)", res.n)
-    row2[1].metric("Ціль", res.n_target, help=f"Розрахунок SRS+FPC для MoE, N={res.population}")
-    row2[2].metric("MoE", f"{res.moe * 100:.1f}%", help="Гранична похибка частки (p=0.5, без FPC).")
-    row2[3].metric(
-        "MoE з DEFF",
-        f"{res.moe_deff * 100:.1f}%",
-        delta=f"+{(res.moe_deff - res.moe) * 100:.1f}%",
-        delta_color="inverse",
-        help="MoE · √DEFF — реальна похибка з урахуванням дизайну.",
+    render_metric_bar(
+        [
+            MetricItem("Відповідей (n)", res.n),
+            MetricItem(
+                "Ціль",
+                res.n_target,
+                help=f"Розрахунок SRS+FPC для MoE, N={res.population}",
+            ),
+            MetricItem(
+                "MoE",
+                f"{res.moe * 100:.1f}%",
+                help="Гранична похибка частки (p=0.5, без FPC).",
+            ),
+            MetricItem(
+                "MoE з DEFF",
+                f"{res.moe_deff * 100:.1f}%",
+                delta=f"+{(res.moe_deff - res.moe) * 100:.1f}%",
+                delta_color="inverse",
+                help="MoE · √DEFF — реальна похибка з урахуванням дизайну.",
+            ),
+        ],
+        columns=4,
     )
 
     lack = max(res.sample_need - res.n, 0.0)

@@ -57,6 +57,7 @@ from core.reports import DescriptiveConfig, questions_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
@@ -132,10 +133,14 @@ with tab_design:
     else:
         n_flagged = sum(1 for d in designs if d.flags)
         n_open = sum(1 for d in designs if d.qtype in ("text", "paragraph"))
-        dcols = st.columns(3)
-        dcols[0].metric("Питань", len(designs))
-        dcols[1].metric("З прапорами", n_flagged)
-        dcols[2].metric("Відкритих", n_open)
+        render_metric_bar(
+            [
+                MetricItem("Питань", len(designs)),
+                MetricItem("З прапорами", n_flagged),
+                MetricItem("Відкритих", n_open),
+            ],
+            columns=3,
+        )
         st.dataframe(
             [
                 {
@@ -161,7 +166,7 @@ with tab_responses:
     if not responses:
         render_empty_state("Аналіз зʼявиться після перших відповідей форми.")
     else:
-        st.metric("Відповідей", len(responses))
+        render_metric_bar([MetricItem("Відповідей", len(responses))], columns=3)
         stats = analyze_responses(structure, responses)
         options_by_id = {q.id: q.options for q in form_questions}
         with st.expander("Фільтр анонімізації", expanded=False):
