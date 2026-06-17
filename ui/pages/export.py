@@ -33,7 +33,6 @@ from ui.components.form_picker import clear_forms_cache
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
-    render_form_caption,
     render_page_header,
 )
 from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, top_association_rows
@@ -78,7 +77,6 @@ except FormsApiError as exc:
     st.stop()
 
 form_title = structure.get("info", {}).get("title", "")
-render_form_caption(form_title or "-")
 render_action_status(ActionBarStatus(responses=len(responses), note="підготовка PDF"))
 
 if not responses:

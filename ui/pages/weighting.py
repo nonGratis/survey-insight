@@ -55,7 +55,6 @@ from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
-    render_form_caption,
     render_page_header,
 )
 
@@ -116,7 +115,6 @@ except FormsApiError as exc:
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
-render_form_caption(structure.get("info", {}).get("title", "-"))
 render_action_status(ActionBarStatus(responses=len(responses), note="постстратифікація"))
 
 # placeholder for BAN metrics (rendered after weighting is computed)

@@ -14,7 +14,12 @@ from ui.components.page_shell import render_empty_state, render_error_state
 
 
 class _ActionContainer(Protocol):
-    def columns(self, spec: list[float], gap: str = "small") -> list[object]: ...
+    def columns(
+        self,
+        spec: list[float],
+        gap: str = "small",
+        vertical_alignment: str = "top",
+    ) -> list[object]: ...
 
     def caption(self, body: str) -> object: ...
 
@@ -89,7 +94,13 @@ def render_action_bar(
     if st.session_state.get(FORM_KEY) not in by_id:
         st.session_state[FORM_KEY] = ids[0]
 
-    select_col, actions_col = container.columns([10, 1.15], gap="small")
+    label_col, select_col, actions_col = container.columns(
+        [0.62, 9.38, 1.15],
+        gap="small",
+        vertical_alignment="center",
+    )
+    with label_col:
+        st.markdown("**Форма:**")
     with select_col:
         chosen_id = st.selectbox(
             "Форма",

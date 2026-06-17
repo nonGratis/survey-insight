@@ -37,7 +37,6 @@ from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
-    render_form_caption,
     render_page_header,
     render_state,
 )
@@ -76,7 +75,6 @@ except FormsApiError as exc:
 form_title = structure.get("info", {}).get("title", "—")
 sheet_id = get_linked_sheet_id(structure)
 
-render_form_caption(form_title)
 if not sheet_id:
     # Огляд tab працює напряму з Forms API і Sheet не потребує.
     # Решта tabs (По питаннях / Крос-таби / Якість) у майбутніх PR'ах

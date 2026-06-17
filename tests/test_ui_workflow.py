@@ -54,3 +54,13 @@ def test_catalog_table_uses_dynamic_min_max_height() -> None:
     assert "TABLE_MAX_HEIGHT_PX = 680" in catalog
     assert "def _table_height(row_count: int) -> int:" in catalog
     assert "height=_table_height(len(display))" in catalog
+
+
+def test_form_label_lives_in_action_bar_not_page_caption() -> None:
+    action_bar = (ROOT / "ui/components/action_bar.py").read_text(encoding="utf-8")
+    assert 'st.markdown("**Форма:**")' in action_bar
+    assert "[0.62, 9.38, 1.15]" in action_bar
+
+    for page in ["dynamics.py", "questions.py", "weighting.py", "export.py"]:
+        source = (ROOT / f"ui/pages/{page}").read_text(encoding="utf-8")
+        assert "render_form_caption" not in source
