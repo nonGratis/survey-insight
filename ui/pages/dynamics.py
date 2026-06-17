@@ -1,13 +1,8 @@
-"""Сторінка «Аналіз» — обробка відповідей обраної Google Form.
+"""Сторінка «Динаміка» — кумулятив відповідей і прогноз поточної хвилі.
 
-5 вкладок:
-- 📈 Огляд          — часовий кумулятив + прогноз + дедлайн (PR1)
-- 📊 По питаннях    — дескриптивна статистика per question (PR4)
-- 🔀 Крос-таби      — таблиці спряженості питання × питання (PR5)
-- 🔍 Якість         — fill-duration, drop-out, аномалії (PR6)
-- 🎯 Репрезентативність — постстратифікація + DEFF Кіша (PR7)
-
-PR1 заповнює тільки вкладку Огляд; решта показують 'Скоро у PR…' info.
+Сторінка відповідає за один сценарій: зрозуміти темп надходження відповідей,
+побачити старт нових хвиль агітації та оцінити посадку поточної хвилі без
+змішування з аналізом питань або зважуванням.
 """
 
 from __future__ import annotations
@@ -40,7 +35,7 @@ from ui.components.form_picker import render_form_picker
 
 log = get_logger(__name__)
 
-st.title("Аналіз")
+st.title("Динаміка")
 
 if not ensure_api_access():
     st.stop()
@@ -63,7 +58,7 @@ def _cached_structure(form_id_: str, _creds_token: str) -> dict:
 try:
     structure = _cached_structure(form_id, creds.token or "")
 except FormsApiError as exc:
-    log.exception("ui_analysis_get_structure_failed", extra={"form_id": form_id})
+    log.exception("ui_dynamics_get_structure_failed", extra={"form_id": form_id})
     st.error(f"Не вдалося завантажити форму: {exc}")
     st.stop()
 
@@ -147,7 +142,7 @@ try:
     timestamps = _cached_timestamps(form_id, creds.token or "")
 except FormsApiError as exc:
     log.exception(
-        "ui_analysis_list_timestamps_failed",
+        "ui_dynamics_list_timestamps_failed",
         extra={"form_id": form_id, "status": exc.status},
     )
     st.error(f"Не вдалося отримати timestamps відповідей: {exc}")
