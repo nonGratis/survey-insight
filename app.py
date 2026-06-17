@@ -65,16 +65,16 @@ pages = [
         url_path="catalog",
     ),
     st.Page(
-        "ui/pages/dynamics.py",
-        title="Динаміка",
-        icon=":material/show_chart:",
-        url_path="dynamics",
-    ),
-    st.Page(
         "ui/pages/questions.py",
         title="Запитання",
         icon=":material/quiz:",
         url_path="questions",
+    ),
+    st.Page(
+        "ui/pages/dynamics.py",
+        title="Динаміка",
+        icon=":material/show_chart:",
+        url_path="dynamics",
     ),
     st.Page(
         "ui/pages/weighting.py",
