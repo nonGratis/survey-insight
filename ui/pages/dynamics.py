@@ -315,7 +315,6 @@ with st.container():
 
         # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
-        st.subheader("Динаміка надходження відповідей")
         fig = plot_timeline_with_forecast(
             timeline=timeline,
             forecast=forecast,
