@@ -32,10 +32,18 @@ from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.metric_bar import MetricItem, render_metric_bar
+from ui.components.page_shell import (
+    render_empty_state,
+    render_error_state,
+    render_form_caption,
+    render_page_header,
+    render_state,
+)
 
 log = get_logger(__name__)
 
-st.title("Динаміка")
+render_page_header("Динаміка")
 
 if not ensure_api_access():
     st.stop()
@@ -59,19 +67,19 @@ try:
     structure = _cached_structure(form_id, creds.token or "")
 except FormsApiError as exc:
     log.exception("ui_dynamics_get_structure_failed", extra={"form_id": form_id})
-    st.error(f"Не вдалося завантажити форму: {exc}")
+    render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
 form_title = structure.get("info", {}).get("title", "—")
 sheet_id = get_linked_sheet_id(structure)
 
-st.caption(f"Форма: **{form_title}**")
+render_form_caption(form_title)
 if not sheet_id:
     # Огляд tab працює напряму з Forms API і Sheet не потребує.
     # Решта tabs (По питаннях / Крос-таби / Якість) у майбутніх PR'ах
     # покажуть власне попередження про потребу Sheet — там, де вони
     # реально читатимуть answer values.
-    st.info(
+    render_state(
         "Ця форма не має прив'язаного Google Sheet. "
         "Огляд працює через Forms API безпосередньо; інші вкладки "
         "потребуватимуть Sheet (Responses → Link to Sheets у формі)."
@@ -145,7 +153,7 @@ except FormsApiError as exc:
         "ui_dynamics_list_timestamps_failed",
         extra={"form_id": form_id, "status": exc.status},
     )
-    st.error(f"Не вдалося отримати timestamps відповідей: {exc}")
+    render_error_state("Не вдалося отримати timestamps відповідей.", details=str(exc))
     st.stop()
 
 # Ця сторінка — лише ДИНАМІКА (прогноз надходження). Якість питань і аналіз
@@ -154,7 +162,7 @@ with st.container():
     timeline = build_timeline_from_timestamps(timestamps)
 
     if timeline.cumulative.empty:
-        st.info("Поки немає валідних timestamps у відповідях.")
+        render_empty_state("Поки немає валідних timestamps у відповідях.")
     else:
         # Вікно прогнозу — у cache key. session_state може зберігати stale
         # значення (форма оновилась), тому clamp'имо у [1, n_ts].
@@ -206,20 +214,21 @@ with st.container():
             forecast, changepoints, forecast_error = None, [], None
 
         # Рядок 1: BANs — "Зараз", "Прогноз (ця хвиля)", "Стан хвилі" (порадник).
-        ban_cols = st.columns(3)
         current = int(timeline.cumulative.iloc[-1])
-        ban_cols[0].metric("Зараз", current)
+        metric_items = [MetricItem("Зараз", current)]
         if forecast is not None:
             ci_half = (forecast.final_ci[1] - forecast.final_ci[0]) // 2
-            ban_cols[1].metric(
-                "Прогноз (ця хвиля)",
-                forecast.final_estimate,
-                delta=f"±{ci_half}",
-                delta_color="off",
-                help=(
-                    "Скільки набере ПОТОЧНА хвиля, якщо без нової агітації. "
-                    "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
-                ),
+            metric_items.append(
+                MetricItem(
+                    "Прогноз (ця хвиля)",
+                    forecast.final_estimate,
+                    delta=f"±{ci_half}",
+                    delta_color="off",
+                    help=(
+                        "Скільки набере ПОТОЧНА хвиля, якщо без нової агітації. "
+                        "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
+                    ),
+                )
             )
             # Порадник: % посадки, досягнутий на КІНЕЦЬ ВІКНА прогнозу
             # (не глобальний current — інакше при звуженні вікна завжди 100%).
@@ -227,20 +236,27 @@ with st.container():
             landing = max(forecast.final_estimate, wave_now, 1)
             pct = min(int(round(wave_now / landing * 100)), 100)
             status = "на плато" if pct >= 100 else ("майже" if pct >= 80 else "набирає")
-            ban_cols[2].metric(
-                "Стан хвилі",
-                f"{pct}%",
-                delta=status,
-                delta_color="off",
-                help=(
-                    "Скільки прогнозованої посадки хвилі вже зібрано (на кінець "
-                    "вікна). 100% «на плато» → модель вважає цю хвилю сталою; для "
-                    "більшого потрібна нова агітація (майбутні хвилі тут не враховані)."
-                ),
+            metric_items.append(
+                MetricItem(
+                    "Стан хвилі",
+                    f"{pct}%",
+                    delta=status,
+                    delta_color="off",
+                    help=(
+                        "Скільки прогнозованої посадки хвилі вже зібрано (на кінець "
+                        "вікна). 100% «на плато» → модель вважає цю хвилю сталою; для "
+                        "більшого потрібна нова агітація (майбутні хвилі тут не враховані)."
+                    ),
+                )
             )
         else:
-            ban_cols[1].metric("Прогноз (ця хвиля)", "—")
-            ban_cols[2].metric("Стан хвилі", "—")
+            metric_items.extend(
+                [
+                    MetricItem("Прогноз (ця хвиля)", "—"),
+                    MetricItem("Стан хвилі", "—"),
+                ]
+            )
+        render_metric_bar(metric_items, columns=3)
 
         # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
         _last = timestamps[-1]

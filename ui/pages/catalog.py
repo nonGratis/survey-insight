@@ -32,6 +32,7 @@ from core.forms_catalog import (
 from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
 from ui.components.auth_widget import ensure_api_access
+from ui.components.page_shell import render_empty_state, render_error_state
 
 log = get_logger(__name__)
 
@@ -83,7 +84,7 @@ try:
     forms_meta = _cached_drive_list(creds.token or "")
 except FormsApiError as exc:
     log.exception("ui_catalog_drive_list_failed", extra={"status": exc.status})
-    st.error(f"Не вдалося завантажити каталог: {exc}")
+    render_error_state("Не вдалося завантажити каталог.", details=str(exc))
     st.stop()
 
 title_col, metric_col, col_refresh = st.columns([6, 1.5, 0.6])
@@ -99,7 +100,7 @@ with col_refresh:
         st.rerun()
 
 if not forms_meta:
-    st.info(
+    render_empty_state(
         "Жодної Google Form не знайдено на цьому акаунті. "
         "Створи форму на forms.google.com і повернись."
     )

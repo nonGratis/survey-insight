@@ -57,6 +57,13 @@ from core.reports import DescriptiveConfig, questions_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.metric_bar import MetricItem, render_metric_bar
+from ui.components.page_shell import (
+    render_empty_state,
+    render_error_state,
+    render_form_caption,
+    render_page_header,
+)
 from ui.report_data import weighting_from_tables
 
 log = get_logger(__name__)
@@ -79,7 +86,7 @@ def _wrap_width_for_labels(labels: pd.Series) -> int:
 # звіт давали ІДЕНТИЧНИЙ результат (DRY).
 
 
-st.title("Запитання")
+render_page_header("Запитання")
 
 if not ensure_api_access():
     st.stop()
@@ -110,10 +117,10 @@ try:
     structure = _cached_structure(form_id, creds.token or "")
 except FormsApiError as exc:
     log.exception("ui_questions_get_structure_failed", extra={"form_id": form_id})
-    st.error(f"Не вдалося завантажити форму: {exc}")
+    render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
-st.caption(f"Форма: **{structure.get('info', {}).get('title', '—')}**")
+render_form_caption(structure.get("info", {}).get("title", "—"))
 form_questions = parse_question_types(structure)
 
 tab_design, tab_responses, tab_crosstab = st.tabs(["🔧 Дизайн", "📊 Відповіді", "🔀 Крос-таби"])
@@ -122,14 +129,18 @@ with tab_design:
     # ДО публікації / без відповідей: лінтер якості формулювання питань.
     designs = analyze_form_design(structure)
     if not designs:
-        st.info("У формі немає питань для аналізу.")
+        render_empty_state("У формі немає питань для аналізу.")
     else:
         n_flagged = sum(1 for d in designs if d.flags)
         n_open = sum(1 for d in designs if d.qtype in ("text", "paragraph"))
-        dcols = st.columns(3)
-        dcols[0].metric("Питань", len(designs))
-        dcols[1].metric("З прапорами", n_flagged)
-        dcols[2].metric("Відкритих", n_open)
+        render_metric_bar(
+            [
+                MetricItem("Питань", len(designs)),
+                MetricItem("З прапорами", n_flagged),
+                MetricItem("Відкритих", n_open),
+            ],
+            columns=3,
+        )
         st.dataframe(
             [
                 {
@@ -153,9 +164,9 @@ with tab_responses:
     # ПІСЛЯ збору: розподіли + якість даних по питаннях.
     responses = _cached_responses(form_id, creds.token or "")
     if not responses:
-        st.info("Аналіз зʼявиться після перших відповідей форми.")
+        render_empty_state("Аналіз зʼявиться після перших відповідей форми.")
     else:
-        st.metric("Відповідей", len(responses))
+        render_metric_bar([MetricItem("Відповідей", len(responses))], columns=3)
         stats = analyze_responses(structure, responses)
         options_by_id = {q.id: q.options for q in form_questions}
         with st.expander("Фільтр анонімізації", expanded=False):
@@ -424,7 +435,7 @@ def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: lis
 with tab_crosstab:
     responses = _cached_responses(form_id, creds.token or "")
     if not responses:
-        st.info("Крос-аналіз зʼявиться після збору відповідей.")
+        render_empty_state("Крос-аналіз зʼявиться після збору відповідей.")
     else:
         ct_frame, variables = build_analysis_frame(structure, responses)
         meta = {v.key: v for v in variables}
