@@ -62,7 +62,6 @@ from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
-    render_form_caption,
     render_page_header,
 )
 from ui.report_data import weighting_from_tables
@@ -133,7 +132,6 @@ except FormsApiError as exc:
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
-render_form_caption(structure.get("info", {}).get("title", "-"))
 form_questions = parse_question_types(structure)
 
 mode = st.radio(
