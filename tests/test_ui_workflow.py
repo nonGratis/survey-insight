@@ -25,3 +25,12 @@ def test_weighting_settings_are_lazy_and_persisted() -> None:
     assert 'if mode == "Налаштування":' in weighting
     assert "weighting_config_" in weighting
     assert "stored_config = st.session_state.get(_config_key)" in weighting
+
+
+def test_catalog_table_selects_global_form_without_action_columns() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert "st.column_config.LinkColumn" not in catalog
+    assert '"FormID": f.id' in catalog
+    assert 'on_select="rerun"' in catalog
+    assert 'selection_mode="single-row"' in catalog
+    assert "st.session_state[FORM_KEY] = selected_form_id" in catalog

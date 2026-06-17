@@ -33,7 +33,7 @@ from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
 from ui.components.action_bar import ActionBarStatus, render_action_bar
 from ui.components.auth_widget import ensure_api_access
-from ui.components.form_picker import clear_forms_cache
+from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
 
@@ -44,8 +44,6 @@ ENRICHMENT_TICK_SECONDS = 2
 # Усі колонки таблиці у канонічному порядку. UI-користувач у settings
 # panel вибирає підмножину і її ж порядок — задавання default тут.
 ALL_COLUMNS = [
-    "📊",
-    "↗",
     "FormName",
     "Title",
     "Owner",
@@ -60,8 +58,6 @@ ALL_COLUMNS = [
     "Description",
 ]
 DEFAULT_VISIBLE_COLUMNS = [
-    "📊",
-    "↗",
     "FormName",
     "Owner",
     "Questions",
@@ -200,8 +196,7 @@ def _build_dataframe(
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
         row = {
-            "📊": f"/dynamics?form_id={f.id}",
-            "↗": f.edit_url,
+            "FormID": f.id,
             "FormName": f.name,
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
@@ -268,26 +263,19 @@ def _table_with_enrichment() -> None:
 
     df = _build_dataframe(forms_meta, enrichments, stats)
     filtered = _apply_filters(df, filter_values)
+    selection_source = filtered.reset_index(drop=True)
     table_columns = list(ALL_COLUMNS)
-    display = filtered[[c for c in table_columns if c in filtered.columns]].copy()
+    display = selection_source[[c for c in table_columns if c in selection_source.columns]].copy()
     if "Accepting" in display.columns:
         display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
 
-    st.dataframe(
+    selection = st.dataframe(
         display,
         hide_index=True,
         width="stretch",
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
-            "📊": st.column_config.LinkColumn(
-                help="Перейти на сторінку Динаміка",
-                display_text="📊",
-                width="small",
-            ),
-            "↗": st.column_config.LinkColumn(
-                help="Відкрити форму в редакторі Google Forms",
-                display_text="↗",
-                width="small",
-            ),
             "FormName": st.column_config.TextColumn("Назва"),
             "Title": st.column_config.TextColumn("Внутрішня назва"),
             "Owner": st.column_config.TextColumn("Власник"),
@@ -302,6 +290,12 @@ def _table_with_enrichment() -> None:
             "Description": st.column_config.TextColumn("Опис"),
         },
     )
+    selected_rows = getattr(getattr(selection, "selection", None), "rows", [])
+    if selected_rows:
+        selected_form_id = selection_source.iloc[selected_rows[0]]["FormID"]
+        if selected_form_id and st.session_state.get(FORM_KEY) != selected_form_id:
+            st.session_state[FORM_KEY] = selected_form_id
+            st.rerun()
 
 
 _table_with_enrichment()
