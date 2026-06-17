@@ -59,6 +59,7 @@ from ui.components.action_bar import ActionBarStatus, render_action_bar, render_
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
+from ui.components.mode_switch import render_mode_switch
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
@@ -134,12 +135,8 @@ except FormsApiError as exc:
 
 form_questions = parse_question_types(structure)
 
-mode = st.radio(
-    "Режим аналізу",
-    ["Дизайн форми", "Відповіді", "Крос-таби"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
+QUESTION_MODES = ["Дизайн форми", "Відповіді", "Крос-таби"]
+mode = render_mode_switch("Режим аналізу", QUESTION_MODES, key="questions_mode")
 
 if mode == "Дизайн форми":
     render_action_status(ActionBarStatus(note="аналіз структури форми"))

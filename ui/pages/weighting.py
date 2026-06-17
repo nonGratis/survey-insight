@@ -52,6 +52,7 @@ from ui.components.action_bar import ActionBarStatus, render_action_bar, render_
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
+from ui.components.mode_switch import render_mode_switch
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
@@ -164,12 +165,8 @@ if sheet_id:
         log.warning("ui_weighting_sheet_scan_failed", extra={"sheet_id": sheet_id})
         st.warning(f"Не вдалося просканувати Sheet (зважування лише з CSV): {exc}")
 
-mode = st.radio(
-    "Режим зважування",
-    ["Налаштування", "Таблиця ваг", "Ваги", "DEFF", "Експорт"],
-    horizontal=True,
-    label_visibility="collapsed",
-)
+WEIGHTING_MODES = ["Налаштування", "Таблиця ваг", "Ваги", "DEFF", "Експорт"]
+mode = render_mode_switch("Режим зважування", WEIGHTING_MODES, key="weighting_mode")
 _config_key = f"weighting_config_{form_id}"
 
 if mode == "Налаштування":
