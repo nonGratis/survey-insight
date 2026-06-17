@@ -24,7 +24,9 @@ class _MetricColumn(Protocol):
 
 
 class _MetricContainer(Protocol):
-    def columns(self, spec: int | Sequence[float], gap: str = "small") -> Sequence[_MetricColumn]: ...
+    def columns(
+        self, spec: int | Sequence[float], gap: str = "small"
+    ) -> Sequence[_MetricColumn]: ...
 
 
 @dataclass(frozen=True)
