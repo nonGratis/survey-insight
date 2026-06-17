@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from textwrap import fill
 
 import altair as alt
@@ -22,7 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from core.auth import credentials_from_dict
-from core.context_tables import assign_tables_to_questions, scan_sheets_for_tables
+from core.context_tables import scan_sheets_for_tables
 from core.crosstab import (
     PairAssociation,
     association_scan,
@@ -31,6 +30,13 @@ from core.crosstab import (
     odds_ratio_2x2,
     ordinal_correlation,
 )
+from core.crosstab_frame import (
+    Var,
+    build_analysis_frame,
+    pair_association,
+    short_label,
+    to_float,
+)
 from core.forms_api import (
     FormsApiError,
     get_form_structure,
@@ -38,17 +44,22 @@ from core.forms_api import (
     list_form_responses,
     parse_question_types,
 )
-from core.forms_quality import analyze_form_design, analyze_responses
+from core.forms_quality import (
+    SORT_MODES,
+    analyze_form_design,
+    analyze_responses,
+    anonymize_distribution,
+    sort_distribution,
+)
 from core.logger import get_logger
+from core.report import render_pdf
+from core.reports import DescriptiveConfig, questions_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
-from core.weighting import Dimension, compute_weighting
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.report_data import weighting_from_tables
 
 log = get_logger(__name__)
-
-NUMERIC_FRACTION = 0.8  # частка числових відповідей, аби питання вважати числовим
-MAX_LABEL = 45  # обрізання довгих формулювань у віджетах вибору крос-табів
 
 
 def _wrap_width_for_labels(labels: pd.Series) -> int:
@@ -63,64 +74,9 @@ def _wrap_width_for_labels(labels: pd.Series) -> int:
     return 22
 
 
-def _normalize_text(value: str) -> str:
-    return " ".join(str(value).split()).casefold()
-
-
-def _anonymize_distribution(
-    distribution: dict[str, int],
-    allowed_options: list[str],
-    anonymized_label: str,
-) -> dict[str, int]:
-    """Згорнути значення поза кодованими options у спільну анонімну мітку."""
-    allowed = {_normalize_text(option): option for option in allowed_options}
-    output: dict[str, int] = {}
-    for raw_value, count in distribution.items():
-        canonical = allowed.get(_normalize_text(raw_value))
-        key = canonical if canonical is not None else anonymized_label
-        output[key] = output.get(key, 0) + count
-    return output
-
-
-def _sort_distribution_items(
-    distribution: dict[str, int],
-    sort_mode: str,
-    form_options: list[str],
-    keep_label_last: bool,
-    label_last_value: str,
-) -> list[tuple[str, int]]:
-    """Сортувати розподіл за величиною, алфавітом або порядком у формі."""
-    items = list(distribution.items())
-
-    def _label_last_flag(value: str) -> int:
-        return 1 if keep_label_last and value == label_last_value else 0
-
-    if sort_mode == "Алфавіт":
-        return sorted(
-            items,
-            key=lambda kv: (
-                _label_last_flag(kv[0]),
-                _normalize_text(kv[0]),
-            ),
-        )
-    if sort_mode == "Порядок у формі":
-        order_map = {_normalize_text(option): index for index, option in enumerate(form_options)}
-        return sorted(
-            items,
-            key=lambda kv: (
-                _label_last_flag(kv[0]),
-                order_map.get(_normalize_text(kv[0]), len(order_map)),
-                _normalize_text(kv[0]),
-            ),
-        )
-    return sorted(
-        items,
-        key=lambda kv: (
-            _label_last_flag(kv[0]),
-            -kv[1],
-            _normalize_text(kv[0]),
-        ),
-    )
+# Логіка анонімізації/сортування розподілу — спільна з PDF-звітом
+# (core.forms_quality.anonymize_distribution / sort_distribution), щоб екран і
+# звіт давали ІДЕНТИЧНИЙ результат (DRY).
 
 
 st.title("Запитання")
@@ -216,10 +172,28 @@ with tab_responses:
                 'Прибирати питання, де лишилось лише "Інше*"',
                 value=False,
             )
-        sort_mode = st.selectbox(
-            "Сортування",
-            options=["За величиною", "Алфавіт", "Порядок у формі"],
-            index=0,
+        sort_mode = st.selectbox("Сортування", options=list(SORT_MODES), index=0)
+
+        # PDF успадковує поточні екранні налаштування (анонімізація, сортування)
+        # — той самий core.reports, що й глобальний «Звіт» (DRY).
+        _pdf_config = DescriptiveConfig(
+            anonymize=anonymize_open_values,
+            other_label=anonymized_label,
+            keep_other_last=keep_other_last,
+            hide_only_other=hide_only_other_questions,
+            sort_mode=sort_mode,
+            render_mode="chart",
+        )
+        st.download_button(
+            ":material/picture_as_pdf: Завантажити звіт за результатами (PDF)",
+            data=render_pdf(
+                questions_report(
+                    structure, responses, structure.get("info", {}).get("title", ""), _pdf_config
+                )
+            ),
+            file_name=f"report_{form_id}.pdf",
+            mime="application/pdf",
+            help="З поточними налаштуваннями екрана; результат кожного питання — окремою сторінкою.",
         )
         by_id = {d.question_id: d for d in analyze_form_design(structure)}
         for qid, s in stats.items():
@@ -235,14 +209,14 @@ with tab_responses:
                 if s.distribution:
                     chart_distribution = s.distribution
                     if anonymize_open_values:
-                        chart_distribution = _anonymize_distribution(
+                        chart_distribution = anonymize_distribution(
                             chart_distribution,
                             options_by_id.get(qid, []),
                             anonymized_label,
                         )
                     if hide_only_other_questions and set(chart_distribution) == {anonymized_label}:
                         continue
-                    sorted_items = _sort_distribution_items(
+                    sorted_items = sort_distribution(
                         chart_distribution,
                         sort_mode,
                         options_by_id.get(qid, []),
@@ -299,104 +273,13 @@ with tab_responses:
 # ======================= Крос-таби =========================================
 
 
-@dataclass
-class _Var:
-    """Аналітична змінна крос-аналізу (питання або бінарна опція checkbox)."""
-
-    key: str  # унікальний ключ колонки у frame
-    label: str  # людська назва
-    kind: str  # "nominal" | "ordinal" | "numeric"
-
-
-def _short(text: str) -> str:
-    return (text[:MAX_LABEL] + "…") if len(text) > MAX_LABEL else text
-
-
-def _to_float(value: str) -> float:
-    try:
-        return float(str(value).strip().replace(",", "."))
-    except ValueError:
-        return math.nan
-
-
-def _answer_list(resp: dict, qid: str) -> list[str]:
-    ans = resp.get("answers", {}).get(qid, {})
-    return [a.get("value", "") for a in ans.get("textAnswers", {}).get("answers", [])]
-
-
-def _iter_form_questions(form: dict):
-    """(qid, title, type, options) для кожного питання форми."""
-    for item in form.get("items", []):
-        q = item.get("questionItem", {}).get("question")
-        if not q:
-            continue
-        qid = q.get("questionId", "")
-        if not qid:
-            continue
-        title = item.get("title", qid)
-        if "choiceQuestion" in q:
-            ch = q["choiceQuestion"]
-            opts = [o.get("value", "") for o in ch.get("options", [])]
-            yield qid, title, ch.get("type", "RADIO"), opts
-        elif "scaleQuestion" in q:
-            yield qid, title, "SCALE", []
-        elif "textQuestion" in q:
-            yield qid, title, "TEXT", []
-
-
-def _build_analysis_frame(form: dict, responses: list[dict]) -> tuple[pd.DataFrame, list[_Var]]:
-    """Кадр «респондент × змінна» + типізація для крос-аналізу.
-
-    Числові choice/шкали → порядкові; інші choice → номінальні; CHECKBOX →
-    бінарні індикатори по кожній опції; текст із числами → числове. Вільний
-    текст і дати — поза аналізом.
-    """
-    cols: dict[str, list[str]] = {}
-    variables: list[_Var] = []
-    for qid, title, qtype, options in _iter_form_questions(form):
-        per_resp = [_answer_list(r, qid) for r in responses]
-        answered = [bool(v) for v in per_resp]
-        if not any(answered):
-            continue
-
-        if qtype == "CHECKBOX":
-            for opt in options:
-                if not opt:
-                    continue
-                key = f"{qid}::{opt}"
-                cols[key] = [
-                    ("так" if opt in vals else "ні") if ans else ""
-                    for vals, ans in zip(per_resp, answered, strict=True)
-                ]
-                variables.append(_Var(key, f"{_short(title)} → {opt}", "nominal"))
-            continue
-
-        first = [vals[0] if vals else "" for vals in per_resp]
-        non_empty = [v for v in first if v.strip()]
-        if not non_empty:
-            continue
-        numeric_share = sum(not math.isnan(_to_float(v)) for v in non_empty) / len(non_empty)
-
-        if qtype == "SCALE" or (
-            qtype in ("RADIO", "DROP_DOWN") and numeric_share >= NUMERIC_FRACTION
-        ):
-            kind = "ordinal"
-        elif qtype == "TEXT":
-            if numeric_share < NUMERIC_FRACTION:
-                continue
-            kind = "numeric"
-        else:
-            kind = "nominal"
-        cols[qid] = first
-        variables.append(_Var(qid, _short(title), kind))
-
-    frame = pd.DataFrame(cols)
-    variables = [v for v in variables if frame[v.key].replace("", pd.NA).nunique() >= 2]
-    return frame, variables
-
-
 def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
-    """Композитні ваги через авто-детект таблиць популяції у Sheet, або None."""
+    """Per-respondent ваги через авто-детект таблиць популяції у Sheet, або None.
+
+    Тонка I/O-обгортка: дістає таблиці популяції з привʼязаного Sheet (через
+    кеш Streamlit) і делегує розрахунок спільному ядру `weighting_from_tables`
+    (те саме, що й глобальний «Звіт» — DRY), повертаючи лише колонку ваг.
+    """
     sheet_id = get_linked_sheet_id(form)
     if not sheet_id:
         return None
@@ -404,23 +287,10 @@ def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
         tables = scan_sheets_for_tables(_cached_grids(sheet_id, creds.token or ""))
     except SheetsApiError:
         return None
-    if not tables:
+    result = weighting_from_tables(form, responses, tables)
+    if result is None:
         return None
-
-    single = {
-        qid: title for qid, title, t, _ in _iter_form_questions(form) if t in ("RADIO", "DROP_DOWN")
-    }
-    wframe = pd.DataFrame(
-        {qid: [(_answer_list(r, qid) or [""])[0].strip() for r in responses] for qid in single}
-    )
-    option_sets = {qid: list(dict.fromkeys(v for v in wframe[qid].tolist() if v)) for qid in single}
-    option_sets = {q: o for q, o in option_sets.items() if o}
-    assigned = assign_tables_to_questions(option_sets, tables)
-    dims = [Dimension(single[qid], qid, m.population) for qid, m in assigned.items()]
-    if not dims:
-        return None
-    res = compute_weighting(wframe.assign(R_ID=range(1, len(wframe) + 1)), dims)
-    return [float(w) if w is not None and math.isfinite(w) else 1.0 for w in res.frame["w"]]
+    return [float(w) if w is not None and math.isfinite(w) else 1.0 for w in result.frame["w"]]
 
 
 def _verdict(effect: float, label: str, p: float, significant: bool, weighted: bool) -> str:
@@ -430,39 +300,14 @@ def _verdict(effect: float, label: str, p: float, significant: bool, weighted: b
     return f"Зв'язок **{label}** (ефект {effect:.2f}), {sig} ({p_txt}, FDR){note}."
 
 
-def _pair_assoc(frame: pd.DataFrame, meta: dict[str, _Var], k1: str, k2: str, w) -> PairAssociation:
-    t1, t2 = meta[k1].kind, meta[k2].kind
-    if t1 == "numeric" and t2 == "numeric":
-        cr = numeric_correlation(frame[k1].map(_to_float), frame[k2].map(_to_float), w)
-        return PairAssociation(
-            k1, k2, "pearson", abs(cr.coef), math.copysign(1, cr.coef), cr.n, cr.p_value
-        )
-    if t1 in ("ordinal", "numeric") and t2 in ("ordinal", "numeric"):
-        cr = ordinal_correlation(frame[k1].map(_to_float), frame[k2].map(_to_float), w)
-        return PairAssociation(
-            k1, k2, "spearman", abs(cr.coef), math.copysign(1, cr.coef), cr.n, cr.p_value
-        )
-    ct = crosstab(frame[k1], frame[k2], w)
-    return PairAssociation(
-        k1,
-        k2,
-        "cramers_v",
-        ct.cramers_v,
-        0.0,
-        ct.n,
-        ct.p_value_design,
-        low_expected=ct.low_expected,
-    )
-
-
-def _render_pair(frame: pd.DataFrame, meta: dict[str, _Var], k1: str, k2: str, w) -> None:
+def _render_pair(frame: pd.DataFrame, meta: dict[str, Var], k1: str, k2: str, w) -> None:
     v1, v2 = meta[k1], meta[k2]
     both_metric = v1.kind in ("ordinal", "numeric") and v2.kind in ("ordinal", "numeric")
 
     if both_metric:
         is_numeric = v1.kind == "numeric" and v2.kind == "numeric"
         cr = (numeric_correlation if is_numeric else ordinal_correlation)(
-            frame[k1].map(_to_float), frame[k2].map(_to_float), w
+            frame[k1].map(to_float), frame[k2].map(to_float), w
         )
         name = "Pearson r" if cr.method == "pearson" else "Spearman ρ"
         mc = st.columns(3)
@@ -508,8 +353,8 @@ def _render_pair(frame: pd.DataFrame, meta: dict[str, _Var], k1: str, k2: str, w
         alt.Chart(long)
         .mark_rect()
         .encode(
-            x=alt.X("col:N", title=_short(v2.label)),
-            y=alt.Y("row:N", title=_short(v1.label)),
+            x=alt.X("col:N", title=short_label(v2.label)),
+            y=alt.Y("row:N", title=short_label(v1.label)),
             color=alt.Color("freq:Q", title="Частота", scale=alt.Scale(scheme="blues")),
             tooltip=["row", "col", alt.Tooltip("freq:Q", format=".1f")],
         )
@@ -517,12 +362,12 @@ def _render_pair(frame: pd.DataFrame, meta: dict[str, _Var], k1: str, k2: str, w
     st.altair_chart(heat, width="stretch")
 
 
-def _render_overview(frame: pd.DataFrame, meta: dict[str, _Var], w, var_keys: list[str]) -> None:
+def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: list[str]) -> None:
     pairs: list[PairAssociation] = []
     for i, k1 in enumerate(var_keys):
         for k2 in var_keys[i + 1 :]:
             try:
-                pairs.append(_pair_assoc(frame, meta, k1, k2, w))
+                pairs.append(pair_association(frame, meta, k1, k2, w))
             except ValueError:
                 continue
     if not pairs:
@@ -581,7 +426,7 @@ with tab_crosstab:
     if not responses:
         st.info("Крос-аналіз зʼявиться після збору відповідей.")
     else:
-        ct_frame, variables = _build_analysis_frame(structure, responses)
+        ct_frame, variables = build_analysis_frame(structure, responses)
         meta = {v.key: v for v in variables}
         if len(variables) < 2:
             st.info("Замало придатних питань для крос-аналізу (потрібно ≥2).")
