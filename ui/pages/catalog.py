@@ -40,6 +40,10 @@ from ui.components.page_shell import render_empty_state, render_error_state, ren
 log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
+TABLE_HEADER_HEIGHT_PX = 38
+TABLE_ROW_HEIGHT_PX = 35
+TABLE_MIN_HEIGHT_PX = 360
+TABLE_MAX_HEIGHT_PX = 680
 STATUS_ALL = "Усі"
 STATUS_OPEN = "Відкриті"
 STATUS_CLOSED = "Закриті"
@@ -216,6 +220,11 @@ def _render_catalog_metrics(df: pd.DataFrame) -> None:
     )
 
 
+def _table_height(row_count: int) -> int:
+    content_height = TABLE_HEADER_HEIGHT_PX + max(row_count, 1) * TABLE_ROW_HEIGHT_PX
+    return max(TABLE_MIN_HEIGHT_PX, min(TABLE_MAX_HEIGHT_PX, content_height))
+
+
 def _build_dataframe(
     forms: list[FormDriveMeta],
     enrichments: dict[str, FormEnrichment | None],
@@ -306,6 +315,7 @@ def _table_with_enrichment() -> None:
         display,
         hide_index=True,
         width="stretch",
+        height=_table_height(len(display)),
         on_select="rerun",
         selection_mode="single-row",
         column_config={

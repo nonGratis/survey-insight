@@ -46,3 +46,11 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
     assert 'MetricItem("Відкритих"' in catalog
     assert 'MetricItem("Закритих"' in catalog
     assert 'MetricItem("Неопублікованих"' in catalog
+
+
+def test_catalog_table_uses_dynamic_min_max_height() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert "TABLE_MIN_HEIGHT_PX = 360" in catalog
+    assert "TABLE_MAX_HEIGHT_PX = 680" in catalog
+    assert "def _table_height(row_count: int) -> int:" in catalog
+    assert "height=_table_height(len(display))" in catalog
