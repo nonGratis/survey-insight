@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from core.forms_quality import (
     LONG_QUESTION_CHARS,
+    SORT_ALPHA,
+    SORT_FORM_ORDER,
     analyze_form_design,
     analyze_responses,
+    anonymize_distribution,
+    normalize_label,
+    sort_distribution,
 )
 
 
@@ -126,3 +131,36 @@ def test_responses_empty_list():
 
 def test_empty_form_design():
     assert analyze_form_design({}) == []
+
+
+# --- спільні хелпери розподілу (екран + PDF-звіт) ---------------------------
+
+
+def test_normalize_label_collapses_space_and_case():
+    assert normalize_label("  ФІ  ОТ ") == normalize_label("фі от")
+
+
+def test_anonymize_collapses_unknown_values():
+    dist = {"Ч": 3, "Ж": 2, "вільний текст": 1, "ще інше": 1}
+    out = anonymize_distribution(dist, ["Ч", "Ж"], "Інше*")
+    assert out == {"Ч": 3, "Ж": 2, "Інше*": 2}
+
+
+def test_sort_by_count_desc():
+    assert [k for k, _ in sort_distribution({"a": 1, "b": 3, "c": 2}, "За величиною")] == [
+        "b",
+        "c",
+        "a",
+    ]
+
+
+def test_sort_alpha_keeps_label_last():
+    out = sort_distribution(
+        {"Б": 1, "А": 2, "Інше*": 9}, SORT_ALPHA, keep_label_last=True, label_last_value="Інше*"
+    )
+    assert [k for k, _ in out] == ["А", "Б", "Інше*"]
+
+
+def test_sort_form_order():
+    out = sort_distribution({"z": 1, "a": 1, "m": 1}, SORT_FORM_ORDER, form_options=["m", "z", "a"])
+    assert [k for k, _ in out] == ["m", "z", "a"]
