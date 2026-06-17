@@ -55,8 +55,9 @@ from core.logger import get_logger
 from core.report import render_pdf
 from core.reports import DescriptiveConfig, questions_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
+from ui.components.action_bar import ActionBarStatus, render_action_bar
 from ui.components.auth_widget import ensure_api_access
-from ui.components.form_picker import render_form_picker
+from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
@@ -92,10 +93,14 @@ if not ensure_api_access():
     st.stop()
 
 creds = credentials_from_dict(st.session_state["credentials"])
-choice = render_form_picker(creds)
-if not choice:
+action = render_action_bar(
+    creds,
+    refresh_scope="questions",
+    status=ActionBarStatus(note="аналіз структури та відповідей"),
+)
+if not action.selected_form:
     st.stop()
-form_id = choice["id"]
+form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
@@ -113,6 +118,14 @@ def _cached_grids(sheet_id_: str, _creds_token: str) -> dict[str, list[list[str]
     return fetch_all_grids(creds, sheet_id_)
 
 
+if action.refresh_clicked:
+    clear_forms_cache()
+    _cached_structure.clear()
+    _cached_responses.clear()
+    _cached_grids.clear()
+    st.rerun()
+
+
 try:
     structure = _cached_structure(form_id, creds.token or "")
 except FormsApiError as exc:
@@ -120,12 +133,17 @@ except FormsApiError as exc:
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
-render_form_caption(structure.get("info", {}).get("title", "—"))
+render_form_caption(structure.get("info", {}).get("title", "-"))
 form_questions = parse_question_types(structure)
 
-tab_design, tab_responses, tab_crosstab = st.tabs(["🔧 Дизайн", "📊 Відповіді", "🔀 Крос-таби"])
+mode = st.radio(
+    "Режим аналізу",
+    ["Дизайн форми", "Відповіді", "Крос-таби"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
-with tab_design:
+if mode == "Дизайн форми":
     # ДО публікації / без відповідей: лінтер якості формулювання питань.
     designs = analyze_form_design(structure)
     if not designs:
@@ -160,7 +178,7 @@ with tab_design:
             "можливе подвійне «та/або», к-сть опцій), не вирок."
         )
 
-with tab_responses:
+elif mode == "Відповіді":
     # ПІСЛЯ збору: розподіли + якість даних по питаннях.
     responses = _cached_responses(form_id, creds.token or "")
     if not responses:
@@ -432,10 +450,10 @@ def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: lis
     )
 
 
-with tab_crosstab:
+if mode == "Крос-таби":
     responses = _cached_responses(form_id, creds.token or "")
     if not responses:
-        render_empty_state("Крос-аналіз зʼявиться після збору відповідей.")
+        st.info("Крос-аналіз зʼявиться після збору відповідей.")
     else:
         ct_frame, variables = build_analysis_frame(structure, responses)
         meta = {v.key: v for v in variables}

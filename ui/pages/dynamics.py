@@ -30,8 +30,9 @@ from core.forms_api import (
 )
 from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
+from ui.components.action_bar import ActionBarStatus, render_action_bar
 from ui.components.auth_widget import ensure_api_access
-from ui.components.form_picker import render_form_picker
+from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
@@ -50,12 +51,14 @@ if not ensure_api_access():
 
 creds = credentials_from_dict(st.session_state["credentials"])
 
-# Форма обирається ГЛОБАЛЬНО (спільний sidebar-пікер) — один раз на всі
-# сторінки. ?form_id= із Каталогу підхоплюється всередині пікера.
-choice = render_form_picker(creds)
-if not choice:
+action = render_action_bar(
+    creds,
+    refresh_scope="dynamics",
+    status=ActionBarStatus(note="оперативний моніторинг"),
+)
+if not action.selected_form:
     st.stop()
-form_id = choice["id"]
+form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
@@ -120,6 +123,14 @@ def _cached_forecast(
         return fc, cps, None
     except ForecastError as exc:
         return None, [], str(exc)
+
+
+if action.refresh_clicked:
+    clear_forms_cache()
+    _cached_structure.clear()
+    _cached_timestamps.clear()
+    _cached_forecast.clear()
+    st.rerun()
 
 
 def _shift_forecast(forecast: ForecastResult, offset: int) -> ForecastResult:
@@ -228,7 +239,7 @@ with st.container():
                         "Скільки набере ПОТОЧНА хвиля, якщо без нової агітації. "
                         "Нова хвиля (нагадування/пост) додасть ще — це твоє рішення."
                     ),
-                )
+                ),
             )
             # Порадник: % посадки, досягнутий на КІНЕЦЬ ВІКНА прогнозу
             # (не глобальний current — інакше при звуженні вікна завжди 100%).
@@ -247,13 +258,13 @@ with st.container():
                         "вікна). 100% «на плато» → модель вважає цю хвилю сталою; для "
                         "більшого потрібна нова агітація (майбутні хвилі тут не враховані)."
                     ),
-                )
+                ),
             )
         else:
             metric_items.extend(
                 [
-                    MetricItem("Прогноз (ця хвиля)", "—"),
-                    MetricItem("Стан хвилі", "—"),
+                    MetricItem("Прогноз (ця хвиля)", "-"),
+                    MetricItem("Стан хвилі", "-"),
                 ]
             )
         render_metric_bar(metric_items, columns=3)

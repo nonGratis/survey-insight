@@ -27,8 +27,9 @@ from core.reports import (
     overview_section,
     representativeness_section,
 )
+from ui.components.action_bar import ActionBarStatus, render_action_bar
 from ui.components.auth_widget import ensure_api_access
-from ui.components.form_picker import render_form_picker
+from ui.components.form_picker import clear_forms_cache
 from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
@@ -47,15 +48,26 @@ if not ensure_api_access():
     st.stop()
 
 creds = credentials_from_dict(st.session_state["credentials"])
-choice = render_form_picker(creds)
-if not choice:
+action = render_action_bar(
+    creds,
+    refresh_scope="export",
+    status=ActionBarStatus(note="підготовка PDF"),
+)
+if not action.selected_form:
     st.stop()
-form_id = choice["id"]
+form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=300, show_spinner="Завантажую дані форми…")
 def _load(form_id_: str, _creds_token: str) -> tuple[dict, list[dict]]:
     return get_form_structure(creds, form_id_), list_form_responses(creds, form_id_)
+
+
+if action.refresh_clicked:
+    clear_forms_cache()
+    _load.clear()
+    st.session_state.pop(f"report_pdf_{form_id}", None)
+    st.rerun()
 
 
 try:
@@ -66,7 +78,7 @@ except FormsApiError as exc:
     st.stop()
 
 form_title = structure.get("info", {}).get("title", "")
-render_form_caption(form_title)
+render_form_caption(form_title or "-")
 
 if not responses:
     render_empty_state("Звіт зʼявиться після перших відповідей форми.")
@@ -79,6 +91,29 @@ inc_descriptive = cols[0].checkbox("Дескриптив", value=True)
 inc_representativeness = cols[1].checkbox("Репрезентативність", value=True)
 inc_associations = cols[2].checkbox("Зв'язки", value=True)
 inc_dynamics = cols[3].checkbox("Динаміка", value=True)
+
+preview_rows = [
+    ("Дескриптив", inc_descriptive, "розподіли відповідей і огляд форми"),
+    (
+        "Репрезентативність",
+        inc_representativeness,
+        "буде додано, якщо знайдено таблиці популяції",
+    ),
+    ("Зв'язки", inc_associations, "топ зв'язків між питаннями"),
+    ("Динаміка", inc_dynamics, "коротке резюме надходження відповідей"),
+]
+st.dataframe(
+    [
+        {
+            "Розділ": name,
+            "Статус": "увійде" if enabled else "пропущено",
+            "Примітка": note,
+        }
+        for name, enabled, note in preview_rows
+    ],
+    hide_index=True,
+    width="stretch",
+)
 
 with st.expander("Налаштування дескриптиву"):
     render_mode_label = st.radio("Формат", options=list(_RENDER_LABELS), index=0, horizontal=True)
