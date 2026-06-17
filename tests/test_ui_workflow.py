@@ -34,3 +34,15 @@ def test_catalog_table_selects_global_form_without_action_columns() -> None:
     assert 'on_select="rerun"' in catalog
     assert 'selection_mode="single-row"' in catalog
     assert "st.session_state[FORM_KEY] = selected_form_id" in catalog
+
+
+def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert 'STATUS_OPEN = "Відкриті"' in catalog
+    assert 'STATUS_CLOSED = "Закриті"' in catalog
+    assert 'STATUS_UNPUBLISHED = "Неопубліковані"' in catalog
+    assert 'STATUS_UNKNOWN = "Невідомо"' in catalog
+    assert 'key="catalog_publication_status"' in catalog
+    assert 'MetricItem("Відкритих"' in catalog
+    assert 'MetricItem("Закритих"' in catalog
+    assert 'MetricItem("Неопублікованих"' in catalog

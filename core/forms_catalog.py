@@ -54,6 +54,7 @@ class FormEnrichment:
     sections_count: int
     questions_count: int
     linked_sheet_id: str | None
+    is_published: bool | None  # publishSettings може бути відсутнім у legacy-форм
     accepting_responses: bool | None  # publishSettings може бути відсутнім
 
 
@@ -167,6 +168,7 @@ def _parse_form(form: dict[str, Any]) -> FormEnrichment:
         sections_count=sections,
         questions_count=questions,
         linked_sheet_id=form.get("linkedSheetId"),
+        is_published=publish_state.get("isPublished"),
         accepting_responses=publish_state.get("isAcceptingResponses"),
     )
 
