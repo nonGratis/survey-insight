@@ -51,6 +51,19 @@ def _form_edit_url(form_id: str) -> str:
     return f"https://docs.google.com/forms/d/{form_id}/edit"
 
 
+def render_action_status(
+    status: ActionBarStatus | None,
+    *,
+    container: _ActionContainer = st,
+) -> None:
+    """Render a compact status line directly below the action bar."""
+    if status is None:
+        return
+    rendered = status.render()
+    if rendered:
+        container.caption(rendered)
+
+
 def render_action_bar(
     creds: Credentials,
     *,
@@ -102,10 +115,8 @@ def render_action_bar(
             width="stretch",
         )
 
-    if show_status and status is not None:
-        rendered = status.render()
-        if rendered:
-            container.caption(rendered)
+    if show_status:
+        render_action_status(status, container=container)
 
     return ActionBarState(
         selected_form=by_id.get(chosen_id),

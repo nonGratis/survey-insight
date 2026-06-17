@@ -30,7 +30,7 @@ from core.forms_api import (
 )
 from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
-from ui.components.action_bar import ActionBarStatus, render_action_bar
+from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
@@ -54,7 +54,7 @@ creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
     creds,
     refresh_scope="dynamics",
-    status=ActionBarStatus(note="оперативний моніторинг"),
+    show_status=False,
 )
 if not action.selected_form:
     st.stop()
@@ -167,6 +167,28 @@ except FormsApiError as exc:
     render_error_state("Не вдалося отримати timestamps відповідей.", details=str(exc))
     st.stop()
 
+if timestamps:
+    _last_response = timestamps[-1]
+    _ago_seconds = max(
+        (datetime.now(tz=_last_response.tzinfo) - _last_response).total_seconds(),
+        0,
+    )
+    if _ago_seconds < 3600:
+        _fresh_label = f"{int(_ago_seconds // 60)} хв тому"
+    elif _ago_seconds < 86400:
+        _fresh_label = f"{int(_ago_seconds // 3600)} год тому"
+    else:
+        _fresh_label = f"{int(_ago_seconds // 86400)} дн тому"
+    render_action_status(
+        ActionBarStatus(
+            responses=len(timestamps),
+            updated=_fresh_label,
+            note="оперативний моніторинг",
+        )
+    )
+else:
+    render_action_status(ActionBarStatus(responses=0, note="оперативний моніторинг"))
+
 # Ця сторінка — лише ДИНАМІКА (прогноз надходження). Якість питань і аналіз
 # відповідей живуть на сторінці «Питання». Дизайн-аналіз форми — там само.
 with st.container():
@@ -270,15 +292,6 @@ with st.container():
         render_metric_bar(metric_items, columns=3)
 
         # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
-        _last = timestamps[-1]
-        _ago_s = max((datetime.now(tz=_last.tzinfo) - _last).total_seconds(), 0)
-        if _ago_s < 3600:
-            _fresh = f"{int(_ago_s // 60)} хв тому"
-        elif _ago_s < 86400:
-            _fresh = f"{int(_ago_s // 3600)} год тому"
-        else:
-            _fresh = f"{int(_ago_s // 86400)} дн тому"
-
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
         fig = plot_timeline_with_forecast(
             timeline=timeline,
@@ -287,7 +300,7 @@ with st.container():
             changepoints=changepoints,
         )
         fig.add_annotation(
-            text=f"Оновлено {_fresh}",
+            text=f"Оновлено {_fresh_label}",
             xref="paper",
             yref="paper",
             x=1.0,
