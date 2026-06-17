@@ -16,8 +16,14 @@ def test_navigation_order_matches_analysis_workflow() -> None:
 def test_heavy_analysis_pages_do_not_use_streamlit_tabs() -> None:
     questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
     weighting = (ROOT / "ui/pages/weighting.py").read_text(encoding="utf-8")
+    mode_switch = (ROOT / "ui/components/mode_switch.py").read_text(encoding="utf-8")
     assert "st.tabs(" not in questions
     assert "st.tabs(" not in weighting
+    assert "st.pills(" not in questions
+    assert "st.pills(" not in weighting
+    assert "render_mode_switch(" in questions
+    assert "render_mode_switch(" in weighting
+    assert "st.segmented_control(" in mode_switch
 
 
 def test_weighting_settings_are_lazy_and_persisted() -> None:
