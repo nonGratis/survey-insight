@@ -40,11 +40,18 @@ from ui.components.page_shell import render_empty_state, render_error_state, ren
 log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
+STATUS_ALL = "Усі"
+STATUS_OPEN = "Відкриті"
+STATUS_CLOSED = "Закриті"
+STATUS_UNPUBLISHED = "Неопубліковані"
+STATUS_UNKNOWN = "Невідомо"
+STATUS_OPTIONS = [STATUS_ALL, STATUS_OPEN, STATUS_CLOSED, STATUS_UNPUBLISHED, STATUS_UNKNOWN]
 
 # Усі колонки таблиці у канонічному порядку. UI-користувач у settings
 # panel вибирає підмножину і її ж порядок — задавання default тут.
 ALL_COLUMNS = [
     "FormName",
+    "PublicationStatus",
     "Title",
     "Owner",
     "Questions",
@@ -59,6 +66,7 @@ ALL_COLUMNS = [
 ]
 DEFAULT_VISIBLE_COLUMNS = [
     "FormName",
+    "PublicationStatus",
     "Owner",
     "Questions",
     "Accepting",
@@ -98,7 +106,6 @@ if action.refresh_clicked:
     st.session_state["form_enrichments"] = {}
     st.session_state["form_response_stats"] = {}
     st.rerun()
-render_metric_bar([MetricItem("Форм у каталозі", len(forms_meta))], columns=3)
 
 if not forms_meta:
     render_empty_state(
@@ -123,10 +130,10 @@ def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
         owner_options = sorted({f.owner_email for f in forms if f.owner_email != "—"})
         owners = st.multiselect("Власник", options=owner_options, key="catalog_owners")
     with top_right:
-        accepting = st.selectbox(
-            "Стан",
-            options=["Усі", "Приймає відповіді", "Не приймає"],
-            key="catalog_accepting",
+        publication_status = st.selectbox(
+            "Статус",
+            options=STATUS_OPTIONS,
+            key="catalog_publication_status",
         )
 
     bottom_left, bottom_right = st.columns([2, 1])
@@ -147,7 +154,7 @@ def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
         "search": search.strip(),
         "owners": owners,
         "date_range": date_range,
-        "accepting": accepting,
+        "publication_status": publication_status,
         "sheet": sheet,
     }
 
@@ -170,10 +177,8 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
             end_ts = pd.Timestamp(datetime.combine(end, datetime.max.time()), tz=UTC)
             out = out[(out["Modified"] >= start_ts) & (out["Modified"] <= end_ts)]
 
-    if f["accepting"] == "Приймає відповіді":
-        out = out[out["Accepting"] == True]  # noqa: E712 — pandas truth
-    elif f["accepting"] == "Не приймає":
-        out = out[out["Accepting"] == False]  # noqa: E712
+    if f["publication_status"] != STATUS_ALL:
+        out = out[out["PublicationStatus"] == f["publication_status"]]
 
     if f["sheet"] != "Усі":
         has_sheet = out["SheetID"].astype(str).str.len() > 0
@@ -183,6 +188,32 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
             out = out[~has_sheet]
 
     return out
+
+
+def _publication_status(enr: FormEnrichment | None) -> str:
+    if enr is None:
+        return STATUS_UNKNOWN
+    if enr.is_published is True and enr.accepting_responses is True:
+        return STATUS_OPEN
+    if enr.is_published is True and enr.accepting_responses is False:
+        return STATUS_CLOSED
+    if enr.is_published is False:
+        return STATUS_UNPUBLISHED
+    return STATUS_UNKNOWN
+
+
+def _render_catalog_metrics(df: pd.DataFrame) -> None:
+    counts = df["PublicationStatus"].value_counts()
+    render_metric_bar(
+        [
+            MetricItem("Форм у каталозі", len(df)),
+            MetricItem("Відкритих", int(counts.get(STATUS_OPEN, 0))),
+            MetricItem("Закритих", int(counts.get(STATUS_CLOSED, 0))),
+            MetricItem("Неопублікованих", int(counts.get(STATUS_UNPUBLISHED, 0))),
+            MetricItem("Невідомо", int(counts.get(STATUS_UNKNOWN, 0))),
+        ],
+        columns=5,
+    )
 
 
 def _build_dataframe(
@@ -198,6 +229,7 @@ def _build_dataframe(
         row = {
             "FormID": f.id,
             "FormName": f.name,
+            "PublicationStatus": _publication_status(enr),
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
             "Questions": enr.questions_count if enr else None,
@@ -262,6 +294,7 @@ def _table_with_enrichment() -> None:
         )
 
     df = _build_dataframe(forms_meta, enrichments, stats)
+    _render_catalog_metrics(df)
     filtered = _apply_filters(df, filter_values)
     selection_source = filtered.reset_index(drop=True)
     table_columns = list(ALL_COLUMNS)
@@ -277,6 +310,7 @@ def _table_with_enrichment() -> None:
         selection_mode="single-row",
         column_config={
             "FormName": st.column_config.TextColumn("Назва"),
+            "PublicationStatus": st.column_config.TextColumn("Статус"),
             "Title": st.column_config.TextColumn("Внутрішня назва"),
             "Owner": st.column_config.TextColumn("Власник"),
             "Questions": st.column_config.NumberColumn("Питань", format="%d"),
