@@ -89,7 +89,7 @@ def render_action_bar(
     if st.session_state.get(FORM_KEY) not in by_id:
         st.session_state[FORM_KEY] = ids[0]
 
-    select_col, refresh_col, open_col = container.columns([10, 0.72, 0.72], gap="small")
+    select_col, actions_col = container.columns([10, 1.15], gap="small")
     with select_col:
         chosen_id = st.selectbox(
             "Форма",
@@ -98,6 +98,11 @@ def render_action_bar(
             key=FORM_KEY,
             label_visibility="collapsed",
         )
+    refresh_col, open_col = actions_col.columns(
+        [1, 1],
+        gap="small",
+        vertical_alignment="top",
+    )
     with refresh_col:
         refresh_clicked = st.button(
             "",
