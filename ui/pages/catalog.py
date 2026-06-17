@@ -31,8 +31,11 @@ from core.forms_catalog import (
 )
 from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
+from ui.components.action_bar import ActionBarStatus, render_action_bar
 from ui.components.auth_widget import ensure_api_access
-from ui.components.page_shell import render_empty_state, render_error_state
+from ui.components.form_picker import clear_forms_cache
+from ui.components.metric_bar import MetricItem, render_metric_bar
+from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
 
 log = get_logger(__name__)
 
@@ -87,17 +90,19 @@ except FormsApiError as exc:
     render_error_state("Не вдалося завантажити каталог.", details=str(exc))
     st.stop()
 
-title_col, metric_col, col_refresh = st.columns([6, 1.5, 0.6])
-with title_col:
-    st.markdown("## Каталог")
-with metric_col:
-    st.metric("Форм у каталозі", len(forms_meta))
-with col_refresh:
-    if col_refresh.button("", icon=":material/refresh:", help="Скинути кеш і перечитати з Drive"):
-        _cached_drive_list.clear()
-        st.session_state["form_enrichments"] = {}
-        st.session_state["form_response_stats"] = {}
-        st.rerun()
+render_page_header("Каталог")
+action = render_action_bar(
+    creds,
+    refresh_scope="catalog",
+    status=ActionBarStatus(note=f"{len(forms_meta)} форм у каталозі"),
+)
+if action.refresh_clicked:
+    clear_forms_cache()
+    _cached_drive_list.clear()
+    st.session_state["form_enrichments"] = {}
+    st.session_state["form_response_stats"] = {}
+    st.rerun()
+render_metric_bar([MetricItem("Форм у каталозі", len(forms_meta))], columns=3)
 
 if not forms_meta:
     render_empty_state(

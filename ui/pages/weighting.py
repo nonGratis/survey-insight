@@ -48,8 +48,9 @@ from core.weighting import (
     compute_weighting,
     cumulative_design_effect,
 )
+from ui.components.action_bar import ActionBarStatus, render_action_bar
 from ui.components.auth_widget import ensure_api_access
-from ui.components.form_picker import render_form_picker
+from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import (
     render_empty_state,
@@ -74,10 +75,14 @@ if not ensure_api_access():
     st.stop()
 
 creds = credentials_from_dict(st.session_state["credentials"])
-choice = render_form_picker(creds)
-if not choice:
+action = render_action_bar(
+    creds,
+    refresh_scope="weighting",
+    status=ActionBarStatus(note="постстратифікація"),
+)
+if not action.selected_form:
     st.stop()
-form_id = choice["id"]
+form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
@@ -95,6 +100,14 @@ def _cached_grids(sheet_id_: str, _creds_token: str) -> dict[str, list[list[str]
     return fetch_all_grids(creds, sheet_id_)
 
 
+if action.refresh_clicked:
+    clear_forms_cache()
+    _cached_structure.clear()
+    _cached_responses.clear()
+    _cached_grids.clear()
+    st.rerun()
+
+
 try:
     structure = _cached_structure(form_id, creds.token or "")
     responses = _cached_responses(form_id, creds.token or "")
@@ -103,7 +116,7 @@ except FormsApiError as exc:
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
-render_form_caption(structure.get("info", {}).get("title", "—"))
+render_form_caption(structure.get("info", {}).get("title", "-"))
 
 # placeholder for BAN metrics (rendered after weighting is computed)
 metrics_placeholder = st.container()
@@ -152,17 +165,14 @@ if sheet_id:
         log.warning("ui_weighting_sheet_scan_failed", extra={"sheet_id": sheet_id})
         st.warning(f"Не вдалося просканувати Sheet (зважування лише з CSV): {exc}")
 
-tab_settings, tab_table, tab_timeline, tab_deff, tab_export = st.tabs(
-    [
-        "⚙️ Налаштування",
-        "📋 Таблиця ваг",
-        "📈 Ваги",
-        "📈 Дизайн ефект",
-        "⬇️ Експорт",
-    ]
+mode = st.radio(
+    "Режим зважування",
+    ["Налаштування", "Таблиця ваг", "Ваги", "DEFF", "Експорт"],
+    horizontal=True,
+    label_visibility="collapsed",
 )
 
-with tab_settings:
+with st.expander("Налаштування", expanded=mode == "Налаштування"):
     st.subheader("1. Виміри стратифікації та популяція")
     st.caption(
         "Для кожного виміру потрібна таблиця популяції (страта → абсолютна "
@@ -342,7 +352,7 @@ with metrics_placeholder:
             f"Ціль досягнуто: зібрано {res.n} ≥ потрібних {res.sample_need:.0f} (n_target·DEFF)."
         )
 
-with tab_table:
+if mode == "Таблиця ваг":
     st.caption(
         "Сортовано за «Ще треба» (недопредставленість) спадання: зверху страти, "
         "яким найбільше бракує відповідей. Покриття <1 = недобір, >1 = надлишок."
@@ -362,7 +372,7 @@ with tab_table:
         },
     )
 
-with tab_timeline:
+if mode == "Ваги":
     tl_weight_cols = ["w_timeline"] + [f"w_{d.name}_timeline" for d in dimensions]
     tl_labels = {"w_timeline": "Композит (w)"} | {
         f"w_{d.name}_timeline": d.name for d in dimensions
@@ -380,7 +390,7 @@ with tab_timeline:
 
     # (DEFF chart moved to its own tab)
 
-with tab_deff:
+if mode == "DEFF":
     deff_data = {"Композит": cumulative_design_effect(res.frame["w"].tolist())}
     for d in dimensions:
         deff_data[d.name] = cumulative_design_effect(res.frame[f"w_{d.name}"].tolist())
@@ -424,7 +434,7 @@ with tab_deff:
         )
         st.altair_chart(chart, width="stretch")
 
-with tab_export:
+if mode == "Експорт":
     csv_bytes = res.frame.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
         ":material/download: Завантажити зважений кадр (CSV)",
