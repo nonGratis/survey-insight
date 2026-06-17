@@ -63,7 +63,9 @@ def test_render_form_caption() -> None:
 
 def test_render_state_appends_details_and_icon() -> None:
     fake = FakeContainer()
-    render_state("Не вдалося завантажити форму.", kind="warning", details="HTTP 403", container=fake)
+    render_state(
+        "Не вдалося завантажити форму.", kind="warning", details="HTTP 403", container=fake
+    )
     assert fake.calls == [
         ("warning", "Не вдалося завантажити форму.\n\nHTTP 403", ":material/warning:")
     ]
