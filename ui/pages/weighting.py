@@ -172,8 +172,9 @@ mode = st.radio(
     horizontal=True,
     label_visibility="collapsed",
 )
+_config_key = f"weighting_config_{form_id}"
 
-with st.expander("Налаштування", expanded=mode == "Налаштування"):
+if mode == "Налаштування":
     st.subheader("1. Виміри стратифікації та популяція")
     st.caption(
         "Для кожного виміру потрібна таблиця популяції (страта → абсолютна "
@@ -282,6 +283,19 @@ with st.expander("Налаштування", expanded=mode == "Налаштув�
             value=5.0,
             step=0.5,
         )
+    st.session_state[_config_key] = {
+        "dimensions": dimensions,
+        "cap_value": cap_value,
+        "moe_pct": moe_pct,
+    }
+else:
+    stored_config = st.session_state.get(_config_key)
+    if not stored_config:
+        render_empty_state("Спершу налаштуйте виміри стратифікації.")
+        st.stop()
+    dimensions = stored_config["dimensions"]
+    cap_value = stored_config["cap_value"]
+    moe_pct = stored_config["moe_pct"]
 
 caps = None
 if cap_value > 0:

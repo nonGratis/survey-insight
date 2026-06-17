@@ -18,3 +18,10 @@ def test_heavy_analysis_pages_do_not_use_streamlit_tabs() -> None:
     weighting = (ROOT / "ui/pages/weighting.py").read_text(encoding="utf-8")
     assert "st.tabs(" not in questions
     assert "st.tabs(" not in weighting
+
+
+def test_weighting_settings_are_lazy_and_persisted() -> None:
+    weighting = (ROOT / "ui/pages/weighting.py").read_text(encoding="utf-8")
+    assert 'if mode == "Налаштування":' in weighting
+    assert "weighting_config_" in weighting
+    assert "stored_config = st.session_state.get(_config_key)" in weighting
