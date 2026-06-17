@@ -50,7 +50,7 @@ def plot_timeline_with_forecast(
     _add_changepoint_markers(fig, changepoints)
 
     fig.update_layout(
-        title="Динаміка надходження відповідей",
+        title=None,
         xaxis_title="Дата",
         yaxis_title="К-сть відповідей (кумулятив)",
         hovermode="x unified",
