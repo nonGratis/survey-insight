@@ -46,6 +46,7 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
     assert 'MetricItem("Відкритих"' in catalog
     assert 'MetricItem("Закритих"' in catalog
     assert 'MetricItem("Неопублікованих"' in catalog
+    assert "ActionBarStatus(note=" not in catalog
 
 
 def test_catalog_table_uses_dynamic_min_max_height() -> None:

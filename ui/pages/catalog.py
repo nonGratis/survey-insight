@@ -31,7 +31,7 @@ from core.forms_catalog import (
 )
 from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
-from ui.components.action_bar import ActionBarStatus, render_action_bar
+from ui.components.action_bar import render_action_bar
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
@@ -102,7 +102,6 @@ render_page_header("Каталог")
 action = render_action_bar(
     creds,
     refresh_scope="catalog",
-    status=ActionBarStatus(note=f"{len(forms_meta)} форм у каталозі"),
 )
 if action.refresh_clicked:
     clear_forms_cache()
