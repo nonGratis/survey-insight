@@ -195,7 +195,7 @@ def _build_dataframe(
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
         row = {
-            "📊": f"/analysis?form_id={f.id}",
+            "📊": f"/dynamics?form_id={f.id}",
             "↗": f.edit_url,
             "FormName": f.name,
             "Title": enr.title if enr else "",
@@ -274,7 +274,7 @@ def _table_with_enrichment() -> None:
         width="stretch",
         column_config={
             "📊": st.column_config.LinkColumn(
-                help="Перейти на сторінку Аналіз",
+                help="Перейти на сторінку Динаміка",
                 display_text="📊",
                 width="small",
             ),
