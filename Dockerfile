@@ -14,10 +14,8 @@ COPY . .
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-    CMD curl -fsS http://localhost:8501/_stcore/health || exit 1
+    CMD curl -fsS "http://localhost:${PORT:-8501}/_stcore/health" || exit 1
 
-# TODO Week 3 (Cloud Run): замінити хардкод 8501 на $PORT.
-# Cloud Run передає порт через env var $PORT (зазвичай 8080). Варіант:
-# CMD ["sh", "-c", "streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0"]
-# Поки локально/Docker — фіксований 8501. headless=true вже в .streamlit/config.toml.
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Порт параметризовано: Cloud Run передає його через env var $PORT (зазвичай
+# 8080); локально/Docker — фолбек 8501. headless=true вже в .streamlit/config.toml.
+CMD ["sh", "-c", "streamlit run app.py --server.port=${PORT:-8501} --server.address=0.0.0.0"]

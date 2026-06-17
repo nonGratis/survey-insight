@@ -233,3 +233,6 @@ research/data/
 research/reports/figures/
 research/reports/*.html
 *.ipynb_checkpoints/
+
+# Експорт коду в .docx для диплома — артефакт, не вихідник
+*.docx
