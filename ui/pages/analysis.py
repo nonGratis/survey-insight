@@ -37,10 +37,17 @@ from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.page_shell import (
+    render_empty_state,
+    render_error_state,
+    render_form_caption,
+    render_page_header,
+    render_state,
+)
 
 log = get_logger(__name__)
 
-st.title("Аналіз")
+render_page_header("Аналіз")
 
 if not ensure_api_access():
     st.stop()
@@ -64,19 +71,19 @@ try:
     structure = _cached_structure(form_id, creds.token or "")
 except FormsApiError as exc:
     log.exception("ui_analysis_get_structure_failed", extra={"form_id": form_id})
-    st.error(f"Не вдалося завантажити форму: {exc}")
+    render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
 form_title = structure.get("info", {}).get("title", "—")
 sheet_id = get_linked_sheet_id(structure)
 
-st.caption(f"Форма: **{form_title}**")
+render_form_caption(form_title)
 if not sheet_id:
     # Огляд tab працює напряму з Forms API і Sheet не потребує.
     # Решта tabs (По питаннях / Крос-таби / Якість) у майбутніх PR'ах
     # покажуть власне попередження про потребу Sheet — там, де вони
     # реально читатимуть answer values.
-    st.info(
+    render_state(
         "Ця форма не має прив'язаного Google Sheet. "
         "Огляд працює через Forms API безпосередньо; інші вкладки "
         "потребуватимуть Sheet (Responses → Link to Sheets у формі)."
@@ -150,7 +157,7 @@ except FormsApiError as exc:
         "ui_analysis_list_timestamps_failed",
         extra={"form_id": form_id, "status": exc.status},
     )
-    st.error(f"Не вдалося отримати timestamps відповідей: {exc}")
+    render_error_state("Не вдалося отримати timestamps відповідей.", details=str(exc))
     st.stop()
 
 # Ця сторінка — лише ДИНАМІКА (прогноз надходження). Якість питань і аналіз
@@ -159,7 +166,7 @@ with st.container():
     timeline = build_timeline_from_timestamps(timestamps)
 
     if timeline.cumulative.empty:
-        st.info("Поки немає валідних timestamps у відповідях.")
+        render_empty_state("Поки немає валідних timestamps у відповідях.")
     else:
         # Вікно прогнозу — у cache key. session_state може зберігати stale
         # значення (форма оновилась), тому clamp'имо у [1, n_ts].

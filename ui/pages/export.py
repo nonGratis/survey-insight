@@ -29,13 +29,19 @@ from core.reports import (
 )
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.page_shell import (
+    render_empty_state,
+    render_error_state,
+    render_form_caption,
+    render_page_header,
+)
 from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, top_association_rows
 
 log = get_logger(__name__)
 
 _RENDER_LABELS = {"Діаграми": "chart", "Таблиці": "table", "Діаграми + таблиці": "both"}
 
-st.title("Звіт")
+render_page_header("Звіт")
 
 if not ensure_api_access():
     st.stop()
@@ -56,14 +62,14 @@ try:
     structure, responses = _load(form_id, creds.token or "")
 except FormsApiError as exc:
     log.exception("ui_report_load_failed", extra={"form_id": form_id})
-    st.error(f"Не вдалося завантажити форму: {exc}")
+    render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
 form_title = structure.get("info", {}).get("title", "")
-st.caption(f"Форма: **{form_title or '—'}**")
+render_form_caption(form_title)
 
 if not responses:
-    st.info("Звіт зʼявиться після перших відповідей форми.")
+    render_empty_state("Звіт зʼявиться після перших відповідей форми.")
     st.stop()
 
 # --- розділи звіту ----------------------------------------------------------

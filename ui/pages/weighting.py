@@ -50,17 +50,23 @@ from core.weighting import (
 )
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import render_form_picker
+from ui.components.page_shell import (
+    render_empty_state,
+    render_error_state,
+    render_form_caption,
+    render_page_header,
+)
 
 log = get_logger(__name__)
 
 # Питання-кандидати у виміри — лише одиночний вибір (страта = один варіант).
 SINGLE_CHOICE_TYPES = {"MULTIPLE_CHOICE"}
 
-st.title("Зважування")
-st.caption(
+render_page_header(
+    "Зважування",
     "Постстратифікація: коригуємо перекоси вибірки за відомими вимірами та "
     "оцінюємо репрезентативність. R_ID — наскрізний номер відповіді (порядок "
-    "надходження), присутній у кожному експорті."
+    "надходження), присутній у кожному експорті.",
 )
 
 if not ensure_api_access():
@@ -93,16 +99,16 @@ try:
     responses = _cached_responses(form_id, creds.token or "")
 except FormsApiError as exc:
     log.exception("ui_weighting_load_failed", extra={"form_id": form_id})
-    st.error(f"Не вдалося завантажити форму: {exc}")
+    render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
 
-st.caption(f"Форма: **{structure.get('info', {}).get('title', '—')}**")
+render_form_caption(structure.get("info", {}).get("title", "—"))
 
 # placeholder for BAN metrics (rendered after weighting is computed)
 metrics_placeholder = st.container()
 
 if not responses:
-    st.info("Зважування зʼявиться після перших відповідей форми.")
+    render_empty_state("Зважування зʼявиться після перших відповідей форми.")
     st.stop()
 
 
@@ -126,7 +132,7 @@ def _build_frame(responses_: list[dict], qids: list[str]) -> pd.DataFrame:
 # --- питання-кандидати (одиночний вибір) ------------------------------------
 questions = [q for q in parse_question_types(structure) if q.type in SINGLE_CHOICE_TYPES]
 if not questions:
-    st.info(
+    render_empty_state(
         "У формі немає питань з одиночним вибором — нема за чим стратифікувати. "
         "Додайте питання типу «один варіант» (підрозділ, курс, стать тощо)."
     )
