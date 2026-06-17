@@ -155,6 +155,30 @@ def _shift_forecast(forecast: ForecastResult, offset: int) -> ForecastResult:
     )
 
 
+def _render_forecast_details(
+    forecast: ForecastResult,
+    *,
+    horizon_label: str,
+    horizon_end: object,
+    changepoints_count: int,
+    n_used: int,
+    n_total: int,
+) -> None:
+    """Render compact model details without turning metadata into a caption wall."""
+    chips = [
+        f"`Модель: {forecast.model}`",
+        f"`Горизонт: {horizon_label} · до {horizon_end:%d.%m.%Y}`",
+        f"`95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]}`",
+        f"`R²={forecast.r_squared:.3f}`",
+        f"`Використано: {n_used}/{n_total}`",
+    ]
+    if changepoints_count:
+        chips.append(f"`Хвиль: {changepoints_count}`")
+
+    st.markdown("**Деталі прогнозу**")
+    st.markdown(" ".join(chips))
+
+
 try:
     timestamps = _cached_timestamps(form_id, creds.token or "")
 except FormsApiError as exc:
@@ -291,6 +315,7 @@ with st.container():
 
         # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
+        st.subheader("Динаміка надходження відповідей")
         fig = plot_timeline_with_forecast(
             timeline=timeline,
             forecast=forecast,
@@ -335,7 +360,7 @@ with st.container():
         # компонент займав те саме місце і не "стрибав" UI.
         if n_ts >= 2:
             st.slider(
-                "Вікно для прогнозу",
+                "Вікно навчання прогнозу",
                 min_value=1,
                 max_value=n_ts,
                 value=(start_idx, end_idx),
@@ -348,10 +373,8 @@ with st.container():
                 ),
             )
 
-        # Рядок 5: caption — модель/якість фіту/горизонт + хвилі.
+        # Рядок 5: compact details — модель/якість фіту/горизонт + хвилі.
         n_used = end_idx - start_idx + 1
-        window_suffix = f" · використано {n_used} з {n_ts} відповідей" if n_used < n_ts else ""
-        cp_suffix = f" · виявлено хвиль агітації: {len(changepoints)}" if changepoints else ""
         if forecast is not None:
             horizon_end = forecast.future_dates[-1].date()
             _last_obs = timestamps[end_idx - 1]
@@ -363,12 +386,13 @@ with st.container():
                 if _ahead_h < 48
                 else f"~{int(round(_ahead_h / 24))} дн вперед"
             )
-            st.caption(
-                f"Прогноз поточної хвилі (без нової агітації): {forecast.model} · "
-                f"проєкція {_proj} (до {horizon_end:%d.%m.%Y}, 3× тривалості хвилі) · "
-                f"95% CI: {forecast.final_ci[0]}–{forecast.final_ci[1]} · "
-                f"R²={forecast.r_squared:.3f}"
-                f"{cp_suffix}{window_suffix}"
+            _render_forecast_details(
+                forecast,
+                horizon_label=_proj,
+                horizon_end=horizon_end,
+                changepoints_count=len(changepoints),
+                n_used=n_used,
+                n_total=n_ts,
             )
         elif forecast_error:
             # Якщо помилка — "замало точок" І користувач звузив вікно — пораду
@@ -376,4 +400,5 @@ with st.container():
             hint = ""
             if "Замало точок" in forecast_error and n_used < n_ts:
                 hint = f" Розширте вікно — повний набір має {n_ts} відповідей."
-            st.caption(f"Прогноз недоступний: {forecast_error}{hint}{window_suffix}")
+            window_suffix = f" Використано {n_used} з {n_ts} відповідей." if n_used < n_ts else ""
+            st.warning(f"Прогноз недоступний: {forecast_error}{hint}{window_suffix}")
