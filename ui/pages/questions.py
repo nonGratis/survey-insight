@@ -55,7 +55,7 @@ from core.logger import get_logger
 from core.report import render_pdf
 from core.reports import DescriptiveConfig, questions_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
-from ui.components.action_bar import ActionBarStatus, render_action_bar
+from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
@@ -96,7 +96,7 @@ creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
     creds,
     refresh_scope="questions",
-    status=ActionBarStatus(note="аналіз структури та відповідей"),
+    show_status=False,
 )
 if not action.selected_form:
     st.stop()
@@ -144,6 +144,7 @@ mode = st.radio(
 )
 
 if mode == "Дизайн форми":
+    render_action_status(ActionBarStatus(note="аналіз структури форми"))
     # ДО публікації / без відповідей: лінтер якості формулювання питань.
     designs = analyze_form_design(structure)
     if not designs:
@@ -181,6 +182,7 @@ if mode == "Дизайн форми":
 elif mode == "Відповіді":
     # ПІСЛЯ збору: розподіли + якість даних по питаннях.
     responses = _cached_responses(form_id, creds.token or "")
+    render_action_status(ActionBarStatus(responses=len(responses), note="розподіли відповідей"))
     if not responses:
         render_empty_state("Аналіз зʼявиться після перших відповідей форми.")
     else:
@@ -452,6 +454,7 @@ def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: lis
 
 if mode == "Крос-таби":
     responses = _cached_responses(form_id, creds.token or "")
+    render_action_status(ActionBarStatus(responses=len(responses), note="крос-аналіз"))
     if not responses:
         st.info("Крос-аналіз зʼявиться після збору відповідей.")
     else:

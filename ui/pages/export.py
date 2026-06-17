@@ -27,7 +27,7 @@ from core.reports import (
     overview_section,
     representativeness_section,
 )
-from ui.components.action_bar import ActionBarStatus, render_action_bar
+from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.page_shell import (
@@ -51,7 +51,7 @@ creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
     creds,
     refresh_scope="export",
-    status=ActionBarStatus(note="підготовка PDF"),
+    show_status=False,
 )
 if not action.selected_form:
     st.stop()
@@ -79,6 +79,7 @@ except FormsApiError as exc:
 
 form_title = structure.get("info", {}).get("title", "")
 render_form_caption(form_title or "-")
+render_action_status(ActionBarStatus(responses=len(responses), note="підготовка PDF"))
 
 if not responses:
     render_empty_state("Звіт зʼявиться після перших відповідей форми.")
