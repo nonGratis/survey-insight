@@ -40,6 +40,16 @@ from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, to
 log = get_logger(__name__)
 
 _RENDER_LABELS = {"Діаграми": "chart", "Таблиці": "table", "Діаграми + таблиці": "both"}
+REPORT_SECTION_DEFS = [
+    ("descriptive", "Дескриптив", "Огляд форми, кількість відповідей та розподіли по питаннях."),
+    (
+        "representativeness",
+        "Репрезентативність",
+        "Постстратифікаційні ваги, DEFF та ефективний розмір вибірки, якщо знайдено популяцію.",
+    ),
+    ("associations", "Зв'язки", "Найсильніші зв'язки між питаннями та коротка інтерпретація."),
+    ("dynamics", "Динаміка", "Темп надходження відповідей і коротке резюме поточної хвилі."),
+]
 
 render_page_header("Звіт")
 
@@ -84,44 +94,48 @@ if not responses:
     st.stop()
 
 # --- розділи звіту ----------------------------------------------------------
-st.subheader("Розділи")
-cols = st.columns(4)
-inc_descriptive = cols[0].checkbox("Дескриптив", value=True)
-inc_representativeness = cols[1].checkbox("Репрезентативність", value=True)
-inc_associations = cols[2].checkbox("Зв'язки", value=True)
-inc_dynamics = cols[3].checkbox("Динаміка", value=True)
+render_mode_label = list(_RENDER_LABELS)[0]
+sort_mode = list(SORT_MODES)[0]
+anonymize = False
+other_label = "Інше*"
+keep_other_last = True
+hide_only_other = False
+top_n = 30
 
-preview_rows = [
-    ("Дескриптив", inc_descriptive, "розподіли відповідей і огляд форми"),
-    (
-        "Репрезентативність",
-        inc_representativeness,
-        "буде додано, якщо знайдено таблиці популяції",
-    ),
-    ("Зв'язки", inc_associations, "топ зв'язків між питаннями"),
-    ("Динаміка", inc_dynamics, "коротке резюме надходження відповідей"),
+st.subheader("Секції звіту")
+section_state: dict[str, bool] = {}
+for key, title, description in REPORT_SECTION_DEFS:
+    with st.container(border=True):
+        section_state[key] = st.checkbox(
+            title,
+            value=True,
+            key=f"report_section_{key}",
+        )
+        st.caption(description)
+        if key == "descriptive" and section_state[key]:
+            with st.expander("Налаштування дескриптиву"):
+                render_mode_label = st.radio(
+                    "Формат", options=list(_RENDER_LABELS), index=0, horizontal=True
+                )
+                sort_mode = st.selectbox("Сортування", options=list(SORT_MODES), index=0)
+                anonymize = st.checkbox("Анонімізувати відкриті відповіді", value=False)
+                other_label = st.text_input("Мітка для інших", value="Інше*")
+                keep_other_last = st.checkbox("Тримати «Інше*» в кінці", value=True)
+                hide_only_other = st.checkbox("Прибирати питання лише з «Інше*»", value=False)
+                top_n = st.number_input(
+                    "Максимум варіантів на питання",
+                    min_value=5,
+                    max_value=100,
+                    value=30,
+                )
+
+inc_descriptive = section_state["descriptive"]
+inc_representativeness = section_state["representativeness"]
+inc_associations = section_state["associations"]
+inc_dynamics = section_state["dynamics"]
+enabled_sections = [
+    (title, description) for key, title, description in REPORT_SECTION_DEFS if section_state[key]
 ]
-st.dataframe(
-    [
-        {
-            "Розділ": name,
-            "Статус": "увійде" if enabled else "пропущено",
-            "Примітка": note,
-        }
-        for name, enabled, note in preview_rows
-    ],
-    hide_index=True,
-    width="stretch",
-)
-
-with st.expander("Налаштування дескриптиву"):
-    render_mode_label = st.radio("Формат", options=list(_RENDER_LABELS), index=0, horizontal=True)
-    sort_mode = st.selectbox("Сортування", options=list(SORT_MODES), index=0)
-    anonymize = st.checkbox("Анонімізувати відкриті відповіді", value=False)
-    other_label = st.text_input("Мітка для інших", value="Інше*")
-    keep_other_last = st.checkbox("Тримати «Інше*» в кінці", value=True)
-    hide_only_other = st.checkbox("Прибирати питання лише з «Інше*»", value=False)
-    top_n = st.number_input("Максимум варіантів на питання", min_value=5, max_value=100, value=30)
 
 config = DescriptiveConfig(
     anonymize=anonymize,
@@ -134,8 +148,17 @@ config = DescriptiveConfig(
 )
 
 _pdf_key = f"report_pdf_{form_id}"
+generate_clicked = st.button(
+    "Сформувати PDF-звіт",
+    icon=":material/picture_as_pdf:",
+    type="primary",
+    width="stretch",
+    disabled=not enabled_sections,
+)
+if not enabled_sections:
+    st.caption("Оберіть принаймні одну секцію для генерації PDF.")
 
-if st.button(":material/picture_as_pdf: Сформувати звіт", type="primary"):
+if generate_clicked:
     sections: list[list[object]] = []
     if inc_descriptive:
         sections.append(overview_section(structure, responses))
@@ -177,4 +200,5 @@ if st.session_state.get(_pdf_key):
         data=st.session_state[_pdf_key],
         file_name=f"report_{form_id}.pdf",
         mime="application/pdf",
+        width="stretch",
     )
