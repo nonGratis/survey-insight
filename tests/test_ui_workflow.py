@@ -73,6 +73,19 @@ def test_form_label_lives_in_action_bar_not_page_caption() -> None:
         assert "render_form_caption" not in source
 
 
+def test_form_picker_keeps_global_selection_separate_from_widget_key() -> None:
+    form_picker = (ROOT / "ui/components/form_picker.py").read_text(encoding="utf-8")
+    action_bar = (ROOT / "ui/components/action_bar.py").read_text(encoding="utf-8")
+    assert 'FORM_KEY = "global_form_id"' in form_picker
+    assert 'FORM_WIDGET_PREFIX = "global_form_select"' in form_picker
+    assert "def prepare_form_widget(" in form_picker
+    assert "def sync_form_widget(" in form_picker
+    assert "prepare_form_widget(refresh_scope, by_id)" in action_bar
+    assert "on_change=sync_form_widget" in action_bar
+    assert "key=widget_key" in action_bar
+    assert "key=FORM_KEY" not in action_bar
+
+
 def test_report_page_uses_builder_layout() -> None:
     export = (ROOT / "ui/pages/export.py").read_text(encoding="utf-8")
     assert "REPORT_SECTION_DEFS" in export

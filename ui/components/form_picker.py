@@ -8,6 +8,7 @@ from google.oauth2.credentials import Credentials
 from core.forms_api import FormsApiError, list_user_forms
 
 FORM_KEY = "global_form_id"
+FORM_WIDGET_PREFIX = "global_form_select"
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую список форм...")
@@ -24,6 +25,36 @@ def fetch_forms(creds: Credentials) -> list[dict]:
 def clear_forms_cache() -> None:
     """Clear cached Drive forms list."""
     _fetch_forms.clear()
+
+
+def form_widget_key(scope: str) -> str:
+    """Return a page-scoped widget key for the shared form selector."""
+    return f"{FORM_WIDGET_PREFIX}_{scope}"
+
+
+def sync_form_widget(widget_key: str) -> None:
+    """Copy a page-scoped selector value into persistent global form state."""
+    selected = st.session_state.get(widget_key)
+    if selected:
+        st.session_state[FORM_KEY] = selected
+
+
+def prepare_form_widget(scope: str, by_id: dict[str, dict]) -> tuple[str, str]:
+    """Prepare page-local widget state from the persistent global selection.
+
+    Streamlit widget keys are page-local in practice: using the persistent
+    global key directly as the selectbox key can be reset when navigating
+    between pages. We keep `FORM_KEY` as durable app state and use a
+    page-scoped widget key only for the current selectbox.
+    """
+    ids = list(by_id)
+    if st.session_state.get(FORM_KEY) not in by_id:
+        st.session_state[FORM_KEY] = ids[0]
+
+    widget_key = form_widget_key(scope)
+    if st.session_state.get(widget_key) != st.session_state[FORM_KEY]:
+        st.session_state[widget_key] = st.session_state[FORM_KEY]
+    return widget_key, st.session_state[FORM_KEY]
 
 
 def select_form_from_query(by_id: dict[str, dict]) -> None:
@@ -59,13 +90,14 @@ def render_form_picker(creds: Credentials) -> dict | None:
     by_id = {form["id"]: form for form in forms}
     ids = list(by_id)
     select_form_from_query(by_id)
-    if st.session_state.get(FORM_KEY) not in by_id:
-        st.session_state[FORM_KEY] = ids[0]
+    widget_key, _selected_id = prepare_form_widget("sidebar", by_id)
 
     chosen_id = st.sidebar.selectbox(
         "Форма",
         options=ids,
         format_func=lambda form_id: by_id[form_id]["name"],
-        key=FORM_KEY,
+        key=widget_key,
+        on_change=sync_form_widget,
+        args=(widget_key,),
     )
     return by_id.get(chosen_id)

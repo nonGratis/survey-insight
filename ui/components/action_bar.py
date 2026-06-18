@@ -9,7 +9,12 @@ import streamlit as st
 from google.oauth2.credentials import Credentials
 
 from core.forms_api import FormsApiError
-from ui.components.form_picker import FORM_KEY, fetch_forms, select_form_from_query
+from ui.components.form_picker import (
+    fetch_forms,
+    prepare_form_widget,
+    select_form_from_query,
+    sync_form_widget,
+)
 from ui.components.page_shell import render_empty_state, render_error_state
 
 
@@ -91,8 +96,7 @@ def render_action_bar(
     by_id = {form["id"]: form for form in forms}
     ids = list(by_id)
     select_form_from_query(by_id)
-    if st.session_state.get(FORM_KEY) not in by_id:
-        st.session_state[FORM_KEY] = ids[0]
+    widget_key, selected_id = prepare_form_widget(refresh_scope, by_id)
 
     label_col, select_col, actions_col = container.columns(
         [0.62, 9.38, 1.15],
@@ -106,7 +110,9 @@ def render_action_bar(
             "Форма",
             options=ids,
             format_func=lambda form_id: by_id[form_id]["name"],
-            key=FORM_KEY,
+            key=widget_key,
+            on_change=sync_form_widget,
+            args=(widget_key,),
             label_visibility="collapsed",
         )
     refresh_col, open_col = actions_col.columns(
@@ -125,7 +131,7 @@ def render_action_bar(
     with open_col:
         st.link_button(
             "",
-            _form_edit_url(chosen_id),
+            _form_edit_url(chosen_id or selected_id),
             icon=":material/open_in_new:",
             help="Відкрити Google Forms",
             width="stretch",
@@ -135,7 +141,7 @@ def render_action_bar(
         render_action_status(status, container=container)
 
     return ActionBarState(
-        selected_form=by_id.get(chosen_id),
+        selected_form=by_id.get(chosen_id or selected_id),
         refresh_clicked=refresh_clicked,
         forms_count=len(forms),
     )
