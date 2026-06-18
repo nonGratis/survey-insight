@@ -71,3 +71,17 @@ def test_form_label_lives_in_action_bar_not_page_caption() -> None:
     for page in ["dynamics.py", "questions.py", "weighting.py", "export.py"]:
         source = (ROOT / f"ui/pages/{page}").read_text(encoding="utf-8")
         assert "render_form_caption" not in source
+
+
+def test_report_page_uses_builder_layout() -> None:
+    export = (ROOT / "ui/pages/export.py").read_text(encoding="utf-8")
+    assert "REPORT_SECTION_DEFS" in export
+    assert "st.container(border=True)" in export
+    assert 'st.subheader("Секції звіту")' in export
+    assert '"Preview"' not in export
+    assert "preview_col" not in export
+    assert 'if key == "descriptive" and section_state[key]:' in export
+    assert "if inc_descriptive:" in export
+    assert 'type="primary"' in export
+    assert 'width="stretch"' in export
+    assert "st.dataframe(" not in export
