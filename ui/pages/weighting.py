@@ -143,6 +143,41 @@ def _build_frame(responses_: list[dict], qids: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _weighting_config_key(form_id_: str) -> str:
+    return f"weighting_config_{form_id_}"
+
+
+def _weighting_draft_key(form_id_: str) -> str:
+    return f"weighting_draft_{form_id_}"
+
+
+def _weighting_widget_key(form_id_: str, *parts: str) -> str:
+    return "_".join(["weighting", form_id_, *parts])
+
+
+def _weighting_draft(form_id_: str) -> dict:
+    draft = st.session_state.setdefault(_weighting_draft_key(form_id_), {})
+    draft.setdefault("included_questions", {})
+    draft.setdefault("manual_populations", {})
+    draft.setdefault("cap_value", 0.0)
+    draft.setdefault("moe_pct", 5.0)
+    return draft
+
+
+def _store_weighting_config(
+    form_id_: str,
+    dimensions_: list[Dimension],
+    *,
+    cap_value_: float,
+    moe_pct_: float,
+) -> None:
+    st.session_state[_weighting_config_key(form_id_)] = {
+        "dimensions": dimensions_,
+        "cap_value": cap_value_,
+        "moe_pct": moe_pct_,
+    }
+
+
 # --- питання-кандидати (одиночний вибір) ------------------------------------
 questions = [q for q in parse_question_types(structure) if q.type in SINGLE_CHOICE_TYPES]
 if not questions:
@@ -166,8 +201,13 @@ if sheet_id:
         st.warning(f"Не вдалося просканувати Sheet (зважування лише з CSV): {exc}")
 
 WEIGHTING_MODES = ["Налаштування", "Таблиця ваг", "Ваги", "DEFF", "Експорт"]
-mode = render_mode_switch("Режим зважування", WEIGHTING_MODES, key="weighting_mode")
-_config_key = f"weighting_config_{form_id}"
+mode = render_mode_switch(
+    "Режим зважування",
+    WEIGHTING_MODES,
+    key=_weighting_widget_key(form_id, "mode"),
+)
+_config_key = _weighting_config_key(form_id)
+_draft = _weighting_draft(form_id)
 
 if mode == "Налаштування":
     st.subheader("1. Виміри стратифікації та популяція")
@@ -217,7 +257,7 @@ if mode == "Налаштування":
             upload = st.file_uploader(
                 "Імпорт CSV популяції (страта, кількість) — замінює авто",
                 type=["csv", "tsv", "txt"],
-                key=f"pop_csv_{q.id}",
+                key=_weighting_widget_key(form_id, "pop_csv", q.id),
             )
             if upload is not None:
                 try:
@@ -234,16 +274,28 @@ if mode == "Налаштування":
                     else:
                         population = dict(matched.population)
                         source_label = table.source
+                        _draft["manual_populations"][q.id] = {
+                            "population": population,
+                            "source": source_label,
+                        }
                         st.success(f"CSV: покрито {matched.matched}/{len(option_values)} страт.")
                 except (ValueError, UnicodeDecodeError) as exc:
                     st.error(f"Не вдалося прочитати CSV: {exc}")
 
+            manual = _draft["manual_populations"].get(q.id)
+            if upload is None and manual:
+                population = dict(manual["population"])
+                source_label = str(manual["source"])
+                st.info(f"Використовується збережений CSV: {source_label}")
+
+            include_default = bool(_draft["included_questions"].get(q.id, population is not None))
             include = st.checkbox(
                 "Включити цей вимір у зважування",
-                value=population is not None,
-                key=f"incl_{q.id}",
+                value=include_default,
+                key=_weighting_widget_key(form_id, "include", q.id),
                 disabled=population is None,
             )
+            _draft["included_questions"][q.id] = bool(include and population)
             if include and population:
                 dimensions.append(
                     Dimension(name=q.title or q.id, column=q.id, population=population)
@@ -253,6 +305,7 @@ if mode == "Налаштування":
                 )
 
     if not dimensions:
+        st.session_state.pop(_config_key, None)
         st.info(
             "Додайте хоча б один вимір: увімкніть авто-знайдений або імпортуйте CSV "
             "популяції. Без популяції ваги порахувати неможливо."
@@ -264,8 +317,9 @@ if mode == "Налаштування":
         cap_value = st.number_input(
             "Обрізати ваги зверху (cap), 0 = вимкнено",
             min_value=0.0,
-            value=0.0,
+            value=float(_draft["cap_value"]),
             step=0.5,
+            key=_weighting_widget_key(form_id, "cap_value"),
             help=(
                 "Великі ваги (рідкісні страти) роздувають DEFF. Cap обмежує вагу "
                 "кожної страти зверху. За замовчуванням вимкнено."
@@ -275,14 +329,18 @@ if mode == "Налаштування":
             "Цільова гранична похибка, %",
             min_value=1.0,
             max_value=20.0,
-            value=5.0,
+            value=float(_draft["moe_pct"]),
             step=0.5,
+            key=_weighting_widget_key(form_id, "moe_pct"),
         )
-    st.session_state[_config_key] = {
-        "dimensions": dimensions,
-        "cap_value": cap_value,
-        "moe_pct": moe_pct,
-    }
+    _draft["cap_value"] = float(cap_value)
+    _draft["moe_pct"] = float(moe_pct)
+    _store_weighting_config(
+        form_id,
+        dimensions,
+        cap_value_=float(cap_value),
+        moe_pct_=float(moe_pct),
+    )
 else:
     stored_config = st.session_state.get(_config_key)
     if not stored_config:

@@ -35,6 +35,7 @@ from core.crosstab import (
 )
 from core.crosstab_frame import (
     Var,
+    answer_values,
     build_analysis_frame,
     pair_association,
     short_label,
@@ -58,6 +59,7 @@ from core.logger import get_logger
 from core.report import render_pdf
 from core.reports import DescriptiveConfig, questions_report
 from core.sheets_api import SheetsApiError, fetch_all_grids
+from core.weighting import RID_COLUMN, compute_weighting
 from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
@@ -313,6 +315,42 @@ def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
     return [float(w) if w is not None and math.isfinite(w) else 1.0 for w in result.frame["w"]]
 
 
+def _configured_weights(form_id_: str, responses: list[dict]) -> tuple[list[float] | None, str]:
+    """Per-respondent ваги з активної конфігурації сторінки «Зважування»."""
+    config = st.session_state.get(f"weighting_config_{form_id_}")
+    if not config:
+        return None, ""
+    dimensions = config.get("dimensions") or []
+    if not dimensions:
+        return None, ""
+
+    qids = [dim.column for dim in dimensions]
+    rows: list[dict[str, object]] = []
+    for i, resp in enumerate(responses, start=1):
+        row: dict[str, object] = {RID_COLUMN: i}
+        for qid in qids:
+            values = answer_values(resp, qid)
+            row[qid] = values[0].strip() if values else ""
+        rows.append(row)
+
+    cap_value = float(config.get("cap_value", 0.0) or 0.0)
+    caps = None
+    if cap_value > 0:
+        caps = {dim.name: {stratum: cap_value for stratum in dim.population} for dim in dimensions}
+
+    try:
+        result = compute_weighting(
+            pd.DataFrame(rows),
+            dimensions,
+            moe=float(config.get("moe_pct", 5.0)) / 100.0,
+            caps=caps,
+        )
+    except (KeyError, ValueError):
+        return None, ""
+    weights = [float(w) if w is not None and math.isfinite(w) else 1.0 for w in result.frame["w"]]
+    return weights, f"конфігурація «Зважування» · {len(dimensions)} вим."
+
+
 def _verdict(effect: float, label: str, p: float, significant: bool, weighted: bool) -> str:
     sig = "статистично значущий" if significant else "статистично НЕзначущий"
     note = " (з урахуванням ваг)" if weighted else ""
@@ -509,11 +547,18 @@ if mode == "Крос-таби":
             )
             weights = None
             if use_w:
-                weights = _auto_weights(structure, responses)
+                weight_source = ""
+                weights, weight_source = _configured_weights(form_id, responses)
+                if weights is None:
+                    weights = _auto_weights(structure, responses)
+                    weight_source = "авто-детект таблиць популяції у Sheet" if weights else ""
                 if weights is None:
                     st.info(
-                        "Ваги недоступні (немає таблиць популяції у Sheet) — показано незважено."
+                        "Ваги недоступні: налаштуйте «Зважування» або додайте таблиці популяції у Sheet. "
+                        "Показано незважено."
                     )
+                else:
+                    st.caption(f"Ваги: {weight_source}.")
             mode = st.radio("Режим", ["Пара питань", "Огляд зв'язків"], horizontal=True)
 
             if mode == "Пара питань":

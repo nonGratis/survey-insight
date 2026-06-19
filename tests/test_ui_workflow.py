@@ -57,7 +57,20 @@ def test_weighting_settings_are_lazy_and_persisted() -> None:
     weighting = (ROOT / "ui/pages/weighting.py").read_text(encoding="utf-8")
     assert 'if mode == "Налаштування":' in weighting
     assert "weighting_config_" in weighting
+    assert "weighting_draft_" in weighting
+    assert "def _weighting_widget_key(" in weighting
+    assert "def _store_weighting_config(" in weighting
     assert "stored_config = st.session_state.get(_config_key)" in weighting
+    assert '_draft["included_questions"][q.id]' in weighting
+
+
+def test_questions_prefers_configured_weighting_state() -> None:
+    questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
+    assert "def _configured_weights(" in questions
+    assert 'st.session_state.get(f"weighting_config_{form_id_}")' in questions
+    assert "weights, weight_source = _configured_weights(form_id, responses)" in questions
+    assert "weights = _auto_weights(structure, responses)" in questions
+    assert "конфігурація «Зважування»" in questions
 
 
 def test_catalog_table_selects_global_form_without_action_columns() -> None:
