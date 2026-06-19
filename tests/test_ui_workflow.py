@@ -103,6 +103,7 @@ def test_question_response_charts_cap_left_axis_labels() -> None:
     assert "def _wrap_axis_label(" in questions
     assert "def _response_axis(" in questions
     assert "labelExpr=\"split(datum.label, '\\\\n')\"" in questions
+    assert "labelOverlap=False" in questions
     assert "axis=_response_axis()" in questions
     assert "labelLimit=0" not in questions
 
