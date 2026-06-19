@@ -44,7 +44,9 @@ def test_form_design_page_renders_flow_map() -> None:
     form_design = (ROOT / "ui/pages/form_design.py").read_text(encoding="utf-8")
     assert "parse_form_flow" in form_design
     assert "flow_to_dot" in form_design
+    assert 'st.subheader("Питання форми")' in form_design
     assert 'st.subheader("Карта переходів")' in form_design
+    assert 'MetricItem("Питань"' in form_design
     assert "st.graphviz_chart(" in form_design
     assert 'MetricItem("Секцій"' in form_design
     assert 'MetricItem("Умовних переходів"' in form_design

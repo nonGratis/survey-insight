@@ -59,14 +59,35 @@ if not designs:
 else:
     n_flagged = sum(1 for d in designs if d.flags)
     n_open = sum(1 for d in designs if d.qtype in ("text", "paragraph"))
-    render_metric_bar(
-        [
-            MetricItem("Питань", len(designs)),
-            MetricItem("З прапорами", n_flagged),
-            MetricItem("Відкритих", n_open),
-        ],
-        columns=3,
-    )
+    with st.container(border=True):
+        st.subheader("Питання форми")
+        render_metric_bar(
+            [
+                MetricItem("Питань", len(designs)),
+                MetricItem("З прапорами", n_flagged),
+                MetricItem("Відкритих", n_open),
+            ],
+            columns=3,
+        )
+        st.dataframe(
+            [
+                {
+                    "Запитання": (d.title[:70] + "…") if len(d.title) > 70 else d.title,
+                    "Тип": d.qtype_label,
+                    "Опцій": d.n_options if d.n_options is not None else "—",
+                    "Обовʼязк.": "так" if d.required else "ні",
+                    "Прапори": ", ".join(d.flags) if d.flags else "—",
+                }
+                for d in designs
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "Прапори — евристичні підказки якості формулювання: довжина, можливе подвійне "
+            "«та/або», кількість опцій. Це не вирок, а швидкий pre-data аудит анкети."
+        )
+
     flow = parse_form_flow(structure)
     with st.container(border=True):
         st.subheader("Карта переходів")
@@ -103,22 +124,3 @@ else:
             )
         elif has_interesting_flow:
             st.caption("Суцільні стрілки — умовні переходи, пунктир — звичайний перехід далі.")
-
-    st.dataframe(
-        [
-            {
-                "Запитання": (d.title[:70] + "…") if len(d.title) > 70 else d.title,
-                "Тип": d.qtype_label,
-                "Опцій": d.n_options if d.n_options is not None else "—",
-                "Обовʼязк.": "так" if d.required else "ні",
-                "Прапори": ", ".join(d.flags) if d.flags else "—",
-            }
-            for d in designs
-        ],
-        width="stretch",
-        hide_index=True,
-    )
-    st.caption(
-        "Прапори — евристичні підказки якості формулювання: довжина, можливе подвійне "
-        "«та/або», кількість опцій. Це не вирок, а швидкий pre-data аудит анкети."
-    )
