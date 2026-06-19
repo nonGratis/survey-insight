@@ -48,6 +48,7 @@ _HEADER_BG = colors.HexColor("#DCE6F1")
 _GRID = colors.HexColor("#9AA7B8")
 _MUTED = colors.HexColor("#666666")
 _PAGE_MARGIN = 18 * mm
+_FRAME_PADDING = 6
 _HEADING_SIZE = {1: 16, 2: 13, 3: 11.5}
 
 
@@ -111,6 +112,7 @@ class BarChart:
     values: Sequence[float]
     value_labels: Sequence[str] | None = None
     max_label_chars: int = 32
+    max_label_lines: int = 3
 
 
 @dataclass(frozen=True)
@@ -180,7 +182,11 @@ def _styles() -> dict[str, ParagraphStyle]:
 
 
 def _content_width() -> float:
-    return A4[0] - 2 * _PAGE_MARGIN
+    return A4[0] - 2 * _PAGE_MARGIN - 2 * _FRAME_PADDING
+
+
+def _content_height() -> float:
+    return A4[1] - 2 * _PAGE_MARGIN - 2 * _FRAME_PADDING
 
 
 def _metrics_flowable(block: Metrics, styles: dict) -> Flowable:
@@ -232,6 +238,7 @@ def _table_flowable(block: TableBlock, styles: dict) -> Flowable:
 
 _BAR_COLOR = colors.HexColor("#5A78C0")
 _BAR_ROW_H = 16  # висота на один стовпець, пт
+_BAR_V_PAD = 28
 _FLOW_NODE_W = 118
 _FLOW_NODE_H = 38
 _FLOW_X_GAP = 32
@@ -246,16 +253,42 @@ _FLOW_ROUTE_COLORS = (
 )
 
 
-def _barchart_flowable(block: BarChart) -> Flowable:
+def _wrap_lines(value: str, max_chars: int, max_lines: int) -> list[str]:
+    clean = " ".join(str(value).split())
+    if len(clean) <= max_chars:
+        return [clean]
+    lines: list[str] = []
+    current = ""
+    for word in clean.split():
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word[:max_chars]
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and len(" ".join(clean.split())) > len(" ".join(lines)):
+        lines[-1] = lines[-1].rstrip("…") + "…"
+    return lines[:max_lines] or [""]
+
+
+def _barchart_drawing(block: BarChart) -> Flowable:
     """Горизонтальна діаграма засобами reportlab.graphics (без зовнішніх
     залежностей, векторно — друкується чітко на будь-якому масштабі)."""
-    labels = [
-        (str(s)[: block.max_label_chars] + "…") if len(str(s)) > block.max_label_chars else str(s)
-        for s in block.labels
+    wrapped_labels = [
+        _wrap_lines(str(label), block.max_label_chars, block.max_label_lines)
+        for label in block.labels
     ]
+    labels = ["\n".join(lines) for lines in wrapped_labels]
     values = [float(v) for v in block.values]
     n = max(len(values), 1)
-    height = max(60.0, _BAR_ROW_H * n + 28)
+    max_lines = max((len(lines) for lines in wrapped_labels), default=1)
+    row_height = _BAR_ROW_H + max(0, max_lines - 1) * 8
+    height = max(60.0, row_height * n + _BAR_V_PAD)
     width = _content_width()
     drawing = Drawing(width, height)
     chart = HorizontalBarChart()
@@ -284,27 +317,36 @@ def _barchart_flowable(block: BarChart) -> Flowable:
     return drawing
 
 
-def _wrap_lines(value: str, max_chars: int, max_lines: int) -> list[str]:
-    clean = " ".join(str(value).split())
-    if len(clean) <= max_chars:
-        return [clean]
-    lines: list[str] = []
-    current = ""
-    for word in clean.split():
-        candidate = f"{current} {word}".strip()
-        if len(candidate) <= max_chars:
-            current = candidate
-            continue
-        if current:
-            lines.append(current)
-        current = word[:max_chars]
-        if len(lines) >= max_lines:
-            break
-    if current and len(lines) < max_lines:
-        lines.append(current)
-    if len(lines) == max_lines and len(" ".join(clean.split())) > len(" ".join(lines)):
-        lines[-1] = lines[-1].rstrip("…") + "…"
-    return lines[:max_lines] or [""]
+def _barchart_flowables(block: BarChart) -> list[Flowable]:
+    """Split large charts so one ReportLab Drawing never exceeds a page frame."""
+    wrapped_labels = [
+        _wrap_lines(str(label), block.max_label_chars, block.max_label_lines)
+        for label in block.labels
+    ]
+    max_lines = max((len(lines) for lines in wrapped_labels), default=1)
+    row_height = _BAR_ROW_H + max(0, max_lines - 1) * 8
+    max_items = max(1, int((_content_height() - _BAR_V_PAD) // row_height))
+    if len(block.values) <= max_items:
+        return [_barchart_drawing(block)]
+
+    out: list[Flowable] = []
+    labels = list(block.labels)
+    values = list(block.values)
+    value_labels = list(block.value_labels) if block.value_labels else None
+    for start in range(0, len(values), max_items):
+        end = start + max_items
+        out.append(
+            _barchart_drawing(
+                BarChart(
+                    labels=labels[start:end],
+                    values=values[start:end],
+                    value_labels=value_labels[start:end] if value_labels else None,
+                    max_label_chars=block.max_label_chars,
+                    max_label_lines=block.max_label_lines,
+                )
+            )
+        )
+    return out
 
 
 def _flow_node_style(node: FlowChartNode) -> tuple[colors.Color, colors.Color, colors.Color]:
@@ -471,8 +513,9 @@ def _to_flowables(report: Report, styles: dict) -> list[Flowable]:
             flow.append(_table_flowable(block, styles))
             flow.append(Spacer(1, 6))
         elif isinstance(block, BarChart):
-            flow.append(_barchart_flowable(block))
-            flow.append(Spacer(1, 6))
+            for chart in _barchart_flowables(block):
+                flow.append(chart)
+                flow.append(Spacer(1, 6))
         elif isinstance(block, FlowChart):
             flow.append(_flowchart_flowable(block))
             flow.append(Spacer(1, 6))
