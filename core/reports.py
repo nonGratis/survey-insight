@@ -44,7 +44,11 @@ from core.report import (
     Report,
     TableBlock,
 )
-from core.weighting import WeightingResult
+from core.response_weights import (
+    compute_configured_response_weights,
+    weighted_response_distribution,
+)
+from core.weighting import Dimension, WeightingResult
 
 _STRATA_HEADERS = ("Вимір", "Страта", "N_h", "n_h", "Треба", "Вага", "Покриття", "Ще треба")
 _STRATA_WIDTHS = (0.14, 0.26, 0.09, 0.09, 0.10, 0.10, 0.10, 0.12)
@@ -74,6 +78,9 @@ class DescriptiveConfig:
     sort_mode: str = SORT_BY_COUNT
     render_mode: str = "chart"  # "table" | "chart" | "both"
     top_n: int = 30
+    weighting_dimensions: Sequence[Dimension] = ()
+    weighting_cap_value: float = 0.0
+    weighting_moe_pct: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -207,6 +214,50 @@ def overview_section(
     return blocks
 
 
+def _format_count(value: float, *, weighted: bool) -> str:
+    if weighted:
+        return _uk(float(value), ".1f")
+    return str(int(value))
+
+
+def _descriptive_distribution(
+    responses: list[dict],
+    qid: str,
+    raw_distribution: dict[str, int],
+    raw_denominator: int,
+    options: list[str],
+    cfg: DescriptiveConfig,
+) -> tuple[dict[str, float | int], float, bool]:
+    """Підготувати розподіл для PDF: raw або weighted з leave-one-dimension-out."""
+    if cfg.weighting_dimensions:
+        try:
+            weights = compute_configured_response_weights(
+                responses,
+                cfg.weighting_dimensions,
+                exclude_column=qid,
+                cap_value=cfg.weighting_cap_value,
+                moe_pct=cfg.weighting_moe_pct,
+            )
+        except (KeyError, ValueError):
+            weights = None
+        if weights is not None:
+            weighted = weighted_response_distribution(
+                responses,
+                qid,
+                weights,
+                allowed_options=options,
+                anonymize=cfg.anonymize,
+                anonymized_label=cfg.other_label,
+            )
+            if weighted is not None:
+                return weighted.distribution, weighted.denominator, True
+
+    dist: dict[str, float | int] = raw_distribution
+    if cfg.anonymize:
+        dist = anonymize_distribution(dist, options, cfg.other_label)
+    return dist, float(max(raw_denominator, 1)), False
+
+
 def descriptive_section(
     structure: dict, responses: list[dict], config: DescriptiveConfig | None = None
 ) -> list[object]:
@@ -223,22 +274,30 @@ def descriptive_section(
     blocks: list[object] = []
     first = True
     for qid, s in stats.items():
-        dist = s.distribution
-        if not s.is_text and cfg.anonymize:
-            dist = anonymize_distribution(dist, options.get(qid, []), cfg.other_label)
-        if not s.is_text and cfg.hide_only_other and set(dist) == {cfg.other_label}:
-            continue
+        dist: dict[str, float | int] = s.distribution
+        total = float(max(s.n_answered, 1))
+        weighted = False
+        if not s.is_text and dist:
+            dist, total, weighted = _descriptive_distribution(
+                responses,
+                qid,
+                s.distribution,
+                s.n_answered,
+                options.get(qid, []),
+                cfg,
+            )
+            if cfg.hide_only_other and set(dist) == {cfg.other_label}:
+                continue
 
         if not first:
             blocks.append(PageBreak())
         first = False
         design = designs.get(qid)
         blocks.append(Heading(design.title if design else qid, level=2))
-        blocks.append(
-            Para(
-                f"Відповіли {s.n_answered}/{s.n_total} · пропуск {_uk(s.non_response_pct, '.1f')} %"
-            )
-        )
+        meta = f"Відповіли {s.n_answered}/{s.n_total} · пропуск {_uk(s.non_response_pct, '.1f')} %"
+        if weighted:
+            meta += f" · зважено, нормовано до n={_uk(total, '.0f')}"
+        blocks.append(Para(meta))
 
         if s.is_text:
             if s.text_median_len:
@@ -253,9 +312,11 @@ def descriptive_section(
         items = sort_distribution(
             dist, cfg.sort_mode, options.get(qid, []), cfg.keep_other_last, cfg.other_label
         )[: cfg.top_n]
-        total = max(s.n_answered, 1)
         if cfg.render_mode in ("table", "both"):
-            rows = [[value, str(count), _pct(count / total)] for value, count in items]
+            rows = [
+                [value, _format_count(float(count), weighted=weighted), _pct(float(count) / total)]
+                for value, count in items
+            ]
             blocks.append(
                 TableBlock(headers=("Варіант", "К-сть", "%"), rows=rows, col_widths=(0.6, 0.2, 0.2))
             )

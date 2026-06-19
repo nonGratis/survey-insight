@@ -289,6 +289,7 @@ if mode == "Відповіді":
 
         # PDF успадковує поточні екранні налаштування (анонімізація, сортування)
         # — той самий core.reports, що й глобальний «Звіт» (DRY).
+        pdf_weighting_config = _weighting_config(form_id) if weight_response_charts else None
         _pdf_config = DescriptiveConfig(
             anonymize=anonymize_open_values,
             other_label=anonymized_label,
@@ -296,6 +297,19 @@ if mode == "Відповіді":
             hide_only_other=hide_only_other_questions,
             sort_mode=sort_mode,
             render_mode="chart",
+            weighting_dimensions=(
+                tuple(pdf_weighting_config["dimensions"]) if pdf_weighting_config else ()
+            ),
+            weighting_cap_value=(
+                float(pdf_weighting_config.get("cap_value", 0.0) or 0.0)
+                if pdf_weighting_config
+                else 0.0
+            ),
+            weighting_moe_pct=(
+                float(pdf_weighting_config.get("moe_pct", 5.0) or 5.0)
+                if pdf_weighting_config
+                else 5.0
+            ),
         )
         st.download_button(
             ":material/picture_as_pdf: Завантажити звіт за результатами (PDF)",

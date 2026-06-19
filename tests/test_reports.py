@@ -153,6 +153,61 @@ def test_descriptive_hide_only_other_skips_question():
     assert blocks == []  # питання приховано
 
 
+def test_descriptive_section_can_weight_question_results():
+    structure = {
+        "items": [
+            _q(
+                "dept",
+                "Підрозділ",
+                {"choiceQuestion": {"type": "RADIO", "options": [{"value": "A"}, {"value": "B"}]}},
+            ),
+            _q(
+                "support",
+                "Підтримка?",
+                {
+                    "choiceQuestion": {
+                        "type": "RADIO",
+                        "options": [{"value": "Так"}, {"value": "Ні"}],
+                    }
+                },
+            ),
+        ]
+    }
+    responses = [
+        {
+            "answers": {
+                "dept": {"textAnswers": {"answers": [{"value": "A"}]}},
+                "support": {"textAnswers": {"answers": [{"value": "Так"}]}},
+            }
+        },
+        {
+            "answers": {
+                "dept": {"textAnswers": {"answers": [{"value": "B"}]}},
+                "support": {"textAnswers": {"answers": [{"value": "Ні"}]}},
+            }
+        },
+        {
+            "answers": {
+                "dept": {"textAnswers": {"answers": [{"value": "B"}]}},
+                "support": {"textAnswers": {"answers": [{"value": "Ні"}]}},
+            }
+        },
+    ]
+
+    blocks = descriptive_section(
+        structure,
+        responses,
+        DescriptiveConfig(
+            render_mode="table",
+            weighting_dimensions=(Dimension("Підрозділ", "dept", {"A": 100, "B": 100}),),
+        ),
+    )
+
+    assert any("зважено" in getattr(block, "text", "") for block in blocks)
+    support_table = [block for block in blocks if isinstance(block, TableBlock)][1]
+    assert support_table.rows == [["Ні", "1,5", "50,0 %"], ["Так", "1,5", "50,0 %"]]
+
+
 def test_overview_section_can_include_flagged_questions_table():
     blocks = overview_section(
         {

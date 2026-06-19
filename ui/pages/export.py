@@ -79,6 +79,13 @@ def _load(form_id_: str, _creds_token: str) -> tuple[dict, list[dict]]:
     return get_form_structure(creds, form_id_), list_form_responses(creds, form_id_)
 
 
+def _weighting_config(form_id_: str) -> dict | None:
+    config = st.session_state.get(f"weighting_config_{form_id_}")
+    if not config or not config.get("dimensions"):
+        return None
+    return config
+
+
 if action.refresh_clicked:
     clear_forms_cache()
     _load.clear()
@@ -112,6 +119,8 @@ overview_include_metrics = True
 overview_include_audit = True
 overview_table_mode_label = list(_OVERVIEW_TABLE_MODES)[0]
 overview_include_flow_map = True
+saved_weighting_config = _weighting_config(form_id)
+use_descriptive_weighting = False
 
 st.subheader("Секції звіту")
 section_state: dict[str, bool] = {}
@@ -158,6 +167,18 @@ for key, title, description in REPORT_SECTION_DEFS:
                 other_label = st.text_input("Мітка для інших", value="Інше*")
                 keep_other_last = st.checkbox("Тримати «Інше*» в кінці", value=True)
                 hide_only_other = st.checkbox("Прибирати питання лише з «Інше*»", value=False)
+                use_descriptive_weighting = st.toggle(
+                    "Зважувати розподіли відповідей",
+                    value=False,
+                    disabled=saved_weighting_config is None,
+                    help=(
+                        "Використовує активну конфігурацію зі сторінки «Зважування». "
+                        "Для питання, яке саме є стратою, цей вимір виключається; ваги "
+                        "нормуються серед тих, хто відповів на питання."
+                    ),
+                )
+                if saved_weighting_config is None:
+                    st.caption("Щоб зважувати дескриптив у PDF, спершу налаштуйте «Зважування».")
 
 inc_overview = section_state["overview"]
 inc_descriptive = section_state["descriptive"]
@@ -176,6 +197,21 @@ config = DescriptiveConfig(
     sort_mode=sort_mode,
     render_mode=_RENDER_LABELS[render_mode_label],
     top_n=int(top_n),
+    weighting_dimensions=(
+        tuple(saved_weighting_config["dimensions"])
+        if use_descriptive_weighting and saved_weighting_config
+        else ()
+    ),
+    weighting_cap_value=(
+        float(saved_weighting_config.get("cap_value", 0.0) or 0.0)
+        if use_descriptive_weighting and saved_weighting_config
+        else 0.0
+    ),
+    weighting_moe_pct=(
+        float(saved_weighting_config.get("moe_pct", 5.0) or 5.0)
+        if use_descriptive_weighting and saved_weighting_config
+        else 5.0
+    ),
 )
 overview_config = OverviewConfig(
     include_response_metrics=overview_include_metrics,
