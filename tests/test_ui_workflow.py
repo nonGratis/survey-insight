@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -84,6 +83,18 @@ def test_form_picker_keeps_global_selection_separate_from_widget_key() -> None:
     assert "on_change=sync_form_widget" in action_bar
     assert "key=widget_key" in action_bar
     assert "key=FORM_KEY" not in action_bar
+
+
+def test_questions_association_overview_has_priority_filters() -> None:
+    questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
+    crosstab = (ROOT / "core/crosstab.py").read_text(encoding="utf-8")
+    assert "ASSOCIATION_FILTER_MODES" in questions
+    for mode in ["Важливі", "Значущі", "Сильні", "Ненадійні", "Усі"]:
+        assert mode in crosstab
+    assert 'key="association_overview_filter_mode"' in questions
+    assert '"Статус": classify_association(pr)' in questions
+    assert "filter_associations(" in questions
+    assert "За поточними фільтрами зв'язків не знайдено" in questions
 
 
 def test_report_page_uses_builder_layout() -> None:

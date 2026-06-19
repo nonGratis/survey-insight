@@ -23,9 +23,13 @@ import streamlit as st
 from core.auth import credentials_from_dict
 from core.context_tables import scan_sheets_for_tables
 from core.crosstab import (
+    ASSOCIATION_FILTER_MODES,
+    IMPORTANT_EFFECT_THRESHOLD,
     PairAssociation,
     association_scan,
+    classify_association,
     crosstab,
+    filter_associations,
     numeric_correlation,
     odds_ratio_2x2,
     ordinal_correlation,
@@ -424,19 +428,69 @@ def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: lis
 
     st.markdown("**Найсильніші зв'язки** (за спаданням ефекту, FDR-скориговано)")
     measure_label = {"cramers_v": "Cramér's V", "spearman": "Spearman ρ", "pearson": "Pearson r"}
+    measure_options = list(measure_label)
+    filter_mode = render_mode_switch(
+        "Фільтр зв'язків",
+        ASSOCIATION_FILTER_MODES,
+        key="association_overview_filter_mode",
+    )
+    f1, f2, f3 = st.columns([1.15, 1.0, 1.85])
+    min_effect = f1.slider(
+        "Мінімальна сила ефекту",
+        min_value=0.0,
+        max_value=1.0,
+        value=IMPORTANT_EFFECT_THRESHOLD,
+        step=0.01,
+        disabled=filter_mode != "Важливі",
+        help="Поріг практичної важливості для режиму «Важливі».",
+    )
+    hide_sparse = f2.checkbox(
+        "Приховати розріджені",
+        value=filter_mode == "Важливі",
+        key=f"association_hide_sparse_{filter_mode}",
+        help="Ховає пари з малими очікуваними частотами, де статистика менш надійна.",
+    )
+    selected_measures = f3.multiselect(
+        "Тип міри",
+        options=measure_options,
+        default=measure_options,
+        format_func=lambda name: measure_label[name],
+    )
+
+    filtered = filter_associations(
+        scanned,
+        filter_mode,
+        min_effect=min_effect,
+        hide_sparse=hide_sparse,
+        measures=selected_measures,
+    )
+    important_count = sum(classify_association(pr) in {"ключовий", "важливий"} for pr in scanned)
+    unreliable_count = sum(pr.low_expected for pr in scanned)
+    st.caption(
+        f"Показано {len(filtered)} з {len(scanned)} зв'язків · "
+        f"важливих {important_count} · ненадійних {unreliable_count}"
+    )
+    if not filtered:
+        st.info(
+            "За поточними фільтрами зв'язків не знайдено. "
+            "Зменшіть поріг сили ефекту, увімкніть розріджені таблиці або перейдіть у режим «Усі»."
+        )
+        return
+
     table = pd.DataFrame(
         [
             {
                 "Запитання 1": meta[pr.q1].label,
                 "Запитання 2": meta[pr.q2].label,
+                "Статус": classify_association(pr),
                 "Міра": measure_label[pr.measure],
                 "Ефект": round(pr.effect, 3),
                 "Сила": pr.effect_label,
                 "p (FDR)": round(pr.p_fdr, 4),
                 "Значущий": "так" if pr.significant else "ні",
-                "Розріджена": "⚠️" if pr.low_expected else "",
+                "Розріджена": "так" if pr.low_expected else "",
             }
-            for pr in scanned
+            for pr in filtered
         ]
     )
     st.dataframe(table.head(40), width="stretch", hide_index=True)
