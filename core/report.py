@@ -109,6 +109,7 @@ class BarChart:
 
     labels: Sequence[str]
     values: Sequence[float]
+    value_labels: Sequence[str] | None = None
     max_label_chars: int = 32
 
 
@@ -273,7 +274,11 @@ def _barchart_flowable(block: BarChart) -> Flowable:
     chart.barLabels.fontName = FONT
     chart.barLabels.fontSize = 7
     chart.barLabels.dx = 3
-    chart.barLabelFormat = "%.1f" if any(abs(v - round(v)) > 1e-9 for v in values) else "%d"
+    if block.value_labels:
+        chart.barLabelArray = [list(block.value_labels)]
+        chart.barLabelFormat = "values"
+    else:
+        chart.barLabelFormat = "%.1f" if any(abs(v - round(v)) > 1e-9 for v in values) else "%d"
     chart.barLabels.boxAnchor = "w"
     drawing.add(chart)
     return drawing
