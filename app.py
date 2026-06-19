@@ -65,10 +65,10 @@ pages = [
         url_path="catalog",
     ),
     st.Page(
-        "ui/pages/questions.py",
-        title="Запитання",
-        icon=":material/quiz:",
-        url_path="questions",
+        "ui/pages/form_design.py",
+        title="Дизайн форми",
+        icon=":material/rule:",
+        url_path="form-design",
     ),
     st.Page(
         "ui/pages/dynamics.py",
@@ -81,6 +81,12 @@ pages = [
         title="Зважування",
         icon=":material/balance:",
         url_path="weighting",
+    ),
+    st.Page(
+        "ui/pages/questions.py",
+        title="Запитання",
+        icon=":material/quiz:",
+        url_path="questions",
     ),
     st.Page(
         "ui/pages/export.py",
