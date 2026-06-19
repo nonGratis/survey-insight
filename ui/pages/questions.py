@@ -33,14 +33,7 @@ from core.crosstab import (
     odds_ratio_2x2,
     ordinal_correlation,
 )
-from core.crosstab_frame import (
-    Var,
-    answer_values,
-    build_analysis_frame,
-    pair_association,
-    short_label,
-    to_float,
-)
+from core.crosstab_frame import Var, build_analysis_frame, pair_association, short_label, to_float
 from core.forms_api import (
     FormsApiError,
     get_form_structure,
@@ -58,8 +51,11 @@ from core.forms_quality import (
 from core.logger import get_logger
 from core.report import render_pdf
 from core.reports import DescriptiveConfig, questions_report
+from core.response_weights import (
+    compute_configured_response_weights,
+    weighted_response_distribution,
+)
 from core.sheets_api import SheetsApiError, fetch_all_grids
-from core.weighting import RID_COLUMN, compute_weighting
 from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
@@ -104,6 +100,96 @@ def _response_axis() -> alt.Axis:
         labelPadding=8,
         labelExpr="split(datum.label, '\\n')",
     )
+
+
+def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
+    """Per-respondent ваги через авто-детект таблиць популяції у Sheet, або None.
+
+    Тонка I/O-обгортка: дістає таблиці популяції з привʼязаного Sheet (через
+    кеш Streamlit) і делегує розрахунок спільному ядру `weighting_from_tables`
+    (те саме, що й глобальний «Звіт» — DRY), повертаючи лише колонку ваг.
+    """
+    sheet_id = get_linked_sheet_id(form)
+    if not sheet_id:
+        return None
+    try:
+        tables = scan_sheets_for_tables(_cached_grids(sheet_id, creds.token or ""))
+    except SheetsApiError:
+        return None
+    result = weighting_from_tables(form, responses, tables)
+    if result is None:
+        return None
+    return [float(w) if w is not None and math.isfinite(w) else 1.0 for w in result.frame["w"]]
+
+
+def _weighting_config(form_id_: str) -> dict | None:
+    config = st.session_state.get(f"weighting_config_{form_id_}")
+    if not config:
+        return None
+    if not config.get("dimensions"):
+        return None
+    return config
+
+
+def _configured_weights(form_id_: str, responses: list[dict]) -> tuple[list[float] | None, str]:
+    """Per-respondent ваги з активної конфігурації сторінки «Зважування»."""
+    config = _weighting_config(form_id_)
+    if not config:
+        return None, ""
+    try:
+        weights = compute_configured_response_weights(
+            responses,
+            config["dimensions"],
+            cap_value=float(config.get("cap_value", 0.0) or 0.0),
+            moe_pct=float(config.get("moe_pct", 5.0) or 5.0),
+        )
+    except (KeyError, ValueError):
+        return None, ""
+    if weights is None:
+        return None, ""
+    return weights, f"конфігурація «Зважування» · {len(config['dimensions'])} вим."
+
+
+def _configured_question_distribution(
+    form_id_: str,
+    responses: list[dict],
+    qid: str,
+    *,
+    allowed_options: list[str],
+    anonymize: bool,
+    anonymized_label: str,
+) -> tuple[dict[str, float] | None, float | None, str]:
+    """Weighted distribution for one response chart with leave-one-dimension-out."""
+    config = _weighting_config(form_id_)
+    if not config:
+        return None, None, ""
+    try:
+        weights = compute_configured_response_weights(
+            responses,
+            config["dimensions"],
+            exclude_column=qid,
+            cap_value=float(config.get("cap_value", 0.0) or 0.0),
+            moe_pct=float(config.get("moe_pct", 5.0) or 5.0),
+        )
+    except (KeyError, ValueError):
+        return None, None, ""
+    if weights is None:
+        return None, None, ""
+
+    weighted = weighted_response_distribution(
+        responses,
+        qid,
+        weights,
+        allowed_options=allowed_options,
+        anonymize=anonymize,
+        anonymized_label=anonymized_label,
+    )
+    if weighted is None:
+        return None, None, ""
+
+    used_dimensions = [dim for dim in config["dimensions"] if dim.column != qid]
+    source = f"зважено · {len(used_dimensions)} вим. · нормовано до n={weighted.n_answered}"
+    return weighted.distribution, weighted.denominator, source
 
 
 # Логіка анонімізації/сортування розподілу — спільна з PDF-звітом
@@ -187,6 +273,19 @@ if mode == "Відповіді":
                 value=False,
             )
         sort_mode = st.selectbox("Сортування", options=list(SORT_MODES), index=0)
+        has_weighting_config = _weighting_config(form_id) is not None
+        weight_response_charts = st.toggle(
+            "Зважувати розподіли відповідей",
+            value=False,
+            disabled=not has_weighting_config,
+            help=(
+                "Використовує активну конфігурацію зі сторінки «Зважування». "
+                "Для питання, яке саме є стратою, цей вимір виключається; ваги "
+                "нормуються серед тих, хто відповів на питання."
+            ),
+        )
+        if not has_weighting_config:
+            st.caption("Щоб зважувати розподіли, спершу налаштуйте сторінку «Зважування».")
 
         # PDF успадковує поточні екранні налаштування (анонімізація, сортування)
         # — той самий core.reports, що й глобальний «Звіт» (DRY).
@@ -220,17 +319,41 @@ if mode == "Відповіді":
             else:
                 st.caption(meta)
                 if s.distribution:
-                    chart_distribution = s.distribution
-                    if anonymize_open_values:
-                        chart_distribution = anonymize_distribution(
+                    is_weighted_chart = False
+                    chart_denominator = float(max(s.n_answered, 1))
+                    weight_source = ""
+                    chart_distribution: dict[str, float] | dict[str, int]
+                    if weight_response_charts:
+                        weighted_dist, weighted_denominator, weight_source = (
+                            _configured_question_distribution(
+                                form_id,
+                                responses,
+                                qid,
+                                allowed_options=options_by_id.get(qid, []),
+                                anonymize=anonymize_open_values,
+                                anonymized_label=anonymized_label,
+                            )
+                        )
+                        if weighted_dist and weighted_denominator:
+                            chart_distribution = weighted_dist
+                            chart_denominator = weighted_denominator
+                            is_weighted_chart = True
+                        else:
+                            chart_distribution = s.distribution
+                    else:
+                        chart_distribution = s.distribution
+
+                    if not is_weighted_chart:
+                        if anonymize_open_values:
+                            chart_distribution = anonymize_distribution(
+                                chart_distribution,
+                                options_by_id.get(qid, []),
+                                anonymized_label,
+                            )
+                        chart_distribution = canonicalize_distribution(
                             chart_distribution,
                             options_by_id.get(qid, []),
-                            anonymized_label,
                         )
-                    chart_distribution = canonicalize_distribution(
-                        chart_distribution,
-                        options_by_id.get(qid, []),
-                    )
                     if hide_only_other_questions and set(chart_distribution) == {anonymized_label}:
                         continue
                     sorted_items = sort_distribution(
@@ -242,7 +365,7 @@ if mode == "Відповіді":
                     )[:30]
                     top_items = sorted_items
                     chart_df = pd.DataFrame(top_items, columns=["Відповідь", "Кількість"])
-                    chart_df["%"] = chart_df["Кількість"] / max(s.n_answered, 1) * 100
+                    chart_df["%"] = chart_df["Кількість"] / chart_denominator * 100
                     wrap_width = _wrap_width_for_labels(chart_df["Відповідь"])
                     chart_df["Відповідь_перенесена"] = chart_df["Відповідь"].map(
                         lambda value, width=wrap_width: _wrap_axis_label(value, width)
@@ -251,18 +374,25 @@ if mode == "Відповіді":
                         (str(value).count("\n") + 1 for value in chart_df["Відповідь_перенесена"]),
                         default=1,
                     )
-                    chart_df["Підпис"] = chart_df.apply(
-                        lambda row: f"{row['%']:.1f}% · {int(row['Кількість'])}",
-                        axis=1,
-                    )
+                    if is_weighted_chart:
+                        chart_df["Підпис"] = chart_df.apply(
+                            lambda row: f"{row['%']:.1f}% · {row['Кількість']:.1f}",
+                            axis=1,
+                        )
+                    else:
+                        chart_df["Підпис"] = chart_df.apply(
+                            lambda row: f"{row['%']:.1f}% · {int(row['Кількість'])}",
+                            axis=1,
+                        )
                     row_height = max(30, RESPONSE_AXIS_LABEL_LINE_HEIGHT_PX * max_label_lines + 8)
                     chart_height = max(420, min(1200, row_height * len(chart_df)))
                     y_order = chart_df["Відповідь_перенесена"].tolist()
+                    x_title = "Зважених відповідей" if is_weighted_chart else "Відповідей"
                     base = (
                         alt.Chart(chart_df)
                         .mark_bar()
                         .encode(
-                            x=alt.X("Кількість:Q", title="Відповідей"),
+                            x=alt.X("Кількість:Q", title=x_title),
                             y=alt.Y(
                                 "Відповідь_перенесена:N",
                                 sort=y_order,
@@ -271,7 +401,11 @@ if mode == "Відповіді":
                             ),
                             tooltip=[
                                 alt.Tooltip("Відповідь:N", title="Відповідь"),
-                                alt.Tooltip("Кількість:Q", title="Відповідей"),
+                                alt.Tooltip(
+                                    "Кількість:Q",
+                                    title="Зважено" if is_weighted_chart else "Відповідей",
+                                    format=".1f" if is_weighted_chart else ".0f",
+                                ),
                                 alt.Tooltip("%:Q", title="%", format=".1f"),
                             ],
                         )
@@ -288,67 +422,18 @@ if mode == "Відповіді":
                     st.altair_chart(
                         (base + labels).properties(height=chart_height), width="stretch"
                     )
+                    if is_weighted_chart:
+                        st.caption(weight_source)
+                    elif weight_response_charts:
+                        st.caption(
+                            "Для цього питання зважування не застосовано: після виключення "
+                            "власної страти не лишилось активних вимірів."
+                        )
             st.divider()
         st.caption("Аналіз зв'язків між питаннями — на вкладці «🔀 Крос-таби».")
 
 
 # ======================= Крос-таби =========================================
-
-
-def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
-    """Per-respondent ваги через авто-детект таблиць популяції у Sheet, або None.
-
-    Тонка I/O-обгортка: дістає таблиці популяції з привʼязаного Sheet (через
-    кеш Streamlit) і делегує розрахунок спільному ядру `weighting_from_tables`
-    (те саме, що й глобальний «Звіт» — DRY), повертаючи лише колонку ваг.
-    """
-    sheet_id = get_linked_sheet_id(form)
-    if not sheet_id:
-        return None
-    try:
-        tables = scan_sheets_for_tables(_cached_grids(sheet_id, creds.token or ""))
-    except SheetsApiError:
-        return None
-    result = weighting_from_tables(form, responses, tables)
-    if result is None:
-        return None
-    return [float(w) if w is not None and math.isfinite(w) else 1.0 for w in result.frame["w"]]
-
-
-def _configured_weights(form_id_: str, responses: list[dict]) -> tuple[list[float] | None, str]:
-    """Per-respondent ваги з активної конфігурації сторінки «Зважування»."""
-    config = st.session_state.get(f"weighting_config_{form_id_}")
-    if not config:
-        return None, ""
-    dimensions = config.get("dimensions") or []
-    if not dimensions:
-        return None, ""
-
-    qids = [dim.column for dim in dimensions]
-    rows: list[dict[str, object]] = []
-    for i, resp in enumerate(responses, start=1):
-        row: dict[str, object] = {RID_COLUMN: i}
-        for qid in qids:
-            values = answer_values(resp, qid)
-            row[qid] = values[0].strip() if values else ""
-        rows.append(row)
-
-    cap_value = float(config.get("cap_value", 0.0) or 0.0)
-    caps = None
-    if cap_value > 0:
-        caps = {dim.name: {stratum: cap_value for stratum in dim.population} for dim in dimensions}
-
-    try:
-        result = compute_weighting(
-            pd.DataFrame(rows),
-            dimensions,
-            moe=float(config.get("moe_pct", 5.0)) / 100.0,
-            caps=caps,
-        )
-    except (KeyError, ValueError):
-        return None, ""
-    weights = [float(w) if w is not None and math.isfinite(w) else 1.0 for w in result.frame["w"]]
-    return weights, f"конфігурація «Зважування» · {len(dimensions)} вим."
 
 
 def _verdict(effect: float, label: str, p: float, significant: bool, weighted: bool) -> str:
