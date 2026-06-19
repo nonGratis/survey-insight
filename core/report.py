@@ -273,7 +273,7 @@ def _barchart_flowable(block: BarChart) -> Flowable:
     chart.barLabels.fontName = FONT
     chart.barLabels.fontSize = 7
     chart.barLabels.dx = 3
-    chart.barLabelFormat = "%d"
+    chart.barLabelFormat = "%.1f" if any(abs(v - round(v)) > 1e-9 for v in values) else "%d"
     chart.barLabels.boxAnchor = "w"
     drawing.add(chart)
     return drawing

@@ -81,6 +81,11 @@ def test_questions_response_tab_can_use_configured_weights() -> None:
     assert "weighted_response_distribution(" in questions
     assert '"Зважувати розподіли відповідей"' in questions
     assert '"Зважених відповідей"' in questions
+    assert (
+        "pdf_weighting_config = _weighting_config(form_id) if weight_response_charts else None"
+        in questions
+    )
+    assert "weighting_dimensions=(" in questions
 
 
 def test_catalog_table_selects_global_form_without_action_columns() -> None:
@@ -180,6 +185,9 @@ def test_report_page_uses_builder_layout() -> None:
     assert '"Таблиця питань"' in export
     assert '"Додати карту переходів"' in export
     assert '"Максимум варіантів на питання"' not in export
+    assert "def _weighting_config(form_id_: str) -> dict | None:" in export
+    assert '"Зважувати розподіли відповідей"' in export
+    assert "weighting_dimensions=(" in export
     assert 'if key == "descriptive" and section_state[key]:' in export
     assert "if inc_overview:" in export
     assert "if inc_descriptive:" in export
