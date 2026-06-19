@@ -122,10 +122,14 @@ def _iter_questions(form: dict[str, Any]):
             if qid:
                 yield qid, title, q
         elif "questionGroupItem" in item:
-            for sub in item["questionGroupItem"].get("questions", []):
+            group = item["questionGroupItem"]
+            grid_columns = group.get("grid", {}).get("columns")
+            for sub in group.get("questions", []):
                 qid = sub.get("questionId", "")
                 row = sub.get("rowQuestion", {}).get("title", "")
                 if qid:
+                    if grid_columns and "choiceQuestion" not in sub:
+                        sub = {**sub, "choiceQuestion": grid_columns}
                     yield qid, f"{title} — {row}".strip(" —"), sub
 
 

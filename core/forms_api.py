@@ -226,10 +226,37 @@ def parse_question_types(form: dict[str, Any]) -> list[Question]:
     """
     questions: list[Question] = []
     for item in form.get("items", []):
-        q = _extract_question(item)
-        if q is not None:
-            questions.append(q)
+        questions.extend(_extract_questions(item))
     return questions
+
+
+def _extract_questions(item: dict[str, Any]) -> list[Question]:
+    """Розпарсити item у 0..N питань, включно з matrix/grid question groups."""
+    single = _extract_question(item)
+    if single is not None:
+        return [single]
+
+    group = item.get("questionGroupItem")
+    if not group:
+        return []
+
+    columns = group.get("grid", {}).get("columns", {})
+    if not columns:
+        return []
+
+    qtype = columns.get("type", "RADIO")
+    normalized: QuestionType = "CHECKBOX" if qtype == "CHECKBOX" else "MULTIPLE_CHOICE"
+    options = [opt.get("value", "") for opt in columns.get("options", [])]
+    title = item.get("title", "")
+    out: list[Question] = []
+    for sub in group.get("questions", []):
+        qid = sub.get("questionId", "")
+        if not qid:
+            continue
+        row_title = sub.get("rowQuestion", {}).get("title", "")
+        label = f"{title} — {row_title}".strip(" —")
+        out.append(Question(id=qid, title=label, type=normalized, options=options))
+    return out
 
 
 def _extract_question(item: dict[str, Any]) -> Question | None:
