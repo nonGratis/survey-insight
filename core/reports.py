@@ -220,6 +220,10 @@ def _format_count(value: float, *, weighted: bool) -> str:
     return str(int(value))
 
 
+def _format_bar_label(count: float, denominator: float, *, weighted: bool) -> str:
+    return f"{_pct(count / denominator)} · {_format_count(count, weighted=weighted)}"
+
+
 def _descriptive_distribution(
     responses: list[dict],
     qid: str,
@@ -321,7 +325,16 @@ def descriptive_section(
                 TableBlock(headers=("Варіант", "К-сть", "%"), rows=rows, col_widths=(0.6, 0.2, 0.2))
             )
         if cfg.render_mode in ("chart", "both"):
-            blocks.append(BarChart(labels=[v for v, _ in items], values=[c for _, c in items]))
+            blocks.append(
+                BarChart(
+                    labels=[v for v, _ in items],
+                    values=[float(c) for _, c in items],
+                    value_labels=[
+                        _format_bar_label(float(count), total, weighted=weighted)
+                        for _, count in items
+                    ],
+                )
+            )
     return blocks
 
 

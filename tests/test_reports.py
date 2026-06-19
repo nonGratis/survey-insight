@@ -120,7 +120,8 @@ _OPEN_RESPONSES = [
 
 def test_descriptive_chart_mode_emits_barchart():
     blocks = descriptive_section(_STRUCTURE, _RESPONSES, DescriptiveConfig(render_mode="chart"))
-    assert any(isinstance(b, BarChart) for b in blocks)
+    chart = next(b for b in blocks if isinstance(b, BarChart))
+    assert chart.value_labels == ["50,0 % · 1", "50,0 % · 1"]
     assert not any(isinstance(b, TableBlock) for b in blocks)
 
 
@@ -206,6 +207,60 @@ def test_descriptive_section_can_weight_question_results():
     assert any("зважено" in getattr(block, "text", "") for block in blocks)
     support_table = [block for block in blocks if isinstance(block, TableBlock)][1]
     assert support_table.rows == [["Ні", "1,5", "50,0 %"], ["Так", "1,5", "50,0 %"]]
+
+
+def test_descriptive_section_weighted_chart_labels_include_percent_and_count():
+    structure = {
+        "items": [
+            _q(
+                "dept",
+                "Підрозділ",
+                {"choiceQuestion": {"type": "RADIO", "options": [{"value": "A"}, {"value": "B"}]}},
+            ),
+            _q(
+                "support",
+                "Підтримка?",
+                {
+                    "choiceQuestion": {
+                        "type": "RADIO",
+                        "options": [{"value": "Так"}, {"value": "Ні"}],
+                    }
+                },
+            ),
+        ]
+    }
+    responses = [
+        {
+            "answers": {
+                "dept": {"textAnswers": {"answers": [{"value": "A"}]}},
+                "support": {"textAnswers": {"answers": [{"value": "Так"}]}},
+            }
+        },
+        {
+            "answers": {
+                "dept": {"textAnswers": {"answers": [{"value": "B"}]}},
+                "support": {"textAnswers": {"answers": [{"value": "Ні"}]}},
+            }
+        },
+        {
+            "answers": {
+                "dept": {"textAnswers": {"answers": [{"value": "B"}]}},
+                "support": {"textAnswers": {"answers": [{"value": "Ні"}]}},
+            }
+        },
+    ]
+
+    blocks = descriptive_section(
+        structure,
+        responses,
+        DescriptiveConfig(
+            render_mode="chart",
+            weighting_dimensions=(Dimension("Підрозділ", "dept", {"A": 100, "B": 100}),),
+        ),
+    )
+
+    support_chart = [block for block in blocks if isinstance(block, BarChart)][1]
+    assert support_chart.value_labels == ["50,0 % · 1,5", "50,0 % · 1,5"]
 
 
 def test_overview_section_can_include_flagged_questions_table():
