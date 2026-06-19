@@ -79,8 +79,14 @@ def test_catalog_table_uses_dynamic_min_max_height() -> None:
 
 def test_form_label_lives_in_action_bar_not_page_caption() -> None:
     action_bar = (ROOT / "ui/components/action_bar.py").read_text(encoding="utf-8")
-    assert 'st.markdown("**Форма:**")' in action_bar
-    assert "[0.62, 9.38, 1.15]" in action_bar
+    assert "si-action-label" in action_bar
+    assert "white-space: nowrap" in action_bar
+    assert "[0.8, 8.25, 0.55, 0.55]" in action_bar
+    assert "action_bar_refresh_" in action_bar
+    assert "action_bar_open_" in action_bar
+    assert "min-width: 2.5rem" in action_bar
+    assert "margin-left: 0.25rem" in action_bar
+    assert "actions_col.columns" not in action_bar
 
     for page in ["form_design.py", "dynamics.py", "questions.py", "weighting.py", "export.py"]:
         source = (ROOT / f"ui/pages/{page}").read_text(encoding="utf-8")

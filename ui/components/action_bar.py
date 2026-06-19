@@ -17,6 +17,33 @@ from ui.components.form_picker import (
 )
 from ui.components.page_shell import render_empty_state, render_error_state
 
+_ACTION_BAR_CSS = """
+<style>
+.si-action-label {
+  display: inline-flex;
+  align-items: center;
+  height: 2.5rem;
+  white-space: nowrap;
+  line-height: 1;
+}
+[class*="st-key-action_bar_refresh_"] button,
+[class*="st-key-action_bar_open_"] a {
+  width: 2.5rem !important;
+  min-width: 2.5rem !important;
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  padding: 0 !important;
+}
+[class*="st-key-action_bar_refresh_"] button > div,
+[class*="st-key-action_bar_open_"] a > div {
+  justify-content: center;
+}
+[class*="st-key-action_bar_open_"] {
+  margin-left: 0.25rem;
+}
+</style>
+"""
+
 
 class _ActionContainer(Protocol):
     def columns(
@@ -83,6 +110,7 @@ def render_action_bar(
     container: _ActionContainer = st,
 ) -> ActionBarState:
     """Render top form picker, refresh, open-form action and compact status."""
+    st.markdown(_ACTION_BAR_CSS, unsafe_allow_html=True)
     try:
         forms = fetch_forms(creds)
     except FormsApiError as exc:
@@ -98,13 +126,15 @@ def render_action_bar(
     select_form_from_query(by_id)
     widget_key, selected_id = prepare_form_widget(refresh_scope, by_id)
 
-    label_col, select_col, actions_col = container.columns(
-        [0.62, 9.38, 1.15],
+    label_col, select_col, refresh_col, open_col = container.columns(
+        [0.8, 8.25, 0.55, 0.55],
         gap="small",
         vertical_alignment="center",
     )
     with label_col:
-        st.markdown("**Форма:**")
+        st.markdown(
+            '<span class="si-action-label"><strong>Форма:</strong></span>', unsafe_allow_html=True
+        )
     with select_col:
         chosen_id = st.selectbox(
             "Форма",
@@ -115,12 +145,7 @@ def render_action_bar(
             args=(widget_key,),
             label_visibility="collapsed",
         )
-    refresh_col, open_col = actions_col.columns(
-        [1, 1],
-        gap="small",
-        vertical_alignment="top",
-    )
-    with refresh_col:
+    with refresh_col, st.container(key=f"action_bar_refresh_{refresh_scope}"):
         refresh_clicked = st.button(
             "",
             icon=":material/refresh:",
@@ -128,7 +153,7 @@ def render_action_bar(
             key=f"refresh_{refresh_scope}",
             width="stretch",
         )
-    with open_col:
+    with open_col, st.container(key=f"action_bar_open_{refresh_scope}"):
         st.link_button(
             "",
             _form_edit_url(chosen_id or selected_id),
