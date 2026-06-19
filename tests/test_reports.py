@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import pandas as pd
 
-from core.report import BarChart, Metric, Metrics, PageBreak, Report, TableBlock, render_pdf
+from core.report import (
+    BarChart,
+    FlowChart,
+    Metric,
+    Metrics,
+    PageBreak,
+    Report,
+    TableBlock,
+    render_pdf,
+)
 from core.reports import (
     DescriptiveConfig,
+    OverviewConfig,
     associations_section,
     descriptive_section,
     dynamics_section,
     full_report,
+    overview_section,
     questions_report,
     representativeness_report,
 )
@@ -140,6 +151,74 @@ def test_descriptive_hide_only_other_skips_question():
         DescriptiveConfig(anonymize=True, hide_only_other=True),
     )
     assert blocks == []  # питання приховано
+
+
+def test_overview_section_can_include_flagged_questions_table():
+    blocks = overview_section(
+        {
+            "items": [
+                _q(
+                    "q1",
+                    "Дуже довге питання " + "x" * 130,
+                    {"choiceQuestion": {"type": "RADIO", "options": [{"value": "Так"}]}},
+                )
+            ]
+        },
+        _RESPONSES,
+        OverviewConfig(question_table_mode="flagged", include_flow_map=False),
+    )
+
+    assert any(getattr(block, "text", "") == "Огляд форми" for block in blocks)
+    table = next(block for block in blocks if isinstance(block, TableBlock))
+    assert table.headers == ("Запитання", "Тип", "Опцій", "Обов'язк.", "Прапори")
+    assert len(table.rows) == 1
+
+
+def test_overview_section_can_include_all_questions_table():
+    blocks = overview_section(
+        _STRUCTURE,
+        _RESPONSES,
+        OverviewConfig(question_table_mode="all", include_flow_map=False),
+    )
+
+    table = next(block for block in blocks if isinstance(block, TableBlock))
+    assert len(table.rows) == 2
+    assert {row[0] for row in table.rows} == {"Стать?", "Коментар"}
+
+
+def test_overview_section_settings_can_hide_audit_table():
+    blocks = overview_section(
+        _STRUCTURE,
+        _RESPONSES,
+        OverviewConfig(question_table_mode="none", include_flow_map=False),
+    )
+
+    assert any(isinstance(block, Metrics) for block in blocks)
+    assert not any(isinstance(block, TableBlock) for block in blocks)
+
+
+def test_overview_section_can_include_flow_map():
+    blocks = overview_section(
+        {
+            "items": [
+                _q(
+                    "q1",
+                    "Маршрут?",
+                    {
+                        "choiceQuestion": {
+                            "type": "RADIO",
+                            "options": [{"value": "Далі", "goToSectionId": "sec_2"}],
+                        }
+                    },
+                ),
+                {"itemId": "sec_2", "title": "Друга секція", "pageBreakItem": {}},
+            ]
+        },
+        [],
+        OverviewConfig(question_table_mode="none", include_flow_map=True),
+    )
+
+    assert any(isinstance(block, FlowChart) for block in blocks)
 
 
 def test_associations_section_empty_and_filled():

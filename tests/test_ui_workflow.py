@@ -168,11 +168,20 @@ def test_question_response_charts_cap_left_axis_labels() -> None:
 def test_report_page_uses_builder_layout() -> None:
     export = (ROOT / "ui/pages/export.py").read_text(encoding="utf-8")
     assert "REPORT_SECTION_DEFS" in export
+    assert '("overview", "Огляд форми"' in export
+    assert "OverviewConfig" in export
     assert "st.container(border=True)" in export
     assert 'st.subheader("Секції звіту")' in export
     assert '"Preview"' not in export
     assert "preview_col" not in export
+    assert 'if key == "overview" and section_state[key]:' in export
+    assert 'with st.expander("Налаштування огляду"):' in export
+    assert "_OVERVIEW_TABLE_MODES" in export
+    assert '"Таблиця питань"' in export
+    assert '"Додати карту переходів"' in export
+    assert '"Максимум варіантів на питання"' not in export
     assert 'if key == "descriptive" and section_state[key]:' in export
+    assert "if inc_overview:" in export
     assert "if inc_descriptive:" in export
     assert 'type="primary"' in export
     assert 'width="stretch"' in export

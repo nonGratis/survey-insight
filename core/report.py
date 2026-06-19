@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from reportlab.graphics.charts.barcharts import HorizontalBarChart
-from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.shapes import Drawing, Line, Polygon, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
@@ -110,6 +110,34 @@ class BarChart:
     labels: Sequence[str]
     values: Sequence[float]
     max_label_chars: int = 32
+
+
+@dataclass(frozen=True)
+class FlowChartNode:
+    """Вузол компактної карти переходів."""
+
+    id: str
+    label: str
+    kind: str = "section"
+    flagged: bool = False
+
+
+@dataclass(frozen=True)
+class FlowChartEdge:
+    """Ребро компактної карти переходів."""
+
+    source: str
+    target: str
+    label: str = ""
+    kind: str = "default"
+
+
+@dataclass(frozen=True)
+class FlowChart:
+    """Компактна векторна карта переходів: вузли + ребра."""
+
+    nodes: Sequence[FlowChartNode]
+    edges: Sequence[FlowChartEdge]
 
 
 @dataclass(frozen=True)
@@ -203,6 +231,18 @@ def _table_flowable(block: TableBlock, styles: dict) -> Flowable:
 
 _BAR_COLOR = colors.HexColor("#5A78C0")
 _BAR_ROW_H = 16  # висота на один стовпець, пт
+_FLOW_NODE_W = 118
+_FLOW_NODE_H = 38
+_FLOW_X_GAP = 32
+_FLOW_Y_GAP = 34
+_FLOW_MARGIN = 8
+_FLOW_ROUTE_COLORS = (
+    "#172554",
+    "#1e40af",
+    "#2563eb",
+    "#60a5fa",
+    "#93c5fd",
+)
 
 
 def _barchart_flowable(block: BarChart) -> Flowable:
@@ -239,6 +279,176 @@ def _barchart_flowable(block: BarChart) -> Flowable:
     return drawing
 
 
+def _wrap_lines(value: str, max_chars: int, max_lines: int) -> list[str]:
+    clean = " ".join(str(value).split())
+    if len(clean) <= max_chars:
+        return [clean]
+    lines: list[str] = []
+    current = ""
+    for word in clean.split():
+        candidate = f"{current} {word}".strip()
+        if len(candidate) <= max_chars:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word[:max_chars]
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if len(lines) == max_lines and len(" ".join(clean.split())) > len(" ".join(lines)):
+        lines[-1] = lines[-1].rstrip("…") + "…"
+    return lines[:max_lines] or [""]
+
+
+def _flow_node_style(node: FlowChartNode) -> tuple[colors.Color, colors.Color, colors.Color]:
+    if node.flagged:
+        return colors.HexColor("#fff1f2"), colors.HexColor("#fb7185"), colors.HexColor("#9f1239")
+    if node.kind == "start":
+        return colors.HexColor("#eef2ff"), colors.HexColor("#6366f1"), colors.HexColor("#3730a3")
+    if node.kind == "submit":
+        return colors.HexColor("#ecfdf5"), colors.HexColor("#10b981"), colors.HexColor("#065f46")
+    return colors.HexColor("#f8fafc"), colors.HexColor("#cbd5e1"), colors.HexColor("#334155")
+
+
+def _flow_edge_colors(block: FlowChart, submit_ids: set[str]) -> dict[tuple[str, str], str]:
+    target_order_by_source: dict[str, list[str]] = {}
+    for edge in block.edges:
+        if edge.kind != "conditional" or edge.target in submit_ids:
+            continue
+        target_order_by_source.setdefault(edge.source, [])
+        if edge.target not in target_order_by_source[edge.source]:
+            target_order_by_source[edge.source].append(edge.target)
+
+    out: dict[tuple[str, str], str] = {}
+    for _source, targets in target_order_by_source.items():
+        for index, target in enumerate(targets):
+            out[(_source, target)] = _FLOW_ROUTE_COLORS[min(index, len(_FLOW_ROUTE_COLORS) - 1)]
+    return out
+
+
+def _draw_arrow(
+    drawing: Drawing,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    color: colors.Color,
+    dashed: bool,
+) -> None:
+    line = Line(x1, y1, x2, y2, strokeColor=color, strokeWidth=0.9)
+    if dashed:
+        line.strokeDashArray = [3, 2]
+    drawing.add(line)
+    # Невеликий наконечник стрілки. Працює і для діагоналей, достатньо для PDF-огляду.
+    dx = x2 - x1
+    dy = y2 - y1
+    length = max((dx * dx + dy * dy) ** 0.5, 1.0)
+    ux, uy = dx / length, dy / length
+    px, py = -uy, ux
+    size = 4.2
+    drawing.add(
+        Polygon(
+            [
+                x2,
+                y2,
+                x2 - ux * size + px * size * 0.55,
+                y2 - uy * size + py * size * 0.55,
+                x2 - ux * size - px * size * 0.55,
+                y2 - uy * size - py * size * 0.55,
+            ],
+            fillColor=color,
+            strokeColor=color,
+        )
+    )
+
+
+def _flowchart_flowable(block: FlowChart) -> Flowable:
+    nodes = list(block.nodes)
+    width = _content_width()
+    if not nodes:
+        return Drawing(width, 1)
+
+    cols = max(
+        1,
+        min(
+            len(nodes),
+            int((width - 2 * _FLOW_MARGIN + _FLOW_X_GAP) // (_FLOW_NODE_W + _FLOW_X_GAP)),
+        ),
+    )
+    rows = (len(nodes) + cols - 1) // cols
+    height = rows * _FLOW_NODE_H + max(0, rows - 1) * _FLOW_Y_GAP + 2 * _FLOW_MARGIN
+    drawing = Drawing(width, height)
+
+    positions: dict[str, tuple[float, float]] = {}
+    row_width = cols * _FLOW_NODE_W + max(0, cols - 1) * _FLOW_X_GAP
+    x0 = max(_FLOW_MARGIN, (width - row_width) / 2)
+    for index, node in enumerate(nodes):
+        row, col = divmod(index, cols)
+        x = x0 + col * (_FLOW_NODE_W + _FLOW_X_GAP)
+        y = height - _FLOW_MARGIN - _FLOW_NODE_H - row * (_FLOW_NODE_H + _FLOW_Y_GAP)
+        positions[node.id] = (x, y)
+
+    submit_ids = {node.id for node in nodes if node.kind == "submit"}
+    edge_colors = _flow_edge_colors(block, submit_ids)
+    for edge in block.edges:
+        if edge.source not in positions or edge.target not in positions:
+            continue
+        sx, sy = positions[edge.source]
+        tx, ty = positions[edge.target]
+        is_route = edge.kind == "conditional" and edge.target not in submit_ids
+        color = colors.HexColor(edge_colors.get((edge.source, edge.target), "#cbd5e1"))
+        x1 = sx + _FLOW_NODE_W
+        y1 = sy + _FLOW_NODE_H / 2
+        x2 = tx
+        y2 = ty + _FLOW_NODE_H / 2
+        if tx < sx:
+            x1 = sx + _FLOW_NODE_W / 2
+            y1 = sy
+            x2 = tx + _FLOW_NODE_W / 2
+            y2 = ty + _FLOW_NODE_H
+        _draw_arrow(drawing, x1, y1, x2, y2, color, dashed=not is_route)
+        if edge.label:
+            label = _wrap_lines(edge.label, 18, 1)[0]
+            drawing.add(
+                String(
+                    (x1 + x2) / 2,
+                    (y1 + y2) / 2 + 4,
+                    label,
+                    fontName=FONT,
+                    fontSize=6.7,
+                    fillColor=color if is_route else colors.HexColor("#475569"),
+                    textAnchor="middle",
+                )
+            )
+
+    for node in nodes:
+        x, y = positions[node.id]
+        fill, stroke, font = _flow_node_style(node)
+        rect = Rect(
+            x, y, _FLOW_NODE_W, _FLOW_NODE_H, rx=4, ry=4, fillColor=fill, strokeColor=stroke
+        )
+        if node.flagged:
+            rect.strokeDashArray = [3, 2]
+        drawing.add(rect)
+        lines = _wrap_lines(node.label, 24, 2)
+        start_y = y + _FLOW_NODE_H / 2 + (len(lines) - 1) * 4.3
+        for line_index, line in enumerate(lines):
+            drawing.add(
+                String(
+                    x + _FLOW_NODE_W / 2,
+                    start_y - line_index * 8.6,
+                    line,
+                    fontName=FONT_BOLD if line_index == 0 else FONT,
+                    fontSize=7.3,
+                    fillColor=font,
+                    textAnchor="middle",
+                )
+            )
+    return drawing
+
+
 def _to_flowables(report: Report, styles: dict) -> list[Flowable]:
     flow: list[Flowable] = [Paragraph(report.title, styles["h1"])]
     if report.subtitle:
@@ -257,6 +467,9 @@ def _to_flowables(report: Report, styles: dict) -> list[Flowable]:
             flow.append(Spacer(1, 6))
         elif isinstance(block, BarChart):
             flow.append(_barchart_flowable(block))
+            flow.append(Spacer(1, 6))
+        elif isinstance(block, FlowChart):
+            flow.append(_flowchart_flowable(block))
             flow.append(Spacer(1, 6))
         elif isinstance(block, PageBreak):
             flow.append(_RLPageBreak())
