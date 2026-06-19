@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 import streamlit as st
 
 from core.auth import credentials_from_dict
+from core.form_flow import flow_to_dot, parse_form_flow
 from core.forms_api import FormsApiError, get_form_structure
 from core.forms_quality import analyze_form_design
 from core.logger import get_logger
@@ -66,6 +69,65 @@ else:
         ],
         columns=3,
     )
+    flow = parse_form_flow(structure)
+    with st.container(border=True):
+        st.subheader("Карта переходів")
+        render_metric_bar(
+            [
+                MetricItem("Секцій", flow.section_count),
+                MetricItem("Умовних переходів", flow.conditional_edge_count),
+                MetricItem("Недосяжних", len(flow.unreachable_section_ids)),
+                MetricItem("Цикли", "є" if flow.has_cycles else "немає"),
+            ],
+            columns=4,
+        )
+        flow_dot = flow_to_dot(flow)
+        has_interesting_flow = (
+            flow.section_count > 1
+            or flow.conditional_edge_count > 0
+            or bool(flow.unreachable_section_ids)
+            or flow.has_cycles
+        )
+        if has_interesting_flow:
+            st.graphviz_chart(flow_dot, width="stretch")
+        else:
+            st.caption("Переходів між секціями немає, тому граф не показується.")
+        if flow.unreachable_section_ids:
+            title_by_node = {node.id: node.title for node in flow.nodes}
+            unreachable_titles = [
+                title_by_node.get(section_id, section_id)
+                for section_id in flow.unreachable_section_ids[:5]
+            ]
+            st.caption(
+                "Недосяжні секції: "
+                + ", ".join(unreachable_titles)
+                + ". Перевірте умови переходів і завершення форми."
+            )
+        elif has_interesting_flow:
+            st.caption("Суцільні стрілки — умовні переходи, пунктир — звичайний перехід далі.")
+
+        with st.expander("Debug карти переходів (тимчасово)", expanded=False):
+            st.caption(
+                "Скопіюйте ці блоки для розбору конкретної форми. "
+                "Це тимчасова діагностика парсингу Google Forms API."
+            )
+            st.text("form_id")
+            st.code(form_id, language="text")
+            st.text("parsed flow")
+            st.json(
+                {
+                    "nodes": [asdict(node) for node in flow.nodes],
+                    "edges": [asdict(edge) for edge in flow.edges],
+                    "unreachable_section_ids": flow.unreachable_section_ids,
+                    "terminal_section_ids": flow.terminal_section_ids,
+                    "has_cycles": flow.has_cycles,
+                }
+            )
+            st.text("graphviz dot")
+            st.code(flow_dot, language="dot")
+            st.text("raw structure.items")
+            st.json(structure.get("items", []))
+
     st.dataframe(
         [
             {
