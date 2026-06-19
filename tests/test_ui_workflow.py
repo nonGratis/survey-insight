@@ -40,6 +40,19 @@ def test_form_design_is_separate_page_from_questions() -> None:
     assert 'QUESTION_MODES = ["Відповіді", "Крос-таби"]' in questions
 
 
+def test_form_design_page_renders_flow_map() -> None:
+    form_design = (ROOT / "ui/pages/form_design.py").read_text(encoding="utf-8")
+    assert "parse_form_flow" in form_design
+    assert "flow_to_dot" in form_design
+    assert 'st.subheader("Карта переходів")' in form_design
+    assert "st.graphviz_chart(" in form_design
+    assert 'st.expander("Debug карти переходів (тимчасово)"' in form_design
+    assert "raw structure.items" in form_design
+    assert 'MetricItem("Секцій"' in form_design
+    assert 'MetricItem("Умовних переходів"' in form_design
+    assert 'MetricItem("Недосяжних"' in form_design
+
+
 def test_weighting_settings_are_lazy_and_persisted() -> None:
     weighting = (ROOT / "ui/pages/weighting.py").read_text(encoding="utf-8")
     assert 'if mode == "Налаштування":' in weighting
