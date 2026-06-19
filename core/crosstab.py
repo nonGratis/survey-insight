@@ -46,6 +46,9 @@ MIN_EXPECTED_HARD = 1.0  # жодна клітинка не має мати E<1 
 HALDANE_CORRECTION = 0.5  # поправка нульових клітинок для Odds Ratio
 FDR_ALPHA = 0.05  # рівень значущості для BH-FDR
 Z_95 = 1.959963985  # квантиль N(0,1) для 95% CI
+IMPORTANT_EFFECT_THRESHOLD = 0.15
+STRONG_EFFECT_THRESHOLD = 0.30
+ASSOCIATION_FILTER_MODES = ("Важливі", "Значущі", "Сильні", "Ненадійні", "Усі")
 
 # Межі сили зв'язку (конвенційні; названі, з примітками у звіті).
 _EFFECT_BANDS = ((0.1, "немає"), (0.3, "слабкий"), (0.5, "помірний"), (1.01, "сильний"))
@@ -338,3 +341,43 @@ def association_scan(pairs: Sequence[PairAssociation]) -> list[PairAssociation]:
         pr.p_fdr = padj
         pr.significant = rej
     return sorted(pairs, key=lambda pr: pr.effect, reverse=True)
+
+
+def classify_association(pr: PairAssociation) -> str:
+    """Human-facing priority label for an already scanned association."""
+    if pr.low_expected:
+        return "ненадійний"
+    if pr.significant and pr.effect >= STRONG_EFFECT_THRESHOLD:
+        return "ключовий"
+    if pr.significant and pr.effect >= IMPORTANT_EFFECT_THRESHOLD:
+        return "важливий"
+    if pr.significant:
+        return "слабкий"
+    return "непідтверджений"
+
+
+def filter_associations(
+    scanned: Sequence[PairAssociation],
+    mode: str,
+    min_effect: float = IMPORTANT_EFFECT_THRESHOLD,
+    hide_sparse: bool = False,
+    measures: Sequence[str] | None = None,
+) -> list[PairAssociation]:
+    """Filter scanned associations for the overview table without changing statistics."""
+    allowed_measures = set(measures) if measures is not None else None
+    out: list[PairAssociation] = []
+    for pr in scanned:
+        if allowed_measures is not None and pr.measure not in allowed_measures:
+            continue
+        if hide_sparse and pr.low_expected:
+            continue
+        if mode == "Важливі" and not (pr.significant and pr.effect >= min_effect):
+            continue
+        if mode == "Значущі" and not pr.significant:
+            continue
+        if mode == "Сильні" and pr.effect < STRONG_EFFECT_THRESHOLD:
+            continue
+        if mode == "Ненадійні" and not pr.low_expected:
+            continue
+        out.append(pr)
+    return out

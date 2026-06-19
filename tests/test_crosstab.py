@@ -13,7 +13,9 @@ from core.crosstab import (
     PairAssociation,
     association_scan,
     benjamini_hochberg,
+    classify_association,
     crosstab,
+    filter_associations,
     numeric_correlation,
     odds_ratio_2x2,
     ordinal_correlation,
@@ -175,6 +177,79 @@ def test_association_scan_sorts_by_effect_and_applies_fdr():
     out = association_scan(pairs)
     assert [pr.effect for pr in out] == [0.55, 0.30, 0.15]  # за спаданням сили
     assert all(not np.isnan(pr.p_fdr) for pr in out)
+
+
+def _assoc(
+    q2: str,
+    *,
+    effect: float,
+    significant: bool,
+    measure: str = "cramers_v",
+    low_expected: bool = False,
+) -> PairAssociation:
+    return PairAssociation(
+        "q1",
+        q2,
+        measure,
+        effect=effect,
+        direction=0,
+        n=100,
+        p_raw=0.01 if significant else 0.5,
+        p_fdr=0.02 if significant else 0.5,
+        significant=significant,
+        low_expected=low_expected,
+    )
+
+
+def test_classify_association_prioritizes_reliability_and_effect_size():
+    assert classify_association(_assoc("key", effect=0.45, significant=True)) == "ключовий"
+    assert classify_association(_assoc("important", effect=0.20, significant=True)) == "важливий"
+    assert classify_association(_assoc("weak", effect=0.05, significant=True)) == "слабкий"
+    assert (
+        classify_association(_assoc("noise", effect=0.45, significant=False)) == "непідтверджений"
+    )
+    assert (
+        classify_association(_assoc("sparse", effect=0.45, significant=True, low_expected=True))
+        == "ненадійний"
+    )
+
+
+def test_filter_associations_important_requires_effect_significance_and_reliability():
+    pairs = [
+        _assoc("important", effect=0.20, significant=True),
+        _assoc("weak", effect=0.05, significant=True),
+        _assoc("noise", effect=0.40, significant=False),
+        _assoc("sparse", effect=0.40, significant=True, low_expected=True),
+    ]
+    out = filter_associations(pairs, "Важливі", min_effect=0.15, hide_sparse=True)
+    assert [pr.q2 for pr in out] == ["important"]
+
+
+def test_filter_associations_significant_keeps_weak_effects():
+    pairs = [
+        _assoc("weak", effect=0.05, significant=True),
+        _assoc("noise", effect=0.40, significant=False),
+    ]
+    out = filter_associations(pairs, "Значущі", min_effect=0.15)
+    assert [pr.q2 for pr in out] == ["weak"]
+
+
+def test_filter_associations_strong_does_not_require_significance():
+    pairs = [
+        _assoc("strong_noise", effect=0.40, significant=False),
+        _assoc("important", effect=0.20, significant=True),
+    ]
+    out = filter_associations(pairs, "Сильні")
+    assert [pr.q2 for pr in out] == ["strong_noise"]
+
+
+def test_filter_associations_unreliable_and_measure_filters():
+    pairs = [
+        _assoc("sparse", effect=0.40, significant=True, low_expected=True),
+        _assoc("ranked", effect=0.35, significant=True, measure="spearman"),
+    ]
+    assert [pr.q2 for pr in filter_associations(pairs, "Ненадійні")] == ["sparse"]
+    assert [pr.q2 for pr in filter_associations(pairs, "Усі", measures=["spearman"])] == ["ranked"]
 
 
 # --- валідація на реальних даних -------------------------------------------
