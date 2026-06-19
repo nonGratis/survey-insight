@@ -100,6 +100,7 @@ def _response_axis() -> alt.Axis:
     return alt.Axis(
         labelLimit=RESPONSE_AXIS_LABEL_LIMIT_PX,
         labelLineHeight=RESPONSE_AXIS_LABEL_LINE_HEIGHT_PX,
+        labelOverlap=False,
         labelPadding=8,
         labelExpr="split(datum.label, '\\n')",
     )
