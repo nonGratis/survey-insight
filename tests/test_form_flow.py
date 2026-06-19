@@ -160,7 +160,7 @@ def test_flow_to_dot_uses_compact_rectangles_and_edge_styles() -> None:
                     "Q",
                     [
                         {"value": "Завершити", "goToAction": "SUBMIT_FORM"},
-                        {"value": "Далі"},
+                        {"value": "Далі", "goToSectionId": "sec_2"},
                     ],
                 ),
                 _page("sec_2", "Друга"),
@@ -191,6 +191,70 @@ def test_flow_to_dot_marks_unreachable_sections() -> None:
 
     assert "#fff1f2" in dot
     assert 'style="rounded,filled,dashed"' in dot
+
+
+def test_flow_to_dot_colors_conditional_edges_by_source_target() -> None:
+    flow = parse_form_flow(
+        {
+            "items": [
+                _radio(
+                    "q1",
+                    "Маршрут",
+                    [
+                        {"value": "A1", "goToSectionId": "sec_a"},
+                        {"value": "A2", "goToSectionId": "sec_a"},
+                        {"value": "B1", "goToSectionId": "sec_b"},
+                    ],
+                ),
+                _page("sec_a", "Секція A"),
+                _page("sec_b", "Секція B"),
+            ]
+        }
+    )
+
+    dot = flow_to_dot(flow)
+
+    assert (
+        '"__start__" -> "sec_a" [label="A1", color="#172554", '
+        'fontcolor="#172554", penwidth=1.75, style="solid"]'
+    ) in dot
+    assert (
+        '"__start__" -> "sec_a" [label="A2", color="#172554", '
+        'fontcolor="#172554", penwidth=1.75, style="solid"]'
+    ) in dot
+    assert (
+        '"__start__" -> "sec_b" [label="B1", color="#1e40af", '
+        'fontcolor="#1e40af", penwidth=1.75, style="solid"]'
+    ) in dot
+
+
+def test_flow_to_dot_keeps_submit_edges_gray_dashed() -> None:
+    flow = parse_form_flow(
+        {
+            "items": [
+                _radio(
+                    "q1",
+                    "Продовжити?",
+                    [
+                        {"value": "Так", "goToSectionId": "sec_next"},
+                        {"value": "Ні", "goToAction": "SUBMIT_FORM"},
+                    ],
+                ),
+                _page("sec_next", "Наступна секція"),
+            ]
+        }
+    )
+
+    dot = flow_to_dot(flow)
+
+    assert (
+        '"__start__" -> "sec_next" [label="Так", color="#172554", '
+        'fontcolor="#172554", penwidth=1.75, style="solid"]'
+    ) in dot
+    assert (
+        '"__start__" -> "__submit__" [label="Ні", color="#cbd5e1", '
+        'fontcolor="#475569", penwidth=1.1, style="dashed"]'
+    ) in dot
 
 
 def test_flow_to_dot_uses_graphviz_line_breaks_not_literal_slash_n() -> None:
