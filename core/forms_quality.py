@@ -216,6 +216,34 @@ def normalize_label(value: str) -> str:
     return " ".join(str(value).split()).casefold()
 
 
+def canonicalize_distribution(
+    distribution: Mapping[str, int],
+    allowed_options: Sequence[str] = (),
+) -> dict[str, int]:
+    """Згорнути однакові за змістом мітки перед показом у графіках.
+
+    Google Forms може повертати free-text варіанти з різним регістром або
+    пробілами ("Не знаю" / "не знаю"). Для coded options повертаємо офіційну
+    мітку з форми, для інших значень — найчастіший очищений варіант.
+    """
+    allowed = {normalize_label(option): option for option in allowed_options}
+    grouped: dict[str, dict[str, Any]] = {}
+    for raw_value, count in distribution.items():
+        normalized = normalize_label(raw_value)
+        if not normalized:
+            continue
+        display = allowed.get(normalized, " ".join(str(raw_value).split()))
+        bucket = grouped.setdefault(
+            normalized,
+            {"total": 0, "display": display, "display_count": 0},
+        )
+        bucket["total"] += count
+        if count > bucket["display_count"]:
+            bucket["display"] = display
+            bucket["display_count"] = count
+    return {str(bucket["display"]): int(bucket["total"]) for bucket in grouped.values()}
+
+
 def anonymize_distribution(
     distribution: Mapping[str, int],
     allowed_options: Sequence[str],

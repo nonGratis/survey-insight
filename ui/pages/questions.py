@@ -53,6 +53,7 @@ from core.forms_quality import (
     analyze_form_design,
     analyze_responses,
     anonymize_distribution,
+    canonicalize_distribution,
     sort_distribution,
 )
 from core.logger import get_logger
@@ -73,17 +74,35 @@ from ui.report_data import weighting_from_tables
 
 log = get_logger(__name__)
 
+RESPONSE_AXIS_LABEL_LIMIT_PX = 320
+RESPONSE_AXIS_LABEL_LINE_HEIGHT_PX = 13
+
 
 def _wrap_width_for_labels(labels: pd.Series) -> int:
-    """Підібрати ширину переносу для підписів у межах 14..22 символів."""
+    """Підібрати ширину переносу, щоб ліва шкала не забирала більшість графіка."""
     longest = max((len(str(value)) for value in labels), default=0)
     if longest > 80:
-        return 14
+        return 28
     if longest > 50:
-        return 16
+        return 30
     if longest > 30:
-        return 18
-    return 22
+        return 32
+    return 36
+
+
+def _wrap_axis_label(value: object, width: int) -> str:
+    """Wrap one categorical axis label; Vega turns line breaks into multiline text."""
+    return fill(str(value), width=width, break_long_words=False, break_on_hyphens=False)
+
+
+def _response_axis() -> alt.Axis:
+    """Left answer axis capped so the plot area keeps at least half of the container."""
+    return alt.Axis(
+        labelLimit=RESPONSE_AXIS_LABEL_LIMIT_PX,
+        labelLineHeight=RESPONSE_AXIS_LABEL_LINE_HEIGHT_PX,
+        labelPadding=8,
+        labelExpr="split(datum.label, '\\n')",
+    )
 
 
 # Логіка анонімізації/сортування розподілу — спільна з PDF-звітом
@@ -244,6 +263,10 @@ elif mode == "Відповіді":
                             options_by_id.get(qid, []),
                             anonymized_label,
                         )
+                    chart_distribution = canonicalize_distribution(
+                        chart_distribution,
+                        options_by_id.get(qid, []),
+                    )
                     if hide_only_other_questions and set(chart_distribution) == {anonymized_label}:
                         continue
                     sorted_items = sort_distribution(
@@ -258,13 +281,18 @@ elif mode == "Відповіді":
                     chart_df["%"] = chart_df["Кількість"] / max(s.n_answered, 1) * 100
                     wrap_width = _wrap_width_for_labels(chart_df["Відповідь"])
                     chart_df["Відповідь_перенесена"] = chart_df["Відповідь"].map(
-                        lambda value, width=wrap_width: fill(str(value), width=width)
+                        lambda value, width=wrap_width: _wrap_axis_label(value, width)
+                    )
+                    max_label_lines = max(
+                        (str(value).count("\n") + 1 for value in chart_df["Відповідь_перенесена"]),
+                        default=1,
                     )
                     chart_df["Підпис"] = chart_df.apply(
                         lambda row: f"{row['%']:.1f}% · {int(row['Кількість'])}",
                         axis=1,
                     )
-                    chart_height = max(420, min(900, 30 * len(chart_df)))
+                    row_height = max(30, RESPONSE_AXIS_LABEL_LINE_HEIGHT_PX * max_label_lines + 8)
+                    chart_height = max(420, min(1200, row_height * len(chart_df)))
                     y_order = chart_df["Відповідь_перенесена"].tolist()
                     base = (
                         alt.Chart(chart_df)
@@ -275,7 +303,7 @@ elif mode == "Відповіді":
                                 "Відповідь_перенесена:N",
                                 sort=y_order,
                                 title=None,
-                                axis=alt.Axis(labelLimit=0, labelLineHeight=14, labelPadding=6),
+                                axis=_response_axis(),
                             ),
                             tooltip=[
                                 alt.Tooltip("Відповідь:N", title="Відповідь"),

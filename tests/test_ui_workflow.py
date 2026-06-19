@@ -97,6 +97,16 @@ def test_questions_association_overview_has_priority_filters() -> None:
     assert "За поточними фільтрами зв'язків не знайдено" in questions
 
 
+def test_question_response_charts_cap_left_axis_labels() -> None:
+    questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
+    assert "RESPONSE_AXIS_LABEL_LIMIT_PX = 320" in questions
+    assert "def _wrap_axis_label(" in questions
+    assert "def _response_axis(" in questions
+    assert "labelExpr=\"split(datum.label, '\\\\n')\"" in questions
+    assert "axis=_response_axis()" in questions
+    assert "labelLimit=0" not in questions
+
+
 def test_report_page_uses_builder_layout() -> None:
     export = (ROOT / "ui/pages/export.py").read_text(encoding="utf-8")
     assert "REPORT_SECTION_DEFS" in export
