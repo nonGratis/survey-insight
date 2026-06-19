@@ -16,6 +16,8 @@ from core.report import (
     Para,
     Report,
     TableBlock,
+    _barchart_flowables,
+    _wrap_lines,
     render_pdf,
 )
 
@@ -85,6 +87,26 @@ def test_barchart_renders():
         ],
     )
     assert _is_pdf(render_pdf(rep))
+
+
+def test_barchart_label_wraps_instead_of_single_line_truncation():
+    long_label = "дуже довга назва підрозділу понад тридцять символів для графіка"
+    lines = _wrap_lines(long_label, max_chars=24, max_lines=3)
+
+    assert len(lines) > 1
+    assert lines[0] != long_label[:24] + "…"
+    assert all(len(line) <= 25 for line in lines)
+
+
+def test_large_barchart_splits_to_fit_pdf_pages():
+    chart = BarChart(
+        labels=[f"дуже довга текстова мітка варіанту відповіді номер {i}" for i in range(80)],
+        values=list(range(80, 0, -1)),
+        value_labels=[f"{i},0 % · {80 - i}" for i in range(80)],
+    )
+
+    assert len(_barchart_flowables(chart)) > 1
+    assert _is_pdf(render_pdf(Report(title="Великий графік", blocks=[chart])))
 
 
 def test_flowchart_renders():
