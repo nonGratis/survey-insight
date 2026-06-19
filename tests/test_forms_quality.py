@@ -9,6 +9,7 @@ from core.forms_quality import (
     analyze_form_design,
     analyze_responses,
     anonymize_distribution,
+    canonicalize_distribution,
     normalize_label,
     sort_distribution,
 )
@@ -144,6 +145,23 @@ def test_anonymize_collapses_unknown_values():
     dist = {"Ч": 3, "Ж": 2, "вільний текст": 1, "ще інше": 1}
     out = anonymize_distribution(dist, ["Ч", "Ж"], "Інше*")
     assert out == {"Ч": 3, "Ж": 2, "Інше*": 2}
+
+
+def test_canonicalize_distribution_collapses_case_and_space_duplicates():
+    dist = {
+        "Не знаю": 2,
+        " не   знаю ": 3,
+        "КОМАНДИР ГРУПИ": 1,
+        "Командир групи": 4,
+    }
+    out = canonicalize_distribution(dist)
+    assert out == {"не знаю": 5, "Командир групи": 5}
+
+
+def test_canonicalize_distribution_preserves_official_form_option_label():
+    dist = {"викладач": 2, " Викладач ": 3}
+    out = canonicalize_distribution(dist, ["Викладач"])
+    assert out == {"Викладач": 5}
 
 
 def test_sort_by_count_desc():
