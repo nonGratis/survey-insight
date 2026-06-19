@@ -20,6 +20,7 @@ from core.logger import get_logger
 from core.report import render_pdf
 from core.reports import (
     DescriptiveConfig,
+    OverviewConfig,
     associations_section,
     descriptive_section,
     dynamics_section,
@@ -40,8 +41,14 @@ from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, to
 log = get_logger(__name__)
 
 _RENDER_LABELS = {"Діаграми": "chart", "Таблиці": "table", "Діаграми + таблиці": "both"}
+_OVERVIEW_TABLE_MODES = {
+    "Тільки з прапорами": "flagged",
+    "Усі питання": "all",
+    "Не додавати": "none",
+}
 REPORT_SECTION_DEFS = [
-    ("descriptive", "Дескриптив", "Огляд форми, кількість відповідей та розподіли по питаннях."),
+    ("overview", "Огляд форми", "Ключові показники форми, структура питань та прапори якості."),
+    ("descriptive", "Дескриптив", "Розподіли відповідей по питаннях."),
     (
         "representativeness",
         "Репрезентативність",
@@ -101,6 +108,10 @@ other_label = "Інше*"
 keep_other_last = True
 hide_only_other = False
 top_n = 30
+overview_include_metrics = True
+overview_include_audit = True
+overview_table_mode_label = list(_OVERVIEW_TABLE_MODES)[0]
+overview_include_flow_map = True
 
 st.subheader("Секції звіту")
 section_state: dict[str, bool] = {}
@@ -112,6 +123,31 @@ for key, title, description in REPORT_SECTION_DEFS:
             key=f"report_section_{key}",
         )
         st.caption(description)
+        if key == "overview" and section_state[key]:
+            with st.expander("Налаштування огляду"):
+                overview_include_metrics = st.checkbox(
+                    "Включити BAN-метрики відповідей",
+                    value=True,
+                    key="report_overview_include_metrics",
+                )
+                overview_include_audit = st.checkbox(
+                    "Включити аудит структури питань",
+                    value=True,
+                    key="report_overview_include_audit",
+                )
+                overview_table_mode_label = st.radio(
+                    "Таблиця питань",
+                    options=list(_OVERVIEW_TABLE_MODES),
+                    index=0,
+                    horizontal=True,
+                    key="report_overview_question_table_mode",
+                    disabled=not overview_include_audit,
+                )
+                overview_include_flow_map = st.checkbox(
+                    "Додати карту переходів",
+                    value=True,
+                    key="report_overview_include_flow_map",
+                )
         if key == "descriptive" and section_state[key]:
             with st.expander("Налаштування дескриптиву"):
                 render_mode_label = st.radio(
@@ -122,13 +158,8 @@ for key, title, description in REPORT_SECTION_DEFS:
                 other_label = st.text_input("Мітка для інших", value="Інше*")
                 keep_other_last = st.checkbox("Тримати «Інше*» в кінці", value=True)
                 hide_only_other = st.checkbox("Прибирати питання лише з «Інше*»", value=False)
-                top_n = st.number_input(
-                    "Максимум варіантів на питання",
-                    min_value=5,
-                    max_value=100,
-                    value=30,
-                )
 
+inc_overview = section_state["overview"]
 inc_descriptive = section_state["descriptive"]
 inc_representativeness = section_state["representativeness"]
 inc_associations = section_state["associations"]
@@ -146,6 +177,14 @@ config = DescriptiveConfig(
     render_mode=_RENDER_LABELS[render_mode_label],
     top_n=int(top_n),
 )
+overview_config = OverviewConfig(
+    include_response_metrics=overview_include_metrics,
+    include_question_audit=overview_include_audit,
+    question_table_mode=(
+        _OVERVIEW_TABLE_MODES[overview_table_mode_label] if overview_include_audit else "none"
+    ),
+    include_flow_map=overview_include_flow_map,
+)
 
 _pdf_key = f"report_pdf_{form_id}"
 generate_clicked = st.button(
@@ -160,8 +199,9 @@ if not enabled_sections:
 
 if generate_clicked:
     sections: list[list[object]] = []
+    if inc_overview:
+        sections.append(overview_section(structure, responses, overview_config))
     if inc_descriptive:
-        sections.append(overview_section(structure, responses))
         sections.append(descriptive_section(structure, responses, config))
     if inc_representativeness:
         with st.spinner("Рахую репрезентативність…"):

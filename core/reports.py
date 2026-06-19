@@ -20,7 +20,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 
+from core.form_flow import parse_form_flow
 from core.forms_quality import (
     SORT_BY_COUNT,
     analyze_form_design,
@@ -31,6 +33,9 @@ from core.forms_quality import (
 )
 from core.report import (
     BarChart,
+    FlowChart,
+    FlowChartEdge,
+    FlowChartNode,
     Heading,
     Metric,
     Metrics,
@@ -45,6 +50,7 @@ _STRATA_HEADERS = ("Вимір", "Страта", "N_h", "n_h", "Треба", "В
 _STRATA_WIDTHS = (0.14, 0.26, 0.09, 0.09, 0.10, 0.10, 0.10, 0.12)
 _ASSOC_HEADERS = ("Питання 1", "Питання 2", "Міра", "Ефект", "Сила", "p (FDR)")
 _ASSOC_WIDTHS = (0.27, 0.27, 0.14, 0.10, 0.10, 0.12)
+QuestionTableMode = Literal["none", "flagged", "all"]
 
 
 def _uk(value: float, spec: str) -> str:
@@ -70,24 +76,135 @@ class DescriptiveConfig:
     top_n: int = 30
 
 
+@dataclass(frozen=True)
+class OverviewConfig:
+    """Налаштування секції огляду форми."""
+
+    include_response_metrics: bool = True
+    include_question_audit: bool = True
+    question_table_mode: QuestionTableMode = "flagged"
+    include_flow_map: bool = True
+
+
 # ===================== СЕКЦІЇ (кожна — своя відповідальність) ================
 
 
-def overview_section(structure: dict, responses: list[dict]) -> list[object]:
-    """Титульна секція: загальні характеристики опитування."""
-    stats = analyze_responses(structure, responses)
-    n_open = sum(1 for s in stats.values() if s.is_text)
+def _overview_question_table(designs, mode: QuestionTableMode) -> list[object]:
+    if mode == "none":
+        return []
+    selected = designs if mode == "all" else [design for design in designs if design.flags]
+    if not selected:
+        return [Para("Питань із прапорами якості не виявлено.")]
+
+    title = "Усі питання форми" if mode == "all" else "Питання, що потребують уваги"
     return [
-        Heading("Загальні характеристики", level=2),
-        Metrics(
-            columns=4,
-            items=[
-                Metric("Відповідей", str(len(responses))),
-                Metric("Питань", str(len(stats))),
-                Metric("Відкритих", str(n_open)),
+        Heading(title, level=3),
+        TableBlock(
+            headers=("Запитання", "Тип", "Опцій", "Обов'язк.", "Прапори"),
+            rows=[
+                [
+                    design.title,
+                    design.qtype_label,
+                    str(design.n_options) if design.n_options is not None else "—",
+                    "так" if design.required else "ні",
+                    ", ".join(design.flags) if design.flags else "—",
+                ]
+                for design in selected
+            ],
+            col_widths=(0.42, 0.17, 0.10, 0.11, 0.20),
+        ),
+    ]
+
+
+def _overview_flow_map(structure: dict) -> list[object]:
+    flow = parse_form_flow(structure)
+    has_interesting_flow = (
+        flow.section_count > 1
+        or flow.conditional_edge_count > 0
+        or bool(flow.unreachable_section_ids)
+        or flow.has_cycles
+    )
+    if not has_interesting_flow:
+        return []
+
+    title_by_node = {node.id: node.title for node in flow.nodes}
+    blocks: list[object] = [
+        Heading("Карта переходів", level=3),
+        FlowChart(
+            nodes=[
+                FlowChartNode(
+                    id=node.id,
+                    label="\n".join((node.title, *node.detail_lines[:1])),
+                    kind=node.kind,
+                    flagged=node.id in flow.unreachable_section_ids,
+                )
+                for node in flow.nodes
+            ],
+            edges=[
+                FlowChartEdge(
+                    source=edge.source,
+                    target=edge.target,
+                    label=edge.label,
+                    kind=edge.kind,
+                )
+                for edge in flow.edges
             ],
         ),
     ]
+    if flow.unreachable_section_ids:
+        unreachable = [
+            title_by_node.get(section_id, section_id) for section_id in flow.unreachable_section_ids
+        ]
+        blocks.append(
+            Para(
+                "Недосяжні секції: "
+                + ", ".join(unreachable)
+                + ". Перевірте умови переходів і завершення форми."
+            )
+        )
+    return blocks
+
+
+def overview_section(
+    structure: dict, responses: list[dict], config: OverviewConfig | None = None
+) -> list[object]:
+    """Титульна секція: загальні характеристики опитування."""
+    cfg = config or OverviewConfig()
+    stats = analyze_responses(structure, responses)
+    designs = analyze_form_design(structure)
+    n_open = sum(1 for s in stats.values() if s.is_text)
+    n_flagged = sum(1 for d in designs if d.flags)
+    sections_count = sum(1 for item in structure.get("items", []) if "pageBreakItem" in item) + 1
+
+    blocks: list[object] = [Heading("Огляд форми", level=2)]
+    metric_items: list[Metric] = []
+    if cfg.include_response_metrics:
+        metric_items.extend(
+            [
+                Metric("Відповідей", str(len(responses))),
+                Metric("Питань", str(len(stats))),
+                Metric("Відкритих", str(n_open)),
+            ]
+        )
+    if cfg.include_question_audit:
+        metric_items.extend(
+            [
+                Metric("Секцій", str(sections_count)),
+                Metric("Питань з прапорами", str(n_flagged)),
+            ]
+        )
+    if metric_items:
+        blocks.append(
+            Metrics(
+                columns=4,
+                items=metric_items,
+            )
+        )
+    if cfg.include_question_audit:
+        blocks.extend(_overview_question_table(designs, cfg.question_table_mode))
+    if cfg.include_flow_map:
+        blocks.extend(_overview_flow_map(structure))
+    return blocks
 
 
 def descriptive_section(

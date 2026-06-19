@@ -6,6 +6,9 @@ import pytest
 
 from core.report import (
     BarChart,
+    FlowChart,
+    FlowChartEdge,
+    FlowChartNode,
     Heading,
     Metric,
     Metrics,
@@ -77,6 +80,26 @@ def test_barchart_renders():
             BarChart(
                 labels=["ФІОТ", "ФЕА", "дуже довга назва підрозділу понад тридцять символів"],
                 values=[137, 50, 12],
+            )
+        ],
+    )
+    assert _is_pdf(render_pdf(rep))
+
+
+def test_flowchart_renders():
+    rep = Report(
+        title="Карта переходів",
+        blocks=[
+            FlowChart(
+                nodes=[
+                    FlowChartNode("__start__", "Старт\nПитання маршруту", kind="start"),
+                    FlowChartNode("sec_1", "Секція 1", kind="section"),
+                    FlowChartNode("__submit__", "Надіслати", kind="submit"),
+                ],
+                edges=[
+                    FlowChartEdge("__start__", "sec_1", "Так", kind="conditional"),
+                    FlowChartEdge("sec_1", "__submit__", "надіслати", kind="default"),
+                ],
             )
         ],
     )
