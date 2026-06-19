@@ -11,6 +11,7 @@ from core.forms_quality import (
     anonymize_distribution,
     canonicalize_distribution,
     normalize_label,
+    question_options,
     sort_distribution,
 )
 
@@ -18,6 +19,23 @@ from core.forms_quality import (
 def _q(qid, title, question, *, required=False):
     q = {"questionId": qid, "required": required, **question}
     return {"title": title, "questionItem": {"question": q}}
+
+
+def _grid(title, rows, columns, *, qtype="RADIO"):
+    return {
+        "title": title,
+        "questionGroupItem": {
+            "grid": {
+                "columns": {
+                    "type": qtype,
+                    "options": [{"value": value} for value in columns],
+                }
+            },
+            "questions": [
+                {"questionId": qid, "rowQuestion": {"title": row_title}} for qid, row_title in rows
+            ],
+        },
+    }
 
 
 _LONG = "Я" * (LONG_QUESTION_CHARS + 5)
@@ -56,6 +74,17 @@ FORM = {
                 }
             },
         ),
+        _grid(
+            "Матриця",
+            [("q6", "Рядок 1"), ("q7", "Рядок 2")],
+            ["Так", "Ні"],
+        ),
+        _grid(
+            "Матриця чекбоксів",
+            [("q8", "Рядок 1")],
+            ["A", "B"],
+            qtype="CHECKBOX",
+        ),
         {"title": "Секція", "pageBreakItem": {}},  # not a question → skipped
     ]
 }
@@ -67,7 +96,7 @@ def _design_by_id():
 
 def test_design_parses_only_questions():
     d = _design_by_id()
-    assert set(d) == {"q1", "q2", "q3", "q4", "q5"}  # section skipped
+    assert set(d) == {"q1", "q2", "q3", "q4", "q5", "q6", "q7", "q8"}  # section skipped
 
 
 def test_design_types_and_options():
@@ -76,6 +105,8 @@ def test_design_types_and_options():
     assert d["q3"].qtype == "dropdown" and d["q3"].n_options == 13
     assert d["q4"].qtype == "paragraph" and d["q4"].n_options is None
     assert d["q5"].qtype == "checkbox" and d["q5"].has_other
+    assert d["q6"].qtype == "radio" and d["q6"].n_options == 2
+    assert d["q8"].qtype == "checkbox" and d["q8"].n_options == 2
 
 
 def test_design_flag_long():
@@ -145,6 +176,14 @@ def test_anonymize_collapses_unknown_values():
     dist = {"Ч": 3, "Ж": 2, "вільний текст": 1, "ще інше": 1}
     out = anonymize_distribution(dist, ["Ч", "Ж"], "Інше*")
     assert out == {"Ч": 3, "Ж": 2, "Інше*": 2}
+
+
+def test_anonymize_preserves_matrix_grid_closed_options():
+    options = question_options(FORM)
+    assert options["q6"] == ["Так", "Ні"]
+    assert options["q8"] == ["A", "B"]
+    out = anonymize_distribution({"Так": 4, "Ні": 2}, options["q6"], "Інше*")
+    assert out == {"Так": 4, "Ні": 2}
 
 
 def test_canonicalize_distribution_collapses_case_and_space_duplicates():
