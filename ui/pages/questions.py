@@ -1,8 +1,7 @@
-"""Сторінка «Питання» — якість анкети + крос-аналіз зв'язків між питаннями.
+"""Сторінка «Запитання» — розподіли відповідей + крос-аналіз зв'язків.
 
-Три вкладки життєвого циклу:
-- 🔧 Дизайн     — лінтер формулювань (до публікації, без відповідей).
-- 📊 Відповіді  — розподіли + % пропуску (після збору).
+Дві вкладки після збору:
+- 📊 Відповіді  — розподіли + % пропуску.
 - 🔀 Крос-таби  — таблиці спряженості та міри зв'язку між парами питань
                   (χ²/Cramér's V, Spearman, Odds Ratio, Pearson) з поправкою на
                   пост-стратифікаційні ваги (Rao-Scott) та BH-FDR.
@@ -50,7 +49,6 @@ from core.forms_api import (
 )
 from core.forms_quality import (
     SORT_MODES,
-    analyze_form_design,
     analyze_responses,
     anonymize_distribution,
     canonicalize_distribution,
@@ -159,46 +157,10 @@ except FormsApiError as exc:
 
 form_questions = parse_question_types(structure)
 
-QUESTION_MODES = ["Дизайн форми", "Відповіді", "Крос-таби"]
+QUESTION_MODES = ["Відповіді", "Крос-таби"]
 mode = render_mode_switch("Режим аналізу", QUESTION_MODES, key="questions_mode")
 
-if mode == "Дизайн форми":
-    render_action_status(ActionBarStatus(note="аналіз структури форми"))
-    # ДО публікації / без відповідей: лінтер якості формулювання питань.
-    designs = analyze_form_design(structure)
-    if not designs:
-        render_empty_state("У формі немає питань для аналізу.")
-    else:
-        n_flagged = sum(1 for d in designs if d.flags)
-        n_open = sum(1 for d in designs if d.qtype in ("text", "paragraph"))
-        render_metric_bar(
-            [
-                MetricItem("Питань", len(designs)),
-                MetricItem("З прапорами", n_flagged),
-                MetricItem("Відкритих", n_open),
-            ],
-            columns=3,
-        )
-        st.dataframe(
-            [
-                {
-                    "Запитання": (d.title[:70] + "…") if len(d.title) > 70 else d.title,
-                    "Тип": d.qtype_label,
-                    "Опцій": d.n_options if d.n_options is not None else "—",
-                    "Обовʼязк.": "так" if d.required else "ні",
-                    "Прапори": ", ".join(d.flags) if d.flags else "—",
-                }
-                for d in designs
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-        st.caption(
-            "Прапори — евристичні підказки якості формулювання (довжина, "
-            "можливе подвійне «та/або», к-сть опцій), не вирок."
-        )
-
-elif mode == "Відповіді":
+if mode == "Відповіді":
     # ПІСЛЯ збору: розподіли + якість даних по питаннях.
     responses = _cached_responses(form_id, creds.token or "")
     render_action_status(ActionBarStatus(responses=len(responses), note="розподіли відповідей"))
@@ -245,10 +207,9 @@ elif mode == "Відповіді":
             mime="application/pdf",
             help="З поточними налаштуваннями екрана; результат кожного питання — окремою сторінкою.",
         )
-        by_id = {d.question_id: d for d in analyze_form_design(structure)}
+        title_by_id = {q.id: q.title for q in form_questions}
         for qid, s in stats.items():
-            d = by_id.get(qid)
-            st.markdown(f"**{d.title if d else qid}**")
+            st.markdown(f"**{title_by_id.get(qid, qid)}**")
             meta = f"відповіли {s.n_answered}/{s.n_total} · пропуск {s.non_response_pct}%"
             if s.is_text:
                 if s.text_median_len:

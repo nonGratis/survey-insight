@@ -7,22 +7,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_navigation_order_matches_analysis_workflow() -> None:
     source = (ROOT / "app.py").read_text(encoding="utf-8")
-    titles = ["Каталог", "Запитання", "Динаміка", "Зважування", "Звіт"]
+    titles = ["Каталог", "Дизайн форми", "Динаміка", "Зважування", "Запитання", "Звіт"]
     positions = [source.index(f'title="{title}"') for title in titles]
     assert positions == sorted(positions)
 
 
 def test_heavy_analysis_pages_do_not_use_streamlit_tabs() -> None:
+    form_design = (ROOT / "ui/pages/form_design.py").read_text(encoding="utf-8")
     questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
     weighting = (ROOT / "ui/pages/weighting.py").read_text(encoding="utf-8")
     mode_switch = (ROOT / "ui/components/mode_switch.py").read_text(encoding="utf-8")
+    assert "st.tabs(" not in form_design
     assert "st.tabs(" not in questions
     assert "st.tabs(" not in weighting
+    assert "st.pills(" not in form_design
     assert "st.pills(" not in questions
     assert "st.pills(" not in weighting
     assert "render_mode_switch(" in questions
     assert "render_mode_switch(" in weighting
     assert "st.segmented_control(" in mode_switch
+
+
+def test_form_design_is_separate_page_from_questions() -> None:
+    app = (ROOT / "app.py").read_text(encoding="utf-8")
+    form_design = (ROOT / "ui/pages/form_design.py").read_text(encoding="utf-8")
+    questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
+    assert '"ui/pages/form_design.py"' in app
+    assert 'title="Дизайн форми"' in app
+    assert 'render_page_header("Дизайн форми")' in form_design
+    assert "analyze_form_design" in form_design
+    assert "Дизайн форми" not in questions
+    assert 'QUESTION_MODES = ["Відповіді", "Крос-таби"]' in questions
 
 
 def test_weighting_settings_are_lazy_and_persisted() -> None:
@@ -67,7 +82,7 @@ def test_form_label_lives_in_action_bar_not_page_caption() -> None:
     assert 'st.markdown("**Форма:**")' in action_bar
     assert "[0.62, 9.38, 1.15]" in action_bar
 
-    for page in ["dynamics.py", "questions.py", "weighting.py", "export.py"]:
+    for page in ["form_design.py", "dynamics.py", "questions.py", "weighting.py", "export.py"]:
         source = (ROOT / f"ui/pages/{page}").read_text(encoding="utf-8")
         assert "render_form_caption" not in source
 
