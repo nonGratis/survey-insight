@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
 import streamlit as st
 
 from core.auth import credentials_from_dict
@@ -105,28 +103,6 @@ else:
             )
         elif has_interesting_flow:
             st.caption("Суцільні стрілки — умовні переходи, пунктир — звичайний перехід далі.")
-
-        with st.expander("Debug карти переходів (тимчасово)", expanded=False):
-            st.caption(
-                "Скопіюйте ці блоки для розбору конкретної форми. "
-                "Це тимчасова діагностика парсингу Google Forms API."
-            )
-            st.text("form_id")
-            st.code(form_id, language="text")
-            st.text("parsed flow")
-            st.json(
-                {
-                    "nodes": [asdict(node) for node in flow.nodes],
-                    "edges": [asdict(edge) for edge in flow.edges],
-                    "unreachable_section_ids": flow.unreachable_section_ids,
-                    "terminal_section_ids": flow.terminal_section_ids,
-                    "has_cycles": flow.has_cycles,
-                }
-            )
-            st.text("graphviz dot")
-            st.code(flow_dot, language="dot")
-            st.text("raw structure.items")
-            st.json(structure.get("items", []))
 
     st.dataframe(
         [

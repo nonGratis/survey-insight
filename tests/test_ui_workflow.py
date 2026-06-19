@@ -46,8 +46,6 @@ def test_form_design_page_renders_flow_map() -> None:
     assert "flow_to_dot" in form_design
     assert 'st.subheader("Карта переходів")' in form_design
     assert "st.graphviz_chart(" in form_design
-    assert 'st.expander("Debug карти переходів (тимчасово)"' in form_design
-    assert "raw structure.items" in form_design
     assert 'MetricItem("Секцій"' in form_design
     assert 'MetricItem("Умовних переходів"' in form_design
     assert 'MetricItem("Недосяжних"' in form_design

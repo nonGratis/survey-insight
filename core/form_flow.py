@@ -11,6 +11,15 @@ SUBMIT_ID = "__submit__"
 
 NodeKind = Literal["start", "section", "submit"]
 EdgeKind = Literal["default", "conditional"]
+ROUTE_EDGE_COLORS = (
+    "#172554",
+    "#1e40af",
+    "#2563eb",
+    "#60a5fa",
+    "#93c5fd",
+)
+DEFAULT_EDGE_COLOR = "#cbd5e1"
+DEFAULT_EDGE_FONT_COLOR = "#475569"
 
 
 @dataclass(frozen=True)
@@ -124,6 +133,7 @@ def _terminal_edges(edges: list[FlowEdge], reachable: set[str]) -> list[FlowEdge
 
 def flow_to_dot(flow: FormFlow) -> str:
     """Render flow as compact DOT for `st.graphviz_chart`."""
+    edge_colors = _conditional_edge_colors(flow.edges)
     lines = [
         "digraph FormFlow {",
         '  graph [rankdir=LR, bgcolor="transparent", margin=0, nodesep=0.18, ranksep=0.34, pad=0.02];',
@@ -137,14 +147,34 @@ def flow_to_dot(flow: FormFlow) -> str:
             f'  "{_dot_escape(node.id)}" [label="{_dot_escape(label)}", style="{style}", fillcolor="{fill}", color="{stroke}", fontcolor="{font}"];'
         )
     for edge in flow.edges:
-        color = "#2563eb" if edge.kind == "conditional" else "#cbd5e1"
-        style = "solid" if edge.kind == "conditional" else "dashed"
+        is_submit_edge = edge.target == SUBMIT_ID
+        is_route_edge = edge.kind == "conditional" and not is_submit_edge
+        color = edge_colors.get((edge.source, edge.target), DEFAULT_EDGE_COLOR)
+        style = "solid" if is_route_edge else "dashed"
+        penwidth = "1.75" if is_route_edge else "1.1"
+        fontcolor = color if is_route_edge else DEFAULT_EDGE_FONT_COLOR
         label = _wrap_label(edge.label, max_chars=22)
         lines.append(
-            f'  "{_dot_escape(edge.source)}" -> "{_dot_escape(edge.target)}" [label="{_dot_escape(label)}", color="{color}", style="{style}"];'
+            f'  "{_dot_escape(edge.source)}" -> "{_dot_escape(edge.target)}" [label="{_dot_escape(label)}", color="{color}", fontcolor="{fontcolor}", penwidth={penwidth}, style="{style}"];'
         )
     lines.append("}")
     return "\n".join(lines)
+
+
+def _conditional_edge_colors(edges: list[FlowEdge]) -> dict[tuple[str, str], str]:
+    target_order_by_source: dict[str, list[str]] = defaultdict(list)
+    for edge in edges:
+        if edge.kind != "conditional" or edge.target == SUBMIT_ID:
+            continue
+        if edge.target not in target_order_by_source[edge.source]:
+            target_order_by_source[edge.source].append(edge.target)
+
+    colors: dict[tuple[str, str], str] = {}
+    for source, targets in target_order_by_source.items():
+        for index, target in enumerate(targets):
+            color_index = min(index, len(ROUTE_EDGE_COLORS) - 1)
+            colors[(source, target)] = ROUTE_EDGE_COLORS[color_index]
+    return colors
 
 
 def _sections(form: dict[str, Any]) -> list[FlowNode]:
