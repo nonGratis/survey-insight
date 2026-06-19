@@ -73,6 +73,16 @@ def test_questions_prefers_configured_weighting_state() -> None:
     assert "конфігурація «Зважування»" in questions
 
 
+def test_questions_response_tab_can_use_configured_weights() -> None:
+    questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
+    assert "def _configured_question_distribution(" in questions
+    assert "compute_configured_response_weights(" in questions
+    assert "exclude_column=qid" in questions
+    assert "weighted_response_distribution(" in questions
+    assert '"Зважувати розподіли відповідей"' in questions
+    assert '"Зважених відповідей"' in questions
+
+
 def test_catalog_table_selects_global_form_without_action_columns() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "st.column_config.LinkColumn" not in catalog
