@@ -14,6 +14,7 @@ from core.form_flow import (
 from core.report import (
     BarChart,
     FlowChart,
+    Heading,
     Metric,
     Metrics,
     PageBreak,
@@ -130,6 +131,15 @@ def test_descriptive_chart_mode_emits_barchart():
     chart = next(b for b in blocks if isinstance(b, BarChart))
     assert chart.value_labels == ["50,0 % · 1", "50,0 % · 1"]
     assert not any(isinstance(b, TableBlock) for b in blocks)
+
+
+def test_descriptive_questions_are_nested_under_descriptive_heading():
+    blocks = descriptive_section(_STRUCTURE, _RESPONSES, DescriptiveConfig(render_mode="chart"))
+    headings = [block for block in blocks if isinstance(block, Heading)]
+
+    assert headings[0].text == "Дескриптив"
+    assert headings[0].level == 2
+    assert all(heading.level == 3 for heading in headings[1:])
 
 
 def test_descriptive_table_mode_emits_table():

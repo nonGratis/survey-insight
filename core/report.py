@@ -19,12 +19,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from reportlab.graphics import renderPDF
 from reportlab.graphics.charts.barcharts import HorizontalBarChart
 from reportlab.graphics.shapes import Drawing, Line, Polygon, Rect, String
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -39,6 +40,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 from reportlab.platypus import PageBreak as _RLPageBreak
+from reportlab.platypus.tableofcontents import TableOfContents
 
 
 @dataclass(frozen=True)
@@ -184,6 +186,26 @@ class PageBreak:
     """Розрив сторінки (наступний блок — з нової сторінки)."""
 
 
+@dataclass(frozen=True)
+class _HeadingEntry:
+    text: str
+    toc_text: str
+    key: str
+    level: int
+
+
+class _ReportDocTemplate(SimpleDocTemplate):
+    """DocTemplate that registers report headings for TOC and PDF outline."""
+
+    def afterFlowable(self, flowable) -> None:  # noqa: N802 - ReportLab API name
+        entry: _HeadingEntry | None = getattr(flowable, "_report_heading_entry", None)
+        if entry is None:
+            return
+        self.canv.bookmarkPage(entry.key)
+        self.notify("TOCEntry", (entry.level, entry.toc_text, self.page, entry.key))
+        self.canv.addOutlineEntry(entry.text, entry.key, level=entry.level, closed=False)
+
+
 class _ScaledDrawingFlowable(Flowable):
     """ReportLab Flowable that scales a graphics Drawing into the available frame."""
 
@@ -250,6 +272,43 @@ def _styles(theme: ReportTheme = DEFAULT_REPORT_THEME) -> dict[str, ParagraphSty
             textColor=colors.HexColor(theme.muted),
             fontSize=9.5,
             leading=12,
+        ),
+        "toc_title": ParagraphStyle(
+            "toc_title",
+            fontName=FONT_BOLD,
+            fontSize=16,
+            leading=20,
+            alignment=TA_CENTER,
+            textColor=colors.HexColor(theme.primary_dark),
+            spaceAfter=10,
+        ),
+        "toc0": ParagraphStyle(
+            "toc0",
+            parent=base,
+            fontName=FONT_BOLD,
+            fontSize=9.8,
+            leading=13,
+            leftIndent=0,
+            firstLineIndent=0,
+            textColor=colors.HexColor(theme.text),
+        ),
+        "toc1": ParagraphStyle(
+            "toc1",
+            parent=base,
+            fontSize=8.8,
+            leading=11.8,
+            leftIndent=12,
+            firstLineIndent=0,
+            textColor=colors.HexColor(theme.text),
+        ),
+        "toc2": ParagraphStyle(
+            "toc2",
+            parent=base,
+            fontSize=8.2,
+            leading=11,
+            leftIndent=24,
+            firstLineIndent=0,
+            textColor=colors.HexColor(theme.muted),
         ),
         "muted": ParagraphStyle(
             "muted", parent=base, textColor=colors.HexColor(theme.muted), fontSize=9
@@ -857,6 +916,51 @@ def _flowchart_flowable(block: FlowChart, theme: ReportTheme = DEFAULT_REPORT_TH
     return drawing
 
 
+def _collect_heading_entries(blocks: Sequence[object]) -> list[_HeadingEntry]:
+    headings = [block for block in blocks if isinstance(block, Heading)]
+    if not headings:
+        return []
+    min_level = min(max(1, heading.level) for heading in headings)
+    entries: list[_HeadingEntry] = []
+    previous_level = 0
+    for index, heading in enumerate(headings):
+        raw_level = max(0, min(max(heading.level, 1), 3) - min_level)
+        level = raw_level if not entries else min(raw_level, previous_level + 1)
+        text = str(heading.text)
+        entries.append(
+            _HeadingEntry(
+                text=text,
+                toc_text=escape(text),
+                key=f"report-heading-{index + 1}",
+                level=level,
+            )
+        )
+        previous_level = level
+    return entries
+
+
+def _attach_heading_entry(flowable: Flowable, entry: _HeadingEntry | None) -> Flowable:
+    if entry is not None:
+        flowable._report_heading_entry = entry
+    return flowable
+
+
+def _toc_flowable(styles: dict, theme: ReportTheme) -> TableOfContents:
+    toc = TableOfContents()
+    toc.levelStyles = [styles["toc0"], styles["toc1"], styles["toc2"]]
+    toc.dotsMinLevel = 0
+    toc.tableStyle = TableStyle(
+        [
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor(theme.text)),
+        ]
+    )
+    return toc
+
+
 def _title_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flowable]:
     rows: list[list[Flowable]] = [[Paragraph(report.title, styles["title"])]]
     if report.subtitle:
@@ -878,11 +982,13 @@ def _title_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[F
     return [title, Spacer(1, 12)]
 
 
-def _heading_flowable(block: Heading, styles: dict, theme: ReportTheme) -> Flowable:
+def _heading_flowable(
+    block: Heading, styles: dict, theme: ReportTheme, entry: _HeadingEntry | None
+) -> Flowable:
     level = min(max(block.level, 1), 3)
     paragraph = Paragraph(block.text, styles[f"h{level}"])
     if level != 2:
-        return paragraph
+        return _attach_heading_entry(paragraph, entry)
     table = Table([[paragraph]], colWidths=[_content_width(theme)])
     table.setStyle(
         TableStyle(
@@ -897,14 +1003,26 @@ def _heading_flowable(block: Heading, styles: dict, theme: ReportTheme) -> Flowa
             ]
         )
     )
-    return table
+    return _attach_heading_entry(table, entry)
 
 
 def _to_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flowable]:
     flow: list[Flowable] = _title_flowables(report, styles, theme)
+    heading_entries = _collect_heading_entries(report.blocks)
+    heading_iter = iter(heading_entries)
+    if heading_entries:
+        flow.extend(
+            [
+                _RLPageBreak(),
+                Paragraph("Зміст", styles["toc_title"]),
+                Spacer(1, 10),
+                _toc_flowable(styles, theme),
+                _RLPageBreak(),
+            ]
+        )
     for block in report.blocks:
         if isinstance(block, Heading):
-            flow.append(_heading_flowable(block, styles, theme))
+            flow.append(_heading_flowable(block, styles, theme, next(heading_iter, None)))
             flow.append(Spacer(1, 5))
         elif isinstance(block, Para):
             flow.append(Paragraph(block.text, styles["body"]))
@@ -951,7 +1069,7 @@ def render_pdf(report: Report) -> bytes:
     _ensure_fonts()
     theme = report.theme
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
+    doc = _ReportDocTemplate(
         buf,
         pagesize=A4,
         leftMargin=theme.page_margin,
@@ -961,7 +1079,7 @@ def render_pdf(report: Report) -> bytes:
         title=report.title,
     )
     painter = _footer_painter(report.footer, theme)
-    doc.build(
+    doc.multiBuild(
         _to_flowables(report, _styles(theme), theme), onFirstPage=painter, onLaterPages=painter
     )
     return buf.getvalue()
