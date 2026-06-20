@@ -160,6 +160,14 @@ def test_questions_association_overview_has_priority_filters() -> None:
     assert "За поточними фільтрами зв'язків не знайдено" in questions
 
 
+def test_questions_association_table_wraps_question_columns() -> None:
+    questions = (ROOT / "ui/pages/questions.py").read_text(encoding="utf-8")
+    assert 'subset=["Запитання 1", "Запитання 2"]' in questions
+    assert '"white-space": "normal"' in questions
+    assert '"overflow-wrap": "anywhere"' in questions
+    assert "st.dataframe(styled_table" in questions
+
+
 def test_dynamics_has_forecast_window_autoscaling() -> None:
     dynamics = (ROOT / "ui/pages/dynamics.py").read_text(encoding="utf-8")
     charts_timeline = (ROOT / "core/charts_timeline.py").read_text(encoding="utf-8")
