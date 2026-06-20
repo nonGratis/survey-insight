@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any, cast
 
 import pandas as pd
 
@@ -144,7 +145,7 @@ def _weighted_label(
 
 def _safe_weight(value: object) -> float:
     try:
-        weight = float(value)
+        weight = float(cast(Any, value))
     except (TypeError, ValueError):
         return 1.0
     return weight if math.isfinite(weight) and weight > 0 else 1.0

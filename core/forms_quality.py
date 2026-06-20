@@ -268,12 +268,12 @@ def anonymize_distribution(
 
 
 def sort_distribution(
-    distribution: Mapping[str, int],
+    distribution: Mapping[str, int | float],
     sort_mode: str,
     form_options: Sequence[str] = (),
     keep_label_last: bool = False,
     label_last_value: str = "",
-) -> list[tuple[str, int]]:
+) -> list[tuple[str, int | float]]:
     """Посортувати розподіл за величиною / алфавітом / порядком у формі.
 
     `keep_label_last` тримає `label_last_value` (напр., «Інше*») в кінці.
