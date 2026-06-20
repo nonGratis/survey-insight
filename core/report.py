@@ -40,17 +40,43 @@ from reportlab.platypus import (
 )
 from reportlab.platypus import PageBreak as _RLPageBreak
 
+
+@dataclass(frozen=True)
+class ReportTheme:
+    """Unified visual theme for all PDF report primitives."""
+
+    primary: str = "#1d4ed8"
+    primary_dark: str = "#1e3a8a"
+    text: str = "#111827"
+    muted: str = "#64748b"
+    border: str = "#dbe4ef"
+    grid: str = "#d8e2ef"
+    surface: str = "#f8fafc"
+    surface_alt: str = "#f1f5f9"
+    title_bg: str = "#eff6ff"
+    title_border: str = "#bfdbfe"
+    section_bg: str = "#f8fafc"
+    metric_bg: str = "#ffffff"
+    metric_border: str = "#dbeafe"
+    table_header_bg: str = "#1e3a8a"
+    table_header_text: str = "#ffffff"
+    table_row_alt: str = "#f8fafc"
+    chart_bar: str = "#2563eb"
+    chart_grid: str = "#e2e8f0"
+    footer_text: str = "#64748b"
+    footer_rule: str = "#e2e8f0"
+    page_margin: float = 18 * mm
+    frame_padding: float = 6
+
+
+DEFAULT_REPORT_THEME = ReportTheme()
+
 # --- шрифти (вбудовані, OFL Liberation Sans) --------------------------------
 _FONTS_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 FONT = "LiberationSans"
 FONT_BOLD = "LiberationSans-Bold"
 
 # --- палітра/розміри (названі, не «магічні») --------------------------------
-_HEADER_BG = colors.HexColor("#DCE6F1")
-_GRID = colors.HexColor("#9AA7B8")
-_MUTED = colors.HexColor("#666666")
-_PAGE_MARGIN = 18 * mm
-_FRAME_PADDING = 6
 _HEADING_SIZE = {1: 16, 2: 13, 3: 11.5}
 
 
@@ -197,87 +223,168 @@ class Report:
     subtitle: str = ""
     blocks: list[object] = field(default_factory=list)
     footer: str = "Survey Insight"
+    theme: ReportTheme = DEFAULT_REPORT_THEME
 
 
-def _styles() -> dict[str, ParagraphStyle]:
-    base = ParagraphStyle("body", fontName=FONT, fontSize=10, leading=14, alignment=TA_LEFT)
+def _styles(theme: ReportTheme = DEFAULT_REPORT_THEME) -> dict[str, ParagraphStyle]:
+    base = ParagraphStyle(
+        "body",
+        fontName=FONT,
+        fontSize=10,
+        leading=14,
+        alignment=TA_LEFT,
+        textColor=colors.HexColor(theme.text),
+    )
     return {
         "body": base,
-        "muted": ParagraphStyle("muted", parent=base, textColor=_MUTED, fontSize=9),
-        "metric_label": ParagraphStyle("ml", parent=base, textColor=_MUTED, fontSize=8),
-        "metric_value": ParagraphStyle("mv", fontName=FONT_BOLD, fontSize=13, leading=15),
+        "title": ParagraphStyle(
+            "title",
+            fontName=FONT_BOLD,
+            fontSize=18,
+            leading=22,
+            textColor=colors.HexColor(theme.primary_dark),
+        ),
+        "subtitle": ParagraphStyle(
+            "subtitle",
+            parent=base,
+            textColor=colors.HexColor(theme.muted),
+            fontSize=9.5,
+            leading=12,
+        ),
+        "muted": ParagraphStyle(
+            "muted", parent=base, textColor=colors.HexColor(theme.muted), fontSize=9
+        ),
+        "metric_label": ParagraphStyle(
+            "ml",
+            parent=base,
+            textColor=colors.HexColor(theme.muted),
+            fontSize=7.8,
+            leading=10,
+        ),
+        "metric_value": ParagraphStyle(
+            "mv",
+            fontName=FONT_BOLD,
+            fontSize=14,
+            leading=16,
+            textColor=colors.HexColor(theme.primary_dark),
+        ),
         "cell": ParagraphStyle("cell", parent=base, fontSize=8.5, leading=11),
-        "cell_h": ParagraphStyle("cellh", fontName=FONT_BOLD, fontSize=8.5, leading=11),
+        "cell_h": ParagraphStyle(
+            "cellh",
+            fontName=FONT_BOLD,
+            fontSize=8.3,
+            leading=10.5,
+            textColor=colors.HexColor(theme.table_header_text),
+        ),
         **{
             f"h{lvl}": ParagraphStyle(
                 f"h{lvl}",
                 fontName=FONT_BOLD,
                 fontSize=sz,
                 leading=sz + 4,
-                spaceBefore=8,
-                spaceAfter=4,
+                spaceBefore=10 if lvl == 2 else 7,
+                spaceAfter=6 if lvl == 2 else 4,
+                textColor=colors.HexColor(theme.primary_dark if lvl <= 2 else theme.text),
             )
             for lvl, sz in _HEADING_SIZE.items()
         },
     }
 
 
-def _content_width() -> float:
-    return A4[0] - 2 * _PAGE_MARGIN - 2 * _FRAME_PADDING
+def _content_width(theme: ReportTheme = DEFAULT_REPORT_THEME) -> float:
+    return A4[0] - 2 * theme.page_margin - 2 * theme.frame_padding
 
 
-def _content_height() -> float:
-    return A4[1] - 2 * _PAGE_MARGIN - 2 * _FRAME_PADDING
+def _content_height(theme: ReportTheme = DEFAULT_REPORT_THEME) -> float:
+    return A4[1] - 2 * theme.page_margin - 2 * theme.frame_padding
 
 
-def _metrics_flowable(block: Metrics, styles: dict) -> Flowable:
+def _metrics_flowable(
+    block: Metrics, styles: dict, theme: ReportTheme = DEFAULT_REPORT_THEME
+) -> Flowable:
     cols = max(1, block.columns)
+    width = _content_width(theme) / cols
     cells = [
         [Paragraph(m.label, styles["metric_label"]), Paragraph(m.value, styles["metric_value"])]
         for m in block.items
     ]
     # Пакуємо вертикальні (label/value) міні-таблиці в сітку cols×rows.
     minis = [
-        Table([[lbl], [val]], style=TableStyle([("TOPPADDING", (0, 0), (-1, -1), 1)]))
+        Table(
+            [[lbl], [val]],
+            colWidths=[width - 8],
+            style=TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(theme.metric_bg)),
+                    ("BOX", (0, 0), (-1, -1), 0.55, colors.HexColor(theme.metric_border)),
+                    ("LINEBEFORE", (0, 0), (0, -1), 2.0, colors.HexColor(theme.primary)),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, 0), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
+                    ("TOPPADDING", (0, 1), (-1, 1), 0),
+                    ("BOTTOMPADDING", (0, 1), (-1, 1), 6),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ]
+            ),
+        )
         for lbl, val in cells
     ]
     rows = [minis[i : i + cols] for i in range(0, len(minis), cols)]
     for r in rows:  # доповнити останній рядок порожніми клітинками
         r += [""] * (cols - len(r))
-    width = _content_width() / cols
     grid = Table(rows, colWidths=[width] * cols)
     grid.setStyle(
-        TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOTTOMPADDING", (0, 0), (-1, -1), 8)])
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]
+        )
     )
     return grid
 
 
-def _table_flowable(block: TableBlock, styles: dict) -> Flowable:
+def _table_flowable(
+    block: TableBlock, styles: dict, theme: ReportTheme = DEFAULT_REPORT_THEME
+) -> Flowable:
     header = [Paragraph(str(h), styles["cell_h"]) for h in block.headers]
     body = [[Paragraph(str(c), styles["cell"]) for c in row] for row in block.rows]
     ncols = len(block.headers)
     if block.col_widths:
-        widths = [w * _content_width() for w in block.col_widths]
+        widths = [w * _content_width(theme) for w in block.col_widths]
     else:
-        widths = [_content_width() / ncols] * ncols
+        widths = [_content_width(theme) / ncols] * ncols
     table = Table([header, *body], colWidths=widths, repeatRows=1)
     table.setStyle(
         TableStyle(
             [
-                ("GRID", (0, 0), (-1, -1), 0.4, _GRID),
-                ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(theme.table_header_bg)),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [colors.white, colors.HexColor(theme.table_row_alt)],
+                ),
+                ("LINEBELOW", (0, 0), (-1, 0), 0.7, colors.HexColor(theme.primary_dark)),
+                ("INNERGRID", (0, 0), (-1, -1), 0.25, colors.HexColor(theme.grid)),
+                ("BOX", (0, 0), (-1, -1), 0.45, colors.HexColor(theme.border)),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, 0), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
+                ("TOPPADDING", (0, 1), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 3),
             ]
         )
     )
     return table
 
 
-_BAR_COLOR = colors.HexColor("#5A78C0")
 _BAR_ROW_H = 16  # висота на один стовпець, пт
 _BAR_V_PAD = 28
 _FLOW_NODE_W = 118
@@ -285,7 +392,6 @@ _FLOW_NODE_H = 38
 _FLOW_X_GAP = 32
 _FLOW_Y_GAP = 34
 _FLOW_MARGIN = 8
-_FLOW_PAGE_MAX_COLS = 5
 _FLOW_PAGE_MAX_H_REDUCTION = 48
 
 
@@ -321,7 +427,7 @@ def _flow_label_lines(value: str, max_chars: int = 24, max_lines: int = 6) -> li
     return lines[:max_lines] or [""]
 
 
-def _barchart_drawing(block: BarChart) -> Flowable:
+def _barchart_drawing(block: BarChart, theme: ReportTheme = DEFAULT_REPORT_THEME) -> Flowable:
     """Горизонтальна діаграма засобами reportlab.graphics (без зовнішніх
     залежностей, векторно — друкується чітко на будь-якому масштабі)."""
     wrapped_labels = [
@@ -334,7 +440,7 @@ def _barchart_drawing(block: BarChart) -> Flowable:
     max_lines = max((len(lines) for lines in wrapped_labels), default=1)
     row_height = _BAR_ROW_H + max(0, max_lines - 1) * 8
     height = max(60.0, row_height * n + _BAR_V_PAD)
-    width = _content_width()
+    width = _content_width(theme)
     drawing = Drawing(width, height)
     chart = HorizontalBarChart()
     chart.x, chart.y = 120, 14
@@ -347,10 +453,15 @@ def _barchart_drawing(block: BarChart) -> Flowable:
     chart.valueAxis.labels.fontName = FONT
     chart.valueAxis.labels.fontSize = 7
     chart.valueAxis.valueMin = 0
-    chart.bars[0].fillColor = _BAR_COLOR
+    chart.valueAxis.strokeColor = colors.HexColor(theme.grid)
+    chart.valueAxis.labels.fillColor = colors.HexColor(theme.muted)
+    chart.categoryAxis.strokeColor = colors.HexColor(theme.grid)
+    chart.categoryAxis.labels.fillColor = colors.HexColor(theme.muted)
+    chart.bars[0].fillColor = colors.HexColor(theme.chart_bar)
     chart.bars[0].strokeColor = None
     chart.barLabels.fontName = FONT
     chart.barLabels.fontSize = 7
+    chart.barLabels.fillColor = colors.HexColor(theme.text)
     chart.barLabels.dx = 3
     if block.value_labels:
         chart.barLabelArray = [list(block.value_labels)]
@@ -362,7 +473,9 @@ def _barchart_drawing(block: BarChart) -> Flowable:
     return drawing
 
 
-def _barchart_flowables(block: BarChart) -> list[Flowable]:
+def _barchart_flowables(
+    block: BarChart, theme: ReportTheme = DEFAULT_REPORT_THEME
+) -> list[Flowable]:
     """Split large charts so one ReportLab Drawing never exceeds a page frame."""
     wrapped_labels = [
         _wrap_lines(str(label), block.max_label_chars, block.max_label_lines)
@@ -370,9 +483,9 @@ def _barchart_flowables(block: BarChart) -> list[Flowable]:
     ]
     max_lines = max((len(lines) for lines in wrapped_labels), default=1)
     row_height = _BAR_ROW_H + max(0, max_lines - 1) * 8
-    max_items = max(1, int((_content_height() - _BAR_V_PAD) // row_height))
+    max_items = max(1, int((_content_height(theme) - _BAR_V_PAD) // row_height))
     if len(block.values) <= max_items:
-        return [_barchart_drawing(block)]
+        return [_barchart_drawing(block, theme)]
 
     out: list[Flowable] = []
     labels = list(block.labels)
@@ -388,7 +501,8 @@ def _barchart_flowables(block: BarChart) -> list[Flowable]:
                     value_labels=value_labels[start:end] if value_labels else None,
                     max_label_chars=block.max_label_chars,
                     max_label_lines=block.max_label_lines,
-                )
+                ),
+                theme,
             )
         )
     return out
@@ -469,9 +583,11 @@ def _draw_polyline_arrow(
     )
 
 
-def _flowchart_page_flowable(block: FlowChart) -> Flowable:
+def _flowchart_page_flowable(
+    block: FlowChart, theme: ReportTheme = DEFAULT_REPORT_THEME
+) -> Flowable:
     nodes = list(block.nodes)
-    content_width = _content_width()
+    content_width = _content_width(theme)
     if not nodes:
         return Drawing(content_width, 1)
 
@@ -616,30 +732,23 @@ def _flowchart_page_flowable(block: FlowChart) -> Flowable:
                 )
             )
 
-    max_height = max(120.0, _content_height() - _FLOW_PAGE_MAX_H_REDUCTION)
+    max_height = max(120.0, _content_height(theme) - _FLOW_PAGE_MAX_H_REDUCTION)
     return _ScaledDrawingFlowable(drawing, content_width, max_height)
 
 
-def _flowchart_flowable(block: FlowChart) -> Flowable:
+def _flowchart_flowable(block: FlowChart, theme: ReportTheme = DEFAULT_REPORT_THEME) -> Flowable:
     nodes = list(block.nodes)
     if block.fit_page:
-        return _flowchart_page_flowable(block)
+        return _flowchart_page_flowable(block, theme)
 
-    content_width = _content_width()
+    content_width = _content_width(theme)
     node_w = _FLOW_NODE_W
     node_h = _FLOW_NODE_H
     x_gap = _FLOW_X_GAP
     y_gap = _FLOW_Y_GAP
     margin = _FLOW_MARGIN
     label_chars = 24
-    if block.fit_page and nodes:
-        page_cols = min(len(nodes), _FLOW_PAGE_MAX_COLS)
-        width = max(
-            content_width,
-            page_cols * node_w + max(0, page_cols - 1) * x_gap + 2 * margin,
-        )
-    else:
-        width = content_width
+    width = content_width
     if not nodes:
         return Drawing(width, 1)
 
@@ -748,28 +857,69 @@ def _flowchart_flowable(block: FlowChart) -> Flowable:
     return drawing
 
 
-def _to_flowables(report: Report, styles: dict) -> list[Flowable]:
-    flow: list[Flowable] = [Paragraph(report.title, styles["h1"])]
+def _title_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flowable]:
+    rows: list[list[Flowable]] = [[Paragraph(report.title, styles["title"])]]
     if report.subtitle:
-        flow.append(Paragraph(report.subtitle, styles["muted"]))
-    flow.append(Spacer(1, 6))
+        rows.append([Paragraph(report.subtitle, styles["subtitle"])])
+    title = Table(rows, colWidths=[_content_width(theme)])
+    title.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(theme.title_bg)),
+                ("BOX", (0, 0), (-1, -1), 0.55, colors.HexColor(theme.title_border)),
+                ("LINEBEFORE", (0, 0), (0, -1), 3.0, colors.HexColor(theme.primary)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 12),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, 0), 9),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]
+        )
+    )
+    return [title, Spacer(1, 12)]
+
+
+def _heading_flowable(block: Heading, styles: dict, theme: ReportTheme) -> Flowable:
+    level = min(max(block.level, 1), 3)
+    paragraph = Paragraph(block.text, styles[f"h{level}"])
+    if level != 2:
+        return paragraph
+    table = Table([[paragraph]], colWidths=[_content_width(theme)])
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(theme.section_bg)),
+                ("LINEBEFORE", (0, 0), (0, -1), 2.5, colors.HexColor(theme.primary)),
+                ("LINEBELOW", (0, 0), (-1, -1), 0.45, colors.HexColor(theme.border)),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    return table
+
+
+def _to_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flowable]:
+    flow: list[Flowable] = _title_flowables(report, styles, theme)
     for block in report.blocks:
         if isinstance(block, Heading):
-            flow.append(Paragraph(block.text, styles[f"h{min(max(block.level, 1), 3)}"]))
+            flow.append(_heading_flowable(block, styles, theme))
+            flow.append(Spacer(1, 5))
         elif isinstance(block, Para):
             flow.append(Paragraph(block.text, styles["body"]))
             flow.append(Spacer(1, 4))
         elif isinstance(block, Metrics):
-            flow.append(_metrics_flowable(block, styles))
+            flow.append(_metrics_flowable(block, styles, theme))
         elif isinstance(block, TableBlock):
-            flow.append(_table_flowable(block, styles))
-            flow.append(Spacer(1, 6))
+            flow.append(_table_flowable(block, styles, theme))
+            flow.append(Spacer(1, 8))
         elif isinstance(block, BarChart):
-            for chart in _barchart_flowables(block):
+            for chart in _barchart_flowables(block, theme):
                 flow.append(chart)
                 flow.append(Spacer(1, 6))
         elif isinstance(block, FlowChart):
-            flow.append(_flowchart_flowable(block))
+            flow.append(_flowchart_flowable(block, theme))
             flow.append(Spacer(1, 6))
         elif isinstance(block, PageBreak):
             flow.append(_RLPageBreak())
@@ -778,15 +928,19 @@ def _to_flowables(report: Report, styles: dict) -> list[Flowable]:
     return flow
 
 
-def _footer_painter(footer_text: str):
+def _footer_painter(footer_text: str, theme: ReportTheme):
     stamp = datetime.now().strftime("%d.%m.%Y %H:%M")
 
     def paint(canvas, doc) -> None:
         canvas.saveState()
+        footer_y = 14 * mm
+        canvas.setStrokeColor(colors.HexColor(theme.footer_rule))
+        canvas.setLineWidth(0.35)
+        canvas.line(theme.page_margin, footer_y + 4, A4[0] - theme.page_margin, footer_y + 4)
         canvas.setFont(FONT, 8)
-        canvas.setFillColor(_MUTED)
-        canvas.drawString(_PAGE_MARGIN, 10 * mm, f"{footer_text} · {stamp}")
-        canvas.drawRightString(A4[0] - _PAGE_MARGIN, 10 * mm, f"с. {doc.page}")
+        canvas.setFillColor(colors.HexColor(theme.footer_text))
+        canvas.drawString(theme.page_margin, 10 * mm, f"{footer_text} · {stamp}")
+        canvas.drawRightString(A4[0] - theme.page_margin, 10 * mm, f"с. {doc.page}")
         canvas.restoreState()
 
     return paint
@@ -795,16 +949,19 @@ def _footer_painter(footer_text: str):
 def render_pdf(report: Report) -> bytes:
     """Відрендерити `Report` у байти PDF (A4, кирилиця, нумерація сторінок)."""
     _ensure_fonts()
+    theme = report.theme
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
         pagesize=A4,
-        leftMargin=_PAGE_MARGIN,
-        rightMargin=_PAGE_MARGIN,
-        topMargin=_PAGE_MARGIN,
+        leftMargin=theme.page_margin,
+        rightMargin=theme.page_margin,
+        topMargin=theme.page_margin,
         bottomMargin=18 * mm,
         title=report.title,
     )
-    painter = _footer_painter(report.footer)
-    doc.build(_to_flowables(report, _styles()), onFirstPage=painter, onLaterPages=painter)
+    painter = _footer_painter(report.footer, theme)
+    doc.build(
+        _to_flowables(report, _styles(theme), theme), onFirstPage=painter, onLaterPages=painter
+    )
     return buf.getvalue()

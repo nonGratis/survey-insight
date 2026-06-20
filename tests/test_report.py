@@ -15,6 +15,7 @@ from core.report import (
     PageBreak,
     Para,
     Report,
+    ReportTheme,
     TableBlock,
     _barchart_flowables,
     _flowchart_flowable,
@@ -48,6 +49,30 @@ def test_render_all_block_types_cyrillic():
     )
     pdf = render_pdf(report)
     assert _is_pdf(pdf)
+
+
+def test_report_theme_can_be_customized():
+    theme = ReportTheme(
+        primary="#0f766e",
+        primary_dark="#115e59",
+        table_header_bg="#115e59",
+        chart_bar="#0f766e",
+        title_bg="#ecfdf5",
+        title_border="#99f6e4",
+    )
+    report = Report(
+        title="Theme",
+        subtitle="custom",
+        theme=theme,
+        blocks=[
+            Heading("Metrics", level=2),
+            Metrics([Metric("n", "42")]),
+            TableBlock(headers=["A", "B"], rows=[["x", "y"]]),
+            BarChart(labels=["A"], values=[1]),
+        ],
+    )
+
+    assert _is_pdf(render_pdf(report))
 
 
 def test_render_large_table_multipage():
