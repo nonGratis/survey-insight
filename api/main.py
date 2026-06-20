@@ -1,0 +1,169 @@
+"""FastAPI service for SaaS auth/session/report APIs."""
+
+from __future__ import annotations
+
+from contextlib import suppress
+from typing import Annotated, Any
+
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
+
+from core.saas.container import SaaSContainer
+from core.saas.errors import InvalidSession, QuotaExceeded
+from core.saas.models import ReportJob, Session, User, UserStatus
+from core.saas.security import hash_secret
+
+SESSION_COOKIE_NAME = "session_id"
+
+
+class HealthResponse(BaseModel):
+    status: str
+    service: str
+
+
+class SessionResponse(BaseModel):
+    authenticated: bool
+    user_id: str | None = None
+    email: str | None = None
+    name: str | None = None
+    plan: str | None = None
+
+
+class ReportJobRequest(BaseModel):
+    form_id: str = Field(min_length=1)
+    form_title: str | None = Field(default=None, max_length=240)
+    config_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReportJobResponse(BaseModel):
+    job_id: str
+    report_id: str
+    status: str
+    attempts: int
+
+
+SessionCookie = Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)]
+
+
+def create_api_app(container: SaaSContainer | None = None) -> FastAPI:
+    app = FastAPI(title="Survey Insight API", version="0.1.0")
+    app.state.container = container or SaaSContainer.in_memory()
+
+    @app.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        return HealthResponse(status="ok", service="survey-insight-api")
+
+    @app.get("/v1/session", response_model=SessionResponse, response_model_exclude_none=True)
+    def read_session(request: Request, session_id: SessionCookie = None) -> SessionResponse:
+        if not session_id:
+            return SessionResponse(authenticated=False)
+        container = _container(request)
+        try:
+            session = container.session_service.validate(session_id)
+        except InvalidSession:
+            return SessionResponse(authenticated=False)
+        user = container.users.get(session.user_id)
+        if user is None or user.status != UserStatus.ACTIVE:
+            return SessionResponse(authenticated=False)
+        return _session_response(user)
+
+    @app.post("/v1/auth/logout")
+    def logout(
+        request: Request,
+        response: Response,
+        session_id: SessionCookie = None,
+    ) -> dict[str, bool]:
+        if session_id:
+            with suppress(InvalidSession):
+                _container(request).session_service.revoke(session_id)
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return {"ok": True}
+
+    @app.post(
+        "/v1/reports/jobs", response_model=ReportJobResponse, status_code=status.HTTP_202_ACCEPTED
+    )
+    def create_report_job(
+        body: ReportJobRequest,
+        request: Request,
+        session: Annotated[Session, Depends(_require_session)],
+    ) -> ReportJobResponse:
+        container = _container(request)
+        user = _require_user(container, session.user_id)
+        quota = container.quotas.get_for_user(user.id)
+        if quota is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="quota_not_configured"
+            )
+
+        form_id_hash = hash_secret(body.form_id, container.settings.session_pepper or "form-pepper")
+        try:
+            _, job = container.report_job_service.create_report_job(
+                user_id=user.id,
+                form_id_hash=form_id_hash,
+                form_title=body.form_title,
+                config_snapshot=body.config_snapshot,
+                quota=quota,
+            )
+        except QuotaExceeded as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)
+            ) from exc
+        return _job_response(job)
+
+    @app.get("/v1/reports/jobs/{job_id}", response_model=ReportJobResponse)
+    def read_report_job(
+        job_id: str,
+        request: Request,
+        session: Annotated[Session, Depends(_require_session)],
+    ) -> ReportJobResponse:
+        container = _container(request)
+        job = container.jobs.get(job_id)
+        if job is None or job.user_id != session.user_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job_not_found")
+        return _job_response(job)
+
+    return app
+
+
+def _container(request: Request) -> SaaSContainer:
+    return request.app.state.container
+
+
+def _require_session(request: Request, session_id: SessionCookie = None) -> Session:
+    if not session_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_session")
+    try:
+        return _container(request).session_service.validate(session_id)
+    except InvalidSession as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_session"
+        ) from exc
+
+
+def _require_user(container: SaaSContainer, user_id: str) -> User:
+    user = container.users.get(user_id)
+    if user is None or user.status != UserStatus.ACTIVE:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_user")
+    return user
+
+
+def _job_response(job: ReportJob) -> ReportJobResponse:
+    return ReportJobResponse(
+        job_id=job.id,
+        report_id=job.report_id,
+        status=job.status.value,
+        attempts=job.attempts,
+    )
+
+
+def _session_response(user: User) -> SessionResponse:
+    return SessionResponse(
+        authenticated=True,
+        user_id=user.id,
+        email=user.email,
+        name=user.name,
+        plan=user.plan.value,
+    )
+
+
+app = create_api_app()
