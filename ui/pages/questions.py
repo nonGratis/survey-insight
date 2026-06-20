@@ -620,7 +620,16 @@ def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: lis
             for pr in filtered
         ]
     )
-    st.dataframe(table.head(40), width="stretch", hide_index=True)
+    styled_table = table.head(40).style.set_properties(
+        subset=["Запитання 1", "Запитання 2"],
+        **{
+            "white-space": "normal",
+            "overflow-wrap": "anywhere",
+            "word-break": "normal",
+            "line-height": "1.25",
+        },
+    )
+    st.dataframe(styled_table, width="stretch", hide_index=True)
     st.caption(
         "Ефект — розмір зв'язку (0–0,1 немає, 0,1–0,3 слабкий, 0,3–0,5 помірний, "
         ">0,5 сильний). «Значущий» — за FDR-скоригованим p<0,05. При великому n "
