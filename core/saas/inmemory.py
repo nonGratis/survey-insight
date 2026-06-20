@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from core.saas.errors import JobConflict
 from core.saas.models import (
@@ -14,9 +14,11 @@ from core.saas.models import (
     LoginTicket,
     OAuthAccount,
     OAuthState,
+    Quota,
     Report,
     ReportJob,
     Session,
+    User,
 )
 from core.saas.security import utcnow
 
@@ -36,6 +38,28 @@ class InMemoryTokenCrypto:
         return base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8")
 
 
+class InMemoryUserRepository:
+    def __init__(self) -> None:
+        self.items: dict[str, User] = {}
+
+    def save(self, user: User) -> None:
+        self.items[user.id] = user
+
+    def get(self, user_id: str) -> User | None:
+        return self.items.get(user_id)
+
+
+class InMemoryQuotaRepository:
+    def __init__(self) -> None:
+        self.items: dict[str, Quota] = {}
+
+    def save(self, user_id: str, quota: Quota) -> None:
+        self.items[user_id] = quota
+
+    def get_for_user(self, user_id: str) -> Quota | None:
+        return self.items.get(user_id)
+
+
 class InMemoryOAuthStateRepository:
     def __init__(self) -> None:
         self.items: dict[str, OAuthState] = {}
@@ -46,7 +70,7 @@ class InMemoryOAuthStateRepository:
     def get(self, state_hash: str) -> OAuthState | None:
         return self.items.get(state_hash)
 
-    def mark_used(self, state_hash: str, used_at) -> OAuthState:
+    def mark_used(self, state_hash: str, used_at: datetime) -> OAuthState:
         state = self.items[state_hash]
         updated = replace(state, used_at=used_at)
         self.items[state_hash] = updated
@@ -63,7 +87,7 @@ class InMemoryLoginTicketRepository:
     def get(self, ticket_hash: str) -> LoginTicket | None:
         return self.items.get(ticket_hash)
 
-    def mark_used(self, ticket_hash: str, used_at) -> LoginTicket:
+    def mark_used(self, ticket_hash: str, used_at: datetime) -> LoginTicket:
         ticket = self.items[ticket_hash]
         updated = replace(ticket, used_at=used_at)
         self.items[ticket_hash] = updated
@@ -80,13 +104,13 @@ class InMemorySessionRepository:
     def get(self, session_hash: str) -> Session | None:
         return self.items.get(session_hash)
 
-    def touch(self, session_hash: str, seen_at) -> Session:
+    def touch(self, session_hash: str, seen_at: datetime) -> Session:
         session = self.items[session_hash]
         updated = replace(session, last_seen_at=seen_at)
         self.items[session_hash] = updated
         return updated
 
-    def revoke(self, session_hash: str, revoked_at) -> Session:
+    def revoke(self, session_hash: str, revoked_at: datetime) -> Session:
         session = self.items[session_hash]
         updated = replace(session, revoked_at=revoked_at)
         self.items[session_hash] = updated

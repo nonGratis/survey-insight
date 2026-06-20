@@ -19,9 +19,11 @@ from core.saas.models import (
     LoginTicket,
     OAuthAccount,
     OAuthState,
+    Quota,
     Report,
     ReportJob,
     Session,
+    User,
 )
 
 
@@ -29,6 +31,18 @@ class TokenCrypto(Protocol):
     def encrypt(self, plaintext: str) -> str: ...
 
     def decrypt(self, ciphertext: str) -> str: ...
+
+
+class UserRepository(Protocol):
+    def save(self, user: User) -> None: ...
+
+    def get(self, user_id: str) -> User | None: ...
+
+
+class QuotaRepository(Protocol):
+    def save(self, user_id: str, quota: Quota) -> None: ...
+
+    def get_for_user(self, user_id: str) -> Quota | None: ...
 
 
 class OAuthStateRepository(Protocol):

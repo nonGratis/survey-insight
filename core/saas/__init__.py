@@ -1,5 +1,6 @@
 """SaaS foundation layer: typed domain, security primitives, ports, and services."""
 
+from core.saas.container import SaaSContainer
 from core.saas.errors import (
     ExpiredLoginTicket,
     ExpiredOAuthState,
@@ -64,6 +65,7 @@ __all__ = [
     "ReportJobService",
     "ReportStatus",
     "SaaSSettings",
+    "SaaSContainer",
     "Session",
     "SessionSecret",
     "SessionService",
