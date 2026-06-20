@@ -17,6 +17,7 @@ from core.report import (
     Report,
     TableBlock,
     _barchart_flowables,
+    _flowchart_flowable,
     _wrap_lines,
     render_pdf,
 )
@@ -127,3 +128,51 @@ def test_flowchart_renders():
         ],
     )
     assert _is_pdf(render_pdf(rep))
+
+
+def test_fit_page_flowchart_renders_large_graph_without_layout_error():
+    nodes = [
+        FlowChartNode(f"sec_{index}", f"Section {index}\nQuestion with long routing text")
+        for index in range(36)
+    ]
+    edges = [
+        FlowChartEdge(f"sec_{index}", f"sec_{index + 1}", "next", dashed=False)
+        for index in range(len(nodes) - 1)
+    ]
+    chart = FlowChart(nodes=nodes, edges=edges, fit_page=True)
+    flowable = _flowchart_flowable(chart)
+    wrapped_width, wrapped_height = flowable.wrap(400, 600)
+
+    assert wrapped_width <= 400
+    assert wrapped_height <= 600
+
+    rep = Report(
+        title="Large flow",
+        blocks=[
+            PageBreak(),
+            chart,
+        ],
+    )
+
+    assert _is_pdf(render_pdf(rep))
+
+
+def test_fit_page_flowchart_renders_routed_edges():
+    nodes = [
+        FlowChartNode("__start__", "Start", kind="start"),
+        FlowChartNode("a", "A"),
+        FlowChartNode("b", "B"),
+        FlowChartNode("c", "C"),
+        FlowChartNode("__submit__", "Submit", kind="submit"),
+    ]
+    chart = FlowChart(
+        nodes=nodes,
+        edges=[
+            FlowChartEdge("__start__", "c", "jump", kind="conditional", dashed=False),
+            FlowChartEdge("a", "__submit__", "finish", kind="default", dashed=True),
+            FlowChartEdge("b", "a", "back", kind="conditional", dashed=False),
+        ],
+        fit_page=True,
+    )
+
+    assert _is_pdf(render_pdf(Report(title="Routed flow", blocks=[chart])))

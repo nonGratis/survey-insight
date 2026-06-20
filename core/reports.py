@@ -22,7 +22,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from core.form_flow import parse_form_flow
+from core.form_flow import (
+    flow_edge_style,
+    flow_has_interesting_structure,
+    flow_node_label,
+    flow_node_style,
+    parse_form_flow,
+)
 from core.forms_quality import (
     SORT_BY_COUNT,
     analyze_form_design,
@@ -125,37 +131,22 @@ def _overview_question_table(designs, mode: QuestionTableMode) -> list[object]:
 
 def _overview_flow_map(structure: dict) -> list[object]:
     flow = parse_form_flow(structure)
-    has_interesting_flow = (
-        flow.section_count > 1
-        or flow.conditional_edge_count > 0
-        or bool(flow.unreachable_section_ids)
-        or flow.has_cycles
-    )
-    if not has_interesting_flow:
+    if not flow_has_interesting_structure(flow):
         return []
 
     title_by_node = {node.id: node.title for node in flow.nodes}
+    nodes = [_report_flow_node(node, flow) for node in flow.nodes]
+    edges = [_report_flow_edge(edge, flow) for edge in flow.edges]
+    if not nodes:
+        return []
+
     blocks: list[object] = [
+        PageBreak(),
         Heading("Карта переходів", level=3),
         FlowChart(
-            nodes=[
-                FlowChartNode(
-                    id=node.id,
-                    label="\n".join((node.title, *node.detail_lines[:1])),
-                    kind=node.kind,
-                    flagged=node.id in flow.unreachable_section_ids,
-                )
-                for node in flow.nodes
-            ],
-            edges=[
-                FlowChartEdge(
-                    source=edge.source,
-                    target=edge.target,
-                    label=edge.label,
-                    kind=edge.kind,
-                )
-                for edge in flow.edges
-            ],
+            nodes=nodes,
+            edges=edges,
+            fit_page=True,
         ),
     ]
     if flow.unreachable_section_ids:
@@ -170,6 +161,33 @@ def _overview_flow_map(structure: dict) -> list[object]:
             )
         )
     return blocks
+
+
+def _report_flow_node(node, flow) -> FlowChartNode:
+    style = flow_node_style(node, flow)
+    return FlowChartNode(
+        id=node.id,
+        label=flow_node_label(node),
+        kind=node.kind,
+        fill_color=style.fill_color,
+        stroke_color=style.stroke_color,
+        font_color=style.font_color,
+        dashed="dashed" in style.style,
+    )
+
+
+def _report_flow_edge(edge, flow) -> FlowChartEdge:
+    style = flow_edge_style(edge, flow)
+    return FlowChartEdge(
+        source=edge.source,
+        target=edge.target,
+        label=style.label,
+        kind=edge.kind,
+        color=style.color,
+        font_color=style.font_color,
+        pen_width=style.pen_width,
+        dashed=style.style == "dashed",
+    )
 
 
 def overview_section(

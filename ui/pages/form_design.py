@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from core.auth import credentials_from_dict
-from core.form_flow import flow_to_dot, parse_form_flow
+from core.form_flow import flow_has_interesting_structure, flow_to_dot, parse_form_flow
 from core.forms_api import FormsApiError, get_form_structure
 from core.forms_quality import analyze_form_design
 from core.logger import get_logger
@@ -101,12 +101,7 @@ else:
             columns=4,
         )
         flow_dot = flow_to_dot(flow)
-        has_interesting_flow = (
-            flow.section_count > 1
-            or flow.conditional_edge_count > 0
-            or bool(flow.unreachable_section_ids)
-            or flow.has_cycles
-        )
+        has_interesting_flow = flow_has_interesting_structure(flow)
         if has_interesting_flow:
             st.graphviz_chart(flow_dot, width="stretch")
         else:
