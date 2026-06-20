@@ -274,9 +274,12 @@ def _descriptive_distribution(
             if weighted is not None:
                 return weighted.distribution, weighted.denominator, True
 
-    dist: dict[str, float | int] = raw_distribution
-    if cfg.anonymize:
-        dist = anonymize_distribution(dist, options, cfg.other_label)
+    raw_dist = (
+        anonymize_distribution(raw_distribution, options, cfg.other_label)
+        if cfg.anonymize
+        else raw_distribution
+    )
+    dist: dict[str, float | int] = dict(raw_dist)
     return dist, float(max(raw_denominator, 1)), False
 
 
@@ -296,7 +299,7 @@ def descriptive_section(
     question_blocks: list[object] = []
     first = True
     for qid, s in stats.items():
-        dist: dict[str, float | int] = s.distribution
+        dist: dict[str, float | int] = dict(s.distribution)
         total = float(max(s.n_answered, 1))
         weighted = False
         if not s.is_text and dist:

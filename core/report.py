@@ -713,6 +713,10 @@ def _flowchart_page_flowable(
         sx, sy, sh = positions[edge.source]
         tx, ty, th = positions[edge.target]
         color = colors.HexColor(edge.color)
+        x1: float
+        y1: float
+        x2: float
+        y2: float
         if route == "straight":
             x1 = sx + node_w
             y1 = sy + sh / 2
