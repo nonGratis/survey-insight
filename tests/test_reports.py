@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import pandas as pd
 
+from core.form_flow import (
+    START_ID,
+    SUBMIT_ID,
+    flow_edge_style,
+    flow_node_label,
+    parse_form_flow,
+)
 from core.report import (
     BarChart,
     FlowChart,
@@ -308,27 +315,91 @@ def test_overview_section_settings_can_hide_audit_table():
 
 
 def test_overview_section_can_include_flow_map():
+    structure = {
+        "items": [
+            _q(
+                "q1",
+                "Маршрут?",
+                {
+                    "choiceQuestion": {
+                        "type": "RADIO",
+                        "options": [{"value": "Далі", "goToSectionId": "sec_2"}],
+                    }
+                },
+            ),
+            {"itemId": "sec_2", "title": "Друга секція", "pageBreakItem": {}},
+        ]
+    }
     blocks = overview_section(
-        {
-            "items": [
-                _q(
-                    "q1",
-                    "Маршрут?",
-                    {
-                        "choiceQuestion": {
-                            "type": "RADIO",
-                            "options": [{"value": "Далі", "goToSectionId": "sec_2"}],
-                        }
-                    },
-                ),
-                {"itemId": "sec_2", "title": "Друга секція", "pageBreakItem": {}},
-            ]
-        },
-        [],
+        structure, [], OverviewConfig(question_table_mode="none", include_flow_map=True)
+    )
+
+    chart_index = next(index for index, block in enumerate(blocks) if isinstance(block, FlowChart))
+    assert isinstance(blocks[chart_index - 2], PageBreak)
+    assert getattr(blocks[chart_index - 1], "level", None) == 3
+    assert blocks[chart_index].fit_page is True
+
+
+def test_overview_section_does_not_create_flow_map_page_when_absent():
+    blocks = overview_section(
+        _STRUCTURE,
+        _RESPONSES,
         OverviewConfig(question_table_mode="none", include_flow_map=True),
     )
 
-    assert any(isinstance(block, FlowChart) for block in blocks)
+    assert not any(isinstance(block, FlowChart) for block in blocks)
+    assert not any(isinstance(block, PageBreak) for block in blocks)
+
+
+def test_overview_flow_map_reuses_form_flow_labels_and_styles():
+    structure = {
+        "items": [
+            _q(
+                "q1",
+                "Перше питання маршруту",
+                {
+                    "choiceQuestion": {
+                        "type": "RADIO",
+                        "options": [{"value": "До другої", "goToSectionId": "sec_2"}],
+                    }
+                },
+            ),
+            _q(
+                "q2",
+                "Друге питання маршруту",
+                {
+                    "choiceQuestion": {
+                        "type": "RADIO",
+                        "options": [{"value": "Фініш", "goToAction": "SUBMIT_FORM"}],
+                    }
+                },
+            ),
+            {"itemId": "sec_2", "title": "Друга секція", "pageBreakItem": {}},
+        ]
+    }
+
+    flow = parse_form_flow(structure)
+    blocks = overview_section(
+        structure, [], OverviewConfig(question_table_mode="none", include_flow_map=True)
+    )
+    chart = next(block for block in blocks if isinstance(block, FlowChart))
+    chart_nodes = {node.id: node for node in chart.nodes}
+    chart_edges = {(edge.source, edge.target, edge.label): edge for edge in chart.edges}
+
+    start = next(node for node in flow.nodes if node.id == START_ID)
+    assert chart_nodes[START_ID].label == flow_node_label(start)
+    assert "Перше питання маршруту" in chart_nodes[START_ID].label
+    assert "Друге питання маршруту" in chart_nodes[START_ID].label
+
+    submit_flow_edge = next(edge for edge in flow.edges if edge.target == SUBMIT_ID)
+    submit_style = flow_edge_style(submit_flow_edge, flow)
+    submit_chart_edge = chart_edges[
+        (submit_flow_edge.source, submit_flow_edge.target, submit_style.label)
+    ]
+    assert submit_chart_edge.color == submit_style.color
+    assert submit_chart_edge.font_color == submit_style.font_color
+    assert submit_chart_edge.pen_width == submit_style.pen_width
+    assert submit_chart_edge.dashed is True
 
 
 def test_associations_section_empty_and_filled():

@@ -56,6 +56,23 @@ class FormFlow:
         return sum(edge.kind == "conditional" for edge in self.edges)
 
 
+@dataclass(frozen=True)
+class FlowNodeStyle:
+    fill_color: str
+    stroke_color: str
+    font_color: str
+    style: str
+
+
+@dataclass(frozen=True)
+class FlowEdgeStyle:
+    label: str
+    color: str
+    font_color: str
+    pen_width: float
+    style: str
+
+
 def parse_form_flow(form: dict[str, Any]) -> FormFlow:
     """Parse Google Forms structure into a compact section-transition graph."""
     sections = _sections(form)
@@ -122,6 +139,16 @@ def parse_form_flow(form: dict[str, Any]) -> FormFlow:
     )
 
 
+def flow_has_interesting_structure(flow: FormFlow) -> bool:
+    """Whether a flow map is worth rendering beyond start → submit."""
+    return (
+        flow.section_count > 1
+        or flow.conditional_edge_count > 0
+        or bool(flow.unreachable_section_ids)
+        or flow.has_cycles
+    )
+
+
 def _terminal_edges(edges: list[FlowEdge], reachable: set[str]) -> list[FlowEdge]:
     existing_sources = {edge.source for edge in edges}
     return [
@@ -141,21 +168,15 @@ def flow_to_dot(flow: FormFlow) -> str:
         '  edge [fontname="Arial", fontsize=8, arrowsize=0.62, penwidth=1.1, color="#94a3b8", fontcolor="#475569"];',
     ]
     for node in flow.nodes:
-        fill, stroke, font, style = _node_style(node, flow)
-        label = _node_label(node)
+        node_style = flow_node_style(node, flow)
+        label = flow_node_label(node)
         lines.append(
-            f'  "{_dot_escape(node.id)}" [label="{_dot_escape(label)}", style="{style}", fillcolor="{fill}", color="{stroke}", fontcolor="{font}"];'
+            f'  "{_dot_escape(node.id)}" [label="{_dot_escape(label)}", style="{node_style.style}", fillcolor="{node_style.fill_color}", color="{node_style.stroke_color}", fontcolor="{node_style.font_color}"];'
         )
     for edge in flow.edges:
-        is_submit_edge = edge.target == SUBMIT_ID
-        is_route_edge = edge.kind == "conditional" and not is_submit_edge
-        color = edge_colors.get((edge.source, edge.target), DEFAULT_EDGE_COLOR)
-        style = "solid" if is_route_edge else "dashed"
-        penwidth = "1.75" if is_route_edge else "1.1"
-        fontcolor = color if is_route_edge else DEFAULT_EDGE_FONT_COLOR
-        label = _wrap_label(edge.label, max_chars=22)
+        edge_style = _flow_edge_style(edge, edge_colors)
         lines.append(
-            f'  "{_dot_escape(edge.source)}" -> "{_dot_escape(edge.target)}" [label="{_dot_escape(label)}", color="{color}", fontcolor="{fontcolor}", penwidth={penwidth}, style="{style}"];'
+            f'  "{_dot_escape(edge.source)}" -> "{_dot_escape(edge.target)}" [label="{_dot_escape(edge_style.label)}", color="{edge_style.color}", fontcolor="{edge_style.font_color}", penwidth={edge_style.pen_width:g}, style="{edge_style.style}"];'
         )
     lines.append("}")
     return "\n".join(lines)
@@ -296,21 +317,39 @@ def _has_cycle(edges: list[FlowEdge], section_ids: list[str]) -> bool:
     return any(visit(node) for node in section_ids)
 
 
-def _node_style(node: FlowNode, flow: FormFlow) -> tuple[str, str, str, str]:
+def flow_node_style(node: FlowNode, flow: FormFlow) -> FlowNodeStyle:
     if node.id in flow.unreachable_section_ids:
-        return "#fff1f2", "#fb7185", "#9f1239", "rounded,filled,dashed"
+        return FlowNodeStyle("#fff1f2", "#fb7185", "#9f1239", "rounded,filled,dashed")
     if node.kind == "start":
-        return "#eef2ff", "#6366f1", "#3730a3", "rounded,filled"
+        return FlowNodeStyle("#eef2ff", "#6366f1", "#3730a3", "rounded,filled")
     if node.kind == "submit":
-        return "#ecfdf5", "#10b981", "#065f46", "rounded,filled"
-    return "#f8fafc", "#cbd5e1", "#334155", "rounded,filled"
+        return FlowNodeStyle("#ecfdf5", "#10b981", "#065f46", "rounded,filled")
+    return FlowNodeStyle("#f8fafc", "#cbd5e1", "#334155", "rounded,filled")
 
 
-def _node_label(node: FlowNode) -> str:
+def flow_node_label(node: FlowNode) -> str:
     lines = [_wrap_label(node.title, max_chars=24)]
     for detail in node.detail_lines[:2]:
         lines.append(_wrap_label(detail, max_chars=30))
     return "\n".join(lines)
+
+
+def flow_edge_style(edge: FlowEdge, flow: FormFlow) -> FlowEdgeStyle:
+    """Presentation style for a flow edge, shared by DOT and PDF renderers."""
+    return _flow_edge_style(edge, _conditional_edge_colors(flow.edges))
+
+
+def _flow_edge_style(edge: FlowEdge, edge_colors: dict[tuple[str, str], str]) -> FlowEdgeStyle:
+    is_submit_edge = edge.target == SUBMIT_ID
+    is_route_edge = edge.kind == "conditional" and not is_submit_edge
+    color = edge_colors.get((edge.source, edge.target), DEFAULT_EDGE_COLOR)
+    return FlowEdgeStyle(
+        label=_wrap_label(edge.label, max_chars=22),
+        color=color,
+        font_color=color if is_route_edge else DEFAULT_EDGE_FONT_COLOR,
+        pen_width=1.75 if is_route_edge else 1.1,
+        style="solid" if is_route_edge else "dashed",
+    )
 
 
 def _wrap_label(value: str, max_chars: int) -> str:
