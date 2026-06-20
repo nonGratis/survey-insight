@@ -18,6 +18,7 @@ from core.report import (
     ReportTheme,
     TableBlock,
     _barchart_flowables,
+    _collect_heading_entries,
     _flowchart_flowable,
     _wrap_lines,
     render_pdf,
@@ -73,6 +74,44 @@ def test_report_theme_can_be_customized():
     )
 
     assert _is_pdf(render_pdf(report))
+
+
+def test_collect_heading_entries_includes_all_headings_and_clamps_levels():
+    entries = _collect_heading_entries(
+        [
+            Heading("Top", level=1),
+            Heading("Deep without parent", level=3),
+            Heading("Question", level=2),
+        ]
+    )
+
+    assert [entry.text for entry in entries] == ["Top", "Deep without parent", "Question"]
+    assert [entry.level for entry in entries] == [0, 1, 1]
+    assert len({entry.key for entry in entries}) == 3
+
+
+def test_pdf_has_interactive_toc_and_outline():
+    fitz = pytest.importorskip("fitz")
+    pdf = render_pdf(
+        Report(
+            title="Report",
+            subtitle="with toc",
+            blocks=[
+                Heading("Overview", level=2),
+                Para("Body"),
+                Heading("Question 1", level=2),
+                Para("Answer"),
+                Heading("Details", level=3),
+                Para("More"),
+            ],
+        )
+    )
+    doc = fitz.open(stream=pdf, filetype="pdf")
+
+    toc = doc.get_toc()
+    assert [row[1] for row in toc] == ["Overview", "Question 1", "Details"]
+    assert [row[0] for row in toc] == [1, 1, 2]
+    assert doc[1].get_links()
 
 
 def test_render_large_table_multipage():

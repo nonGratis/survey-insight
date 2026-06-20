@@ -293,7 +293,7 @@ def descriptive_section(
     stats = analyze_responses(structure, responses)
     options = question_options(structure)
 
-    blocks: list[object] = []
+    question_blocks: list[object] = []
     first = True
     for qid, s in stats.items():
         dist: dict[str, float | int] = s.distribution
@@ -312,23 +312,23 @@ def descriptive_section(
                 continue
 
         if not first:
-            blocks.append(PageBreak())
+            question_blocks.append(PageBreak())
         first = False
         design = designs.get(qid)
-        blocks.append(Heading(design.title if design else qid, level=2))
+        question_blocks.append(Heading(design.title if design else qid, level=3))
         meta = f"Відповіли {s.n_answered}/{s.n_total} · пропуск {_uk(s.non_response_pct, '.1f')} %"
         if weighted:
             meta += f" · зважено, нормовано до n={_uk(total, '.0f')}"
-        blocks.append(Para(meta))
+        question_blocks.append(Para(meta))
 
         if s.is_text:
             if s.text_median_len:
-                blocks.append(
+                question_blocks.append(
                     Para(f"Медіана довжини відповіді — {int(s.text_median_len)} символів.")
                 )
             continue
         if not dist:
-            blocks.append(Para("Немає відповідей."))
+            question_blocks.append(Para("Немає відповідей."))
             continue
 
         items = sort_distribution(
@@ -339,11 +339,11 @@ def descriptive_section(
                 [value, _format_count(float(count), weighted=weighted), _pct(float(count) / total)]
                 for value, count in items
             ]
-            blocks.append(
+            question_blocks.append(
                 TableBlock(headers=("Варіант", "К-сть", "%"), rows=rows, col_widths=(0.6, 0.2, 0.2))
             )
         if cfg.render_mode in ("chart", "both"):
-            blocks.append(
+            question_blocks.append(
                 BarChart(
                     labels=[v for v, _ in items],
                     values=[float(c) for _, c in items],
@@ -353,7 +353,9 @@ def descriptive_section(
                     ],
                 )
             )
-    return blocks
+    if not question_blocks:
+        return []
+    return [Heading("Дескриптив", level=2), *question_blocks]
 
 
 def representativeness_section(res: WeightingResult) -> list[object]:
