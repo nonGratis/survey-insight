@@ -8,7 +8,11 @@ type" сцена `charts.py`.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
+
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 
 from core.detection import Changepoint
@@ -18,6 +22,64 @@ from core.timeline import TimelineSeries
 _INCLUDED_COLOR = "#1f77b4"
 _EXCLUDED_COLOR = "rgba(150, 150, 150, 0.55)"
 _CHANGEPOINT_COLOR = "#ff7f0e"  # помаранчевий — хвилі агітації
+
+
+@dataclass(frozen=True)
+class ChartAxisRanges:
+    """Рекомендовані межі осей для сфокусованого перегляду forecast-графіка."""
+
+    x: tuple[pd.Timestamp, pd.Timestamp]
+    y: tuple[float, float]
+
+
+def forecast_window_axis_ranges(
+    timestamps: Iterable,
+    start_idx: int,
+    end_idx: int,
+    forecast: ForecastResult | None,
+) -> ChartAxisRanges | None:
+    """Обчислити межі осей для вибраного вікна навчання і його прогнозу.
+
+    Індекси у UI 1-based, бо слайсер показує відповіді як 1..N. Межі включають
+    вибраний фактичний інтервал, прогнозний горизонт і CI, а також невеликий
+    запас, щоб лінії та підписи не притискались до рамки графіка.
+    """
+    parsed = _to_datetime_series(timestamps)
+    if parsed.empty:
+        return None
+
+    n = len(parsed)
+    start = max(1, min(int(start_idx), n))
+    end = max(start, min(int(end_idx), n))
+    selected = parsed.iloc[start - 1 : end]
+    if selected.empty:
+        return None
+
+    x_values: list[pd.Timestamp] = [selected.iloc[0], selected.iloc[-1]]
+    y_values: list[float] = [float(start), float(end)]
+
+    if forecast is not None:
+        future_dates = _to_datetime_series(forecast.future_dates)
+        if not future_dates.empty:
+            x_values.extend([future_dates.iloc[0], future_dates.iloc[-1]])
+        y_values.extend(_finite_numeric_values(forecast.future_cum))
+        y_values.extend(_finite_numeric_values(forecast.ci_lower))
+        y_values.extend(_finite_numeric_values(forecast.ci_upper))
+
+    x_min = min(x_values)
+    x_max = max(x_values)
+    x_span = x_max - x_min
+    x_pad = max(x_span * 0.05, pd.Timedelta(minutes=30))
+
+    y_min = min(y_values)
+    y_max = max(y_values)
+    y_span = y_max - y_min
+    y_pad = max(y_span * 0.08, 1.0)
+
+    return ChartAxisRanges(
+        x=(x_min - x_pad, x_max + x_pad),
+        y=(max(0.0, y_min - y_pad), y_max + y_pad),
+    )
 
 
 def plot_timeline_with_forecast(
@@ -58,6 +120,17 @@ def plot_timeline_with_forecast(
         margin=dict(l=40, r=40, t=60, b=40),
     )
     return fig
+
+
+def _to_datetime_series(values: Iterable) -> pd.Series:
+    parsed = pd.to_datetime(list(values), errors="coerce")
+    return pd.Series(parsed).dropna().reset_index(drop=True)
+
+
+def _finite_numeric_values(values: Iterable) -> list[float]:
+    numeric = pd.to_numeric(pd.Series(list(values)), errors="coerce")
+    numeric = numeric[np.isfinite(numeric)]
+    return [float(value) for value in numeric]
 
 
 def _add_fact_traces(

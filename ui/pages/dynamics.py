@@ -13,7 +13,7 @@ import numpy as np
 import streamlit as st
 
 from core.auth import credentials_from_dict
-from core.charts_timeline import plot_timeline_with_forecast
+from core.charts_timeline import forecast_window_axis_ranges, plot_timeline_with_forecast
 from core.detection import Changepoint
 from core.forecast import (
     ForecastError,
@@ -313,6 +313,16 @@ with st.container():
             )
         render_metric_bar(metric_items, columns=3)
 
+        auto_scale = st.checkbox(
+            "Автомасштабування вікна прогнозу",
+            value=True,
+            key=f"dynamics_forecast_auto_scale_{form_id}",
+            help=(
+                "Наближує графік до вибраного слайсером інтервалу та прогнозного "
+                "горизонту. Вимкніть, щоб бачити весь ряд відповідей."
+            ),
+        )
+
         # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
         # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
         fig = plot_timeline_with_forecast(
@@ -321,6 +331,11 @@ with st.container():
             excluded_mask=excluded_mask,
             changepoints=changepoints,
         )
+        if auto_scale:
+            axis_ranges = forecast_window_axis_ranges(timestamps, start_idx, end_idx, forecast)
+            if axis_ranges is not None:
+                fig.update_xaxes(range=list(axis_ranges.x))
+                fig.update_yaxes(range=list(axis_ranges.y))
         fig.add_annotation(
             text=f"Оновлено {_fresh_label}",
             xref="paper",
