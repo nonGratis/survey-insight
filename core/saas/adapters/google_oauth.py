@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
+from contextlib import contextmanager
 from typing import Any, Protocol, cast
 
 from google.oauth2.credentials import Credentials
@@ -18,6 +20,7 @@ class GoogleOAuthClient(Protocol):
         state: str,
         code_verifier: str,
         scopes: Sequence[str],
+        include_granted_scopes: bool = False,
     ) -> str: ...
 
     def exchange_code(
@@ -38,6 +41,7 @@ class GoogleOAuthWebClient:
             raise ValueError("API base URL is required.")
         self.client_config = json.loads(client_config_json) if client_config_json else None
         self.redirect_uri = f"{api_base_url.rstrip('/')}/v1/auth/google/callback"
+        self.relax_token_scope = True
 
     def authorization_url(
         self,
@@ -45,6 +49,7 @@ class GoogleOAuthWebClient:
         state: str,
         code_verifier: str,
         scopes: Sequence[str],
+        include_granted_scopes: bool = False,
     ) -> str:
         flow = self._flow(
             scopes=scopes,
@@ -53,7 +58,7 @@ class GoogleOAuthWebClient:
         )
         url, _state = flow.authorization_url(
             access_type="offline",
-            include_granted_scopes="true",
+            include_granted_scopes="true" if include_granted_scopes else "false",
             prompt="consent",
             state=state,
         )
@@ -72,7 +77,8 @@ class GoogleOAuthWebClient:
             code_verifier=code_verifier,
             state=state,
         )
-        flow.fetch_token(code=code)
+        with _oauthlib_scope_policy(relax=self.relax_token_scope):
+            flow.fetch_token(code=code)
         return cast(Credentials, flow.credentials)
 
     def user_info(self, credentials: Credentials) -> dict[str, Any]:
@@ -99,3 +105,20 @@ class GoogleOAuthWebClient:
         if self.client_config is None:
             raise ValueError("Google OAuth client config JSON is required.")
         return self.client_config
+
+
+@contextmanager
+def _oauthlib_scope_policy(*, relax: bool):
+    # Google may return a broader scope set when include_granted_scopes=true
+    # reuses previously granted Forms/Drive scopes. That is valid for
+    # incremental auth, but oauthlib raises unless relaxed explicitly.
+    previous = os.environ.get("OAUTHLIB_RELAX_TOKEN_SCOPE")
+    if relax:
+        os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("OAUTHLIB_RELAX_TOKEN_SCOPE", None)
+        else:
+            os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = previous
