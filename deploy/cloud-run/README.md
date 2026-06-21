@@ -66,12 +66,16 @@ The Artifact Registry repository must exist before this command.
 
 ## Deploy API
 
+Bootstrap note: the first deploy may use temporary HTTPS placeholders for
+`API_BASE_URL` and `WORKER_BASE_URL`. After Cloud Run returns real service URLs,
+run `gcloud run services update` or redeploy with the final values.
+
 ```powershell
 gcloud run deploy survey-insight-api `
   --image europe-central2-docker.pkg.dev/survey-insight/survey-insight/app:latest `
   --region europe-central2 `
   --service-account survey-insight-api@survey-insight.iam.gserviceaccount.com `
-  --set-env-vars SERVICE=api,APP_ENV=production,GCP_PROJECT_ID=survey-insight,FIRESTORE_DATABASE="(default)",KMS_KEY_NAME=projects/survey-insight/locations/global/keyRings/survey-insight/cryptoKeys/oauth-tokens,GCS_BUCKET=survey-insight-reports-1046685202661,CLOUD_TASKS_LOCATION=europe-central2,TASKS_QUEUE_NAME=report-jobs `
+  --set-env-vars SERVICE=api,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>,GCP_PROJECT_ID=survey-insight,FIRESTORE_DATABASE="(default)",KMS_KEY_NAME=projects/survey-insight/locations/global/keyRings/survey-insight/cryptoKeys/oauth-tokens,GCS_BUCKET=survey-insight-reports-1046685202661,CLOUD_TASKS_LOCATION=europe-central2,TASKS_QUEUE_NAME=report-jobs,CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL=survey-insight-tasks@survey-insight.iam.gserviceaccount.com `
   --set-secrets SESSION_PEPPER=SESSION_PEPPER:latest,GOOGLE_OAUTH_CLIENT_CONFIG_JSON=GOOGLE_OAUTH_CLIENT_CONFIG_JSON:latest
 ```
 
@@ -95,7 +99,7 @@ gcloud run deploy survey-insight-worker `
   --region europe-central2 `
   --no-allow-unauthenticated `
   --service-account survey-insight-worker@survey-insight.iam.gserviceaccount.com `
-  --set-env-vars SERVICE=worker,APP_ENV=production,GCP_PROJECT_ID=survey-insight,FIRESTORE_DATABASE="(default)",KMS_KEY_NAME=projects/survey-insight/locations/global/keyRings/survey-insight/cryptoKeys/oauth-tokens,GCS_BUCKET=survey-insight-reports-1046685202661,CLOUD_TASKS_LOCATION=europe-central2,TASKS_QUEUE_NAME=report-jobs `
+  --set-env-vars SERVICE=worker,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>,GCP_PROJECT_ID=survey-insight,FIRESTORE_DATABASE="(default)",KMS_KEY_NAME=projects/survey-insight/locations/global/keyRings/survey-insight/cryptoKeys/oauth-tokens,GCS_BUCKET=survey-insight-reports-1046685202661,CLOUD_TASKS_LOCATION=europe-central2,TASKS_QUEUE_NAME=report-jobs,CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL=survey-insight-tasks@survey-insight.iam.gserviceaccount.com `
   --set-secrets SESSION_PEPPER=SESSION_PEPPER:latest,GOOGLE_OAUTH_CLIENT_CONFIG_JSON=GOOGLE_OAUTH_CLIENT_CONFIG_JSON:latest
 ```
 
@@ -114,7 +118,7 @@ The API service needs those values so it can enqueue Cloud Tasks with OIDC.
 gcloud run deploy survey-insight-web `
   --image europe-central2-docker.pkg.dev/survey-insight/survey-insight/app:latest `
   --region europe-central2 `
-  --set-env-vars SERVICE=web,APP_ENV=production,API_BASE_URL=https://<api-run-url>
+  --set-env-vars SERVICE=web,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>
 ```
 
 The current Streamlit UI still uses the older local OAuth widget. Full SaaS web auth requires the next step: Streamlit session bridge against the FastAPI session endpoint.
