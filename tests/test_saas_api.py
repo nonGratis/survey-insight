@@ -153,6 +153,7 @@ def test_google_oauth_callback_creates_cookie_session_and_encrypted_tokens() -> 
     assert exchanged.json()["authenticated"] is True
     session_id = client.cookies.get(SESSION_COOKIE_NAME)
     assert session_id is not None
+    assert exchanged.json()["session_id"] == session_id
     session = container.session_service.validate(session_id)
     assert session.user_id == "google:sub_1"
 
