@@ -33,6 +33,8 @@ log = get_logger(__name__)
 _SAAS_SESSION_COOKIE = "survey_insight_session_id"
 _SAAS_SESSION_DAYS = 30
 _SAAS_VALIDATE_TTL_SECONDS = 30
+_SAAS_COOKIE_PROBE_RUNS = "saas_cookie_probe_runs"
+_SAAS_AUTH_RESTORE_PENDING = "saas_auth_restore_pending"
 
 
 def _saas_auth_enabled() -> bool:
@@ -133,6 +135,8 @@ def _handle_saas_login_ticket() -> bool:
 
 
 def _restore_saas_session() -> bool:
+    st.session_state[_SAAS_AUTH_RESTORE_PENDING] = False
+
     auth_error = _query_param("auth_error")
     if auth_error:
         st.error("Не вдалося завершити Google-вхід. Спробуй увійти ще раз.")
@@ -148,6 +152,8 @@ def _restore_saas_session() -> bool:
     cookie_manager = _cookie_manager()
     session_id = st.session_state.get("saas_session_id") or cookie_manager.get(_SAAS_SESSION_COOKIE)
     if not isinstance(session_id, str) or not session_id:
+        if _should_wait_for_cookie_probe():
+            st.session_state[_SAAS_AUTH_RESTORE_PENDING] = True
         return False
 
     try:
@@ -163,6 +169,12 @@ def _restore_saas_session() -> bool:
 
     _remember_saas_session(session, cookie_manager)
     return True
+
+
+def _should_wait_for_cookie_probe() -> bool:
+    runs = int(st.session_state.get(_SAAS_COOKIE_PROBE_RUNS, 0))
+    st.session_state[_SAAS_COOKIE_PROBE_RUNS] = runs + 1
+    return runs == 0
 
 
 def _has_fresh_saas_session() -> bool:
@@ -184,6 +196,8 @@ def _remember_saas_session(
 
     st.session_state["saas_session_id"] = session.session_id
     st.session_state["saas_session_checked_at"] = datetime.now(UTC)
+    st.session_state[_SAAS_AUTH_RESTORE_PENDING] = False
+    st.session_state[_SAAS_COOKIE_PROBE_RUNS] = 0
     st.session_state["user"] = {
         "id": session.user_id,
         "email": session.email,
@@ -203,7 +217,13 @@ def _remember_saas_session(
 
 
 def _clear_saas_session(cookie_manager: stx.CookieManager | None = None) -> None:
-    for key in ("saas_session_id", "saas_session_checked_at", "user"):
+    for key in (
+        "saas_session_id",
+        "saas_session_checked_at",
+        "user",
+        _SAAS_AUTH_RESTORE_PENDING,
+        _SAAS_COOKIE_PROBE_RUNS,
+    ):
         st.session_state.pop(key, None)
     manager = cookie_manager or _cookie_manager()
     if manager.get(_SAAS_SESSION_COOKIE) is not None:
@@ -276,6 +296,11 @@ def ensure_login_state() -> bool:
         return True
 
     return False
+
+
+def is_auth_restore_pending() -> bool:
+    """Return True while the Streamlit cookie component is restoring a session."""
+    return bool(st.session_state.get(_SAAS_AUTH_RESTORE_PENDING))
 
 
 def render_login_button(location: str = "sidebar") -> None:
