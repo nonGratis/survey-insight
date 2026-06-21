@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from urllib.parse import quote
 
-from google.cloud import storage
+from google.cloud.storage import Client as StorageClient
 
 from core.saas.models import Artifact
 from core.saas.security import utcnow
@@ -15,7 +15,7 @@ class GcsArtifactStorage:
     def __init__(
         self,
         bucket_name: str,
-        client: storage.Client | None = None,
+        client: StorageClient | None = None,
         *,
         retention: timedelta = timedelta(days=30),
         signed_url_ttl: timedelta = timedelta(minutes=15),
@@ -23,7 +23,7 @@ class GcsArtifactStorage:
         if not bucket_name:
             raise ValueError("GCS bucket name is required.")
         self.bucket_name = bucket_name
-        self.client = client or storage.Client()
+        self.client = client or StorageClient()
         self.retention = retention
         self.signed_url_ttl = signed_url_ttl
 
