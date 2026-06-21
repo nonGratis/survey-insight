@@ -69,6 +69,13 @@ class SaaSContainer:
     job_state_machine: JobStateMachine
 
     @classmethod
+    def from_settings(cls, settings: SaaSSettings | None = None) -> SaaSContainer:
+        resolved_settings = settings or load_saas_settings()
+        if resolved_settings.is_production:
+            return cls.production(resolved_settings)
+        return cls.in_memory(resolved_settings)
+
+    @classmethod
     def in_memory(cls, settings: SaaSSettings | None = None) -> SaaSContainer:
         resolved_settings = settings or load_saas_settings(
             {"APP_ENV": "test", "SESSION_PEPPER": "test-session-pepper"}
@@ -101,6 +108,65 @@ class SaaSContainer:
             oauth_state_service=OAuthStateService(oauth_states, pepper=pepper),
             login_ticket_service=LoginTicketService(login_tickets, pepper=pepper),
             session_service=SessionService(sessions, pepper=pepper),
+            report_job_service=ReportJobService(reports, jobs, tasks),
+            job_state_machine=JobStateMachine(jobs),
+        )
+
+    @classmethod
+    def production(cls, settings: SaaSSettings) -> SaaSContainer:
+        from core.saas.adapters.firestore import (
+            FirestoreAuditLog,
+            FirestoreJobRepository,
+            FirestoreLoginTicketRepository,
+            FirestoreOAuthStateRepository,
+            FirestoreQuotaRepository,
+            FirestoreReportRepository,
+            FirestoreSessionRepository,
+            FirestoreTokenRepository,
+            FirestoreUserRepository,
+            create_firestore_client,
+        )
+        from core.saas.adapters.kms import KmsTokenCrypto
+        from core.saas.adapters.storage import GcsArtifactStorage
+        from core.saas.adapters.tasks import CloudTasksQueue
+
+        settings.validate()
+        firestore_client = create_firestore_client(
+            settings.gcp_project_id,
+            database=settings.firestore_database,
+        )
+        users = FirestoreUserRepository(firestore_client)
+        quotas = FirestoreQuotaRepository(firestore_client)
+        oauth_states = FirestoreOAuthStateRepository(firestore_client)
+        login_tickets = FirestoreLoginTicketRepository(firestore_client)
+        sessions = FirestoreSessionRepository(firestore_client)
+        reports = FirestoreReportRepository(firestore_client)
+        jobs = FirestoreJobRepository(firestore_client)
+        tasks = CloudTasksQueue(
+            project_id=settings.gcp_project_id,
+            location=settings.cloud_tasks_location,
+            queue_name=settings.tasks_queue_name,
+            worker_base_url=settings.worker_base_url,
+            service_account_email=settings.cloud_tasks_service_account_email,
+        )
+
+        return cls(
+            settings=settings,
+            token_crypto=KmsTokenCrypto(settings.kms_key_name),
+            users=users,
+            quotas=quotas,
+            oauth_states=oauth_states,
+            login_tickets=login_tickets,
+            sessions=sessions,
+            tokens=FirestoreTokenRepository(firestore_client),
+            reports=reports,
+            jobs=jobs,
+            tasks=tasks,
+            artifacts=GcsArtifactStorage(settings.gcs_bucket),
+            audit=FirestoreAuditLog(firestore_client),
+            oauth_state_service=OAuthStateService(oauth_states, pepper=settings.session_pepper),
+            login_ticket_service=LoginTicketService(login_tickets, pepper=settings.session_pepper),
+            session_service=SessionService(sessions, pepper=settings.session_pepper),
             report_job_service=ReportJobService(reports, jobs, tasks),
             job_state_machine=JobStateMachine(jobs),
         )

@@ -16,6 +16,7 @@ from core.saas import (
     ReplayedLoginTicket,
     ReplayedOAuthState,
 )
+from core.saas.container import SaaSContainer
 from core.saas.inmemory import (
     InMemoryJobRepository,
     InMemoryLoginTicketRepository,
@@ -231,15 +232,45 @@ def test_production_settings_accept_complete_https_config() -> None:
             "APP_BASE_URL": "https://app.example.com",
             "API_BASE_URL": "https://api.example.com",
             "GCP_PROJECT_ID": "project",
+            "FIRESTORE_DATABASE": "(default)",
             "KMS_KEY_NAME": "kms",
             "GCS_BUCKET": "bucket",
+            "CLOUD_TASKS_LOCATION": "europe-central2",
             "TASKS_QUEUE_NAME": "reports",
+            "WORKER_BASE_URL": "https://worker.example.com",
+            "CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL": "tasks@example.iam.gserviceaccount.com",
             "GOOGLE_OAUTH_CLIENT_CONFIG_JSON": "{}",
             "SESSION_PEPPER": "pepper",
         }
     )
 
     assert settings.is_production
+
+
+def test_production_settings_require_worker_and_cloud_tasks_oidc_config() -> None:
+    with pytest.raises(ValueError, match="Missing production settings"):
+        load_saas_settings(
+            {
+                "APP_ENV": "production",
+                "APP_BASE_URL": "https://app.example.com",
+                "API_BASE_URL": "https://api.example.com",
+                "GCP_PROJECT_ID": "project",
+                "FIRESTORE_DATABASE": "(default)",
+                "KMS_KEY_NAME": "kms",
+                "GCS_BUCKET": "bucket",
+                "TASKS_QUEUE_NAME": "reports",
+                "GOOGLE_OAUTH_CLIENT_CONFIG_JSON": "{}",
+                "SESSION_PEPPER": "pepper",
+            }
+        )
+
+
+def test_container_from_settings_uses_in_memory_outside_production() -> None:
+    container = SaaSContainer.from_settings(
+        load_saas_settings({"APP_ENV": "test", "SESSION_PEPPER": "pepper"})
+    )
+
+    assert isinstance(container.sessions, InMemorySessionRepository)
 
 
 def test_raw_response_like_payloads_are_not_part_of_report_metadata() -> None:

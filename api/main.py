@@ -47,7 +47,7 @@ SessionCookie = Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)]
 
 def create_api_app(container: SaaSContainer | None = None) -> FastAPI:
     app = FastAPI(title="Survey Insight API", version="0.1.0")
-    app.state.container = container or SaaSContainer.in_memory()
+    app.state.container = container or SaaSContainer.from_settings()
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
