@@ -1,0 +1,77 @@
+"""SaaS foundation layer: typed domain, security primitives, ports, and services."""
+
+from core.saas.container import SaaSContainer
+from core.saas.errors import (
+    ExpiredLoginTicket,
+    ExpiredOAuthState,
+    InvalidLoginTicket,
+    InvalidOAuthState,
+    InvalidSession,
+    JobConflict,
+    MissingRequiredScopes,
+    QuotaExceeded,
+    ReplayedLoginTicket,
+    ReplayedOAuthState,
+)
+from core.saas.models import (
+    AuditEvent,
+    JobStatus,
+    LoginTicket,
+    OAuthAccount,
+    OAuthState,
+    Plan,
+    Quota,
+    Report,
+    ReportJob,
+    ReportStatus,
+    Session,
+    User,
+    UserStatus,
+)
+from core.saas.security import generate_opaque_token, hash_secret
+from core.saas.services import (
+    JobStateMachine,
+    LoginTicketService,
+    OAuthStateService,
+    ReportJobService,
+    SessionSecret,
+    SessionService,
+)
+from core.saas.settings import SaaSSettings, load_saas_settings
+
+__all__ = [
+    "AuditEvent",
+    "ExpiredLoginTicket",
+    "ExpiredOAuthState",
+    "InvalidLoginTicket",
+    "InvalidOAuthState",
+    "InvalidSession",
+    "JobConflict",
+    "JobStateMachine",
+    "JobStatus",
+    "LoginTicket",
+    "LoginTicketService",
+    "MissingRequiredScopes",
+    "OAuthAccount",
+    "OAuthState",
+    "OAuthStateService",
+    "Plan",
+    "Quota",
+    "QuotaExceeded",
+    "ReplayedLoginTicket",
+    "ReplayedOAuthState",
+    "Report",
+    "ReportJob",
+    "ReportJobService",
+    "ReportStatus",
+    "SaaSSettings",
+    "SaaSContainer",
+    "Session",
+    "SessionSecret",
+    "SessionService",
+    "User",
+    "UserStatus",
+    "generate_opaque_token",
+    "hash_secret",
+    "load_saas_settings",
+]
