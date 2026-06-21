@@ -27,7 +27,10 @@ def _production_container() -> SaaSContainer:
             "GCP_PROJECT_ID": "project",
             "KMS_KEY_NAME": "kms",
             "GCS_BUCKET": "bucket",
+            "CLOUD_TASKS_LOCATION": "europe-central2",
             "TASKS_QUEUE_NAME": "reports",
+            "WORKER_BASE_URL": "https://worker.example.com",
+            "CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL": "tasks@example.iam.gserviceaccount.com",
             "GOOGLE_OAUTH_CLIENT_CONFIG_JSON": "{}",
             "SESSION_PEPPER": "prod-pepper",
         }

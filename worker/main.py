@@ -20,7 +20,7 @@ class WorkerJobResponse(BaseModel):
 
 def create_worker_app(container: SaaSContainer | None = None) -> FastAPI:
     app = FastAPI(title="Survey Insight Worker", version="0.1.0")
-    app.state.container = container or SaaSContainer.in_memory()
+    app.state.container = container or SaaSContainer.from_settings()
 
     @app.get("/health")
     def health() -> dict[str, str]:
