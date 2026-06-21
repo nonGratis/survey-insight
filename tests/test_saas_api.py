@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 from google.oauth2.credentials import Credentials
@@ -141,7 +142,15 @@ def test_google_oauth_callback_creates_cookie_session_and_encrypted_tokens() -> 
     )
 
     assert callback.status_code == 307
-    assert callback.headers["location"] == "/catalog"
+    redirect = urlsplit(callback.headers["location"])
+    assert redirect.path == "/catalog"
+    ticket = parse_qs(redirect.query)["login_ticket"][0]
+    assert client.cookies.get(SESSION_COOKIE_NAME) is None
+
+    exchanged = client.post("/v1/auth/session/exchange", json={"ticket": ticket})
+
+    assert exchanged.status_code == 200
+    assert exchanged.json()["authenticated"] is True
     session_id = client.cookies.get(SESSION_COOKIE_NAME)
     assert session_id is not None
     session = container.session_service.validate(session_id)
@@ -164,6 +173,9 @@ def test_google_oauth_callback_creates_cookie_session_and_encrypted_tokens() -> 
     )
     assert replay.status_code == 401
 
+    replay_ticket = client.post("/v1/auth/session/exchange", json={"ticket": ticket})
+    assert replay_ticket.status_code == 401
+
 
 def test_google_oauth_start_rejects_open_redirect_next_url() -> None:
     container = _test_container()
@@ -183,4 +195,6 @@ def test_google_oauth_start_rejects_open_redirect_next_url() -> None:
     )
 
     assert callback.status_code == 307
-    assert callback.headers["location"] == "/"
+    redirect = urlsplit(callback.headers["location"])
+    assert redirect.path == "/"
+    assert "login_ticket" in parse_qs(redirect.query)
