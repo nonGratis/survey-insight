@@ -11,6 +11,7 @@ from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Res
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from core.logger import get_logger
 from core.saas.adapters.google_oauth import GoogleOAuthClient, GoogleOAuthWebClient
 from core.saas.container import SaaSContainer
 from core.saas.errors import AuthError, InvalidSession, QuotaExceeded
@@ -18,6 +19,7 @@ from core.saas.models import OAuthAccount, Plan, Quota, ReportJob, Session, User
 from core.saas.security import hash_secret, utcnow
 
 SESSION_COOKIE_NAME = "session_id"
+log = get_logger(__name__)
 IDENTITY_SCOPES = (
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -143,19 +145,33 @@ def create_api_app(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_oauth_state"
             ) from exc
 
-        credentials = _oauth_client(request).exchange_code(
-            code=code,
-            state=state,
-            code_verifier=state_record.code_verifier,
-            scopes=state_record.scopes,
-        )
-        user_info = _oauth_client(request).user_info(credentials)
-        user = _upsert_google_user(container, user_info)
-        _save_google_tokens(container, user=user, user_info=user_info, credentials=credentials)
-        login_ticket = container.login_ticket_service.create(
-            user_id=user.id,
-            ttl=timedelta(minutes=5),
-        )
+        stage = "exchange_code"
+        try:
+            credentials = _oauth_client(request).exchange_code(
+                code=code,
+                state=state,
+                code_verifier=state_record.code_verifier,
+                scopes=state_record.scopes,
+            )
+            stage = "userinfo"
+            user_info = _oauth_client(request).user_info(credentials)
+            stage = "persist_user"
+            user = _upsert_google_user(container, user_info)
+            stage = "persist_tokens"
+            _save_google_tokens(container, user=user, user_info=user_info, credentials=credentials)
+            stage = "create_login_ticket"
+            login_ticket = container.login_ticket_service.create(
+                user_id=user.id,
+                ttl=timedelta(minutes=5),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception(
+                "google_oauth_callback_failed",
+                extra={"error_code": type(exc).__name__, "stage": stage},
+            )
+            return RedirectResponse(
+                _with_auth_error(state_record.next_url, "oauth_callback_failed")
+            )
 
         return RedirectResponse(_with_login_ticket(state_record.next_url, login_ticket.ticket))
 
@@ -337,9 +353,17 @@ def _safe_next_url(next_url: str, app_base_url: str) -> str:
 
 
 def _with_login_ticket(next_url: str, ticket: str) -> str:
+    return _with_query(next_url, {"login_ticket": ticket})
+
+
+def _with_auth_error(next_url: str, error_code: str) -> str:
+    return _with_query(next_url, {"auth_error": error_code})
+
+
+def _with_query(next_url: str, values: dict[str, str]) -> str:
     parts = urlsplit(next_url)
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query["login_ticket"] = ticket
+    query.update(values)
     return urlunsplit(
         (
             parts.scheme,

@@ -52,7 +52,6 @@ def _saas_client(base_url: str) -> SaaSApiClient:
     return SaaSApiClient(base_url)
 
 
-@st.cache_resource
 def _cookie_manager() -> stx.CookieManager:
     return stx.CookieManager(key="saas_auth_cookies")
 
@@ -135,12 +134,17 @@ def _handle_saas_login_ticket() -> bool:
 
 
 def _restore_saas_session() -> bool:
+    auth_error = _query_param("auth_error")
+    if auth_error:
+        st.error("Не вдалося завершити Google-вхід. Спробуй увійти ще раз.")
+        st.query_params.clear()
+        return False
+
     if _handle_saas_login_ticket():
         return True
 
-    session_id = st.session_state.get("saas_session_id") or _cookie_manager().get(
-        _SAAS_SESSION_COOKIE
-    )
+    cookie_manager = _cookie_manager()
+    session_id = st.session_state.get("saas_session_id") or cookie_manager.get(_SAAS_SESSION_COOKIE)
     if not isinstance(session_id, str) or not session_id:
         return False
 
@@ -157,18 +161,21 @@ def _restore_saas_session() -> bool:
         session = _saas_client(_api_base_url()).read_session(session_id)
     except httpx.HTTPError:
         log.exception("saas_session_restore_failed")
-        _clear_saas_session()
+        _clear_saas_session(cookie_manager)
         return False
 
     if not session.authenticated:
-        _clear_saas_session()
+        _clear_saas_session(cookie_manager)
         return False
 
-    _remember_saas_session(session)
+    _remember_saas_session(session, cookie_manager)
     return True
 
 
-def _remember_saas_session(session: SaaSSession) -> None:
+def _remember_saas_session(
+    session: SaaSSession,
+    cookie_manager: stx.CookieManager | None = None,
+) -> None:
     if not session.session_id:
         return
 
@@ -180,7 +187,8 @@ def _remember_saas_session(session: SaaSSession) -> None:
         "name": session.name,
         "plan": session.plan,
     }
-    _cookie_manager().set(
+    manager = cookie_manager or _cookie_manager()
+    manager.set(
         _SAAS_SESSION_COOKIE,
         session.session_id,
         key="set_saas_session",
@@ -191,10 +199,12 @@ def _remember_saas_session(session: SaaSSession) -> None:
     )
 
 
-def _clear_saas_session() -> None:
+def _clear_saas_session(cookie_manager: stx.CookieManager | None = None) -> None:
     for key in ("saas_session_id", "saas_session_checked_at", "user"):
         st.session_state.pop(key, None)
-    _cookie_manager().delete(_SAAS_SESSION_COOKIE, key="delete_saas_session")
+    manager = cookie_manager or _cookie_manager()
+    if manager.get(_SAAS_SESSION_COOKIE) is not None:
+        manager.delete(_SAAS_SESSION_COOKIE, key="delete_saas_session")
 
 
 def _render_local_login_button(location: str = "sidebar") -> None:
