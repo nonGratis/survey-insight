@@ -15,6 +15,7 @@ setup_logging()
 
 from ui.components.auth_widget import (  # noqa: E402
     ensure_login_state,
+    is_auth_restore_pending,
     render_login_button,
     render_profile,
 )
@@ -22,6 +23,13 @@ from ui.components.auth_widget import (  # noqa: E402
 st.set_page_config(page_title="Survey Insight", layout="wide")
 
 logged_in = ensure_login_state()
+
+if not logged_in and is_auth_restore_pending():
+    hero_cols = st.columns([1, 2, 1], gap="large")
+    with hero_cols[1]:
+        st.subheader("Відновлення сесії")
+        st.write("Перевіряю активний вхід…")
+    st.stop()
 
 if not logged_in:
     hero_cols = st.columns([1, 2, 1], gap="large")
