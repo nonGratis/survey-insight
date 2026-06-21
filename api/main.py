@@ -39,6 +39,13 @@ class SessionResponse(BaseModel):
     plan: str | None = None
 
 
+class LoginTicketExchangeResponse(SessionResponse):
+    # Streamlit and API are different run.app origins before a custom domain is
+    # attached, so the web client needs the opaque session id to store its own
+    # browser cookie. Firestore still stores only the HMAC session hash.
+    session_id: str
+
+
 class ReportJobRequest(BaseModel):
     form_id: str = Field(min_length=1)
     form_title: str | None = Field(default=None, max_length=240)
@@ -152,12 +159,12 @@ def create_api_app(
 
         return RedirectResponse(_with_login_ticket(state_record.next_url, login_ticket.ticket))
 
-    @app.post("/v1/auth/session/exchange", response_model=SessionResponse)
+    @app.post("/v1/auth/session/exchange", response_model=LoginTicketExchangeResponse)
     def exchange_login_ticket(
         body: LoginTicketExchangeRequest,
         request: Request,
         response: Response,
-    ) -> SessionResponse:
+    ) -> LoginTicketExchangeResponse:
         container = _container(request)
         try:
             ticket = container.login_ticket_service.consume(body.ticket)
@@ -176,7 +183,10 @@ def create_api_app(
             path="/",
             max_age=60 * 60 * 24 * 30,
         )
-        return _session_response(user)
+        return LoginTicketExchangeResponse(
+            **_session_response(user).model_dump(),
+            session_id=session.session_id,
+        )
 
     @app.post(
         "/v1/reports/jobs", response_model=ReportJobResponse, status_code=status.HTTP_202_ACCEPTED
