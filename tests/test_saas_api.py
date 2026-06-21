@@ -50,6 +50,11 @@ class _FakeOAuthClient:
         }
 
 
+class _FailingUserInfoOAuthClient(_FakeOAuthClient):
+    def user_info(self, credentials: Credentials) -> dict:
+        raise RuntimeError("userinfo failed")
+
+
 def _test_container() -> SaaSContainer:
     return SaaSContainer.in_memory(
         load_saas_settings({"APP_ENV": "test", "SESSION_PEPPER": "test-pepper"})
@@ -199,3 +204,36 @@ def test_google_oauth_start_rejects_open_redirect_next_url() -> None:
     redirect = urlsplit(callback.headers["location"])
     assert redirect.path == "/"
     assert "login_ticket" in parse_qs(redirect.query)
+
+
+def test_google_oauth_callback_redirects_to_web_on_internal_failure() -> None:
+    container = SaaSContainer.in_memory(
+        load_saas_settings(
+            {
+                "APP_ENV": "test",
+                "APP_BASE_URL": "https://app.example.com",
+                "API_BASE_URL": "https://api.example.com",
+                "SESSION_PEPPER": "test-pepper",
+            }
+        )
+    )
+    oauth = _FailingUserInfoOAuthClient()
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+
+    client.get(
+        "/v1/auth/google/start",
+        params={"next_url": "https://app.example.com/"},
+        follow_redirects=False,
+    )
+
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 307
+    redirect = urlsplit(callback.headers["location"])
+    assert redirect.scheme == "https"
+    assert redirect.netloc == "app.example.com"
+    assert parse_qs(redirect.query) == {"auth_error": ["oauth_callback_failed"]}
