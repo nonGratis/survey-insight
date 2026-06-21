@@ -129,7 +129,6 @@ def _handle_saas_login_ticket() -> bool:
 
     _remember_saas_session(session)
     st.query_params.clear()
-    st.rerun()
     return True
 
 
