@@ -143,19 +143,13 @@ def _restore_saas_session() -> bool:
     if _handle_saas_login_ticket():
         return True
 
+    if _has_fresh_saas_session():
+        return True
+
     cookie_manager = _cookie_manager()
     session_id = st.session_state.get("saas_session_id") or cookie_manager.get(_SAAS_SESSION_COOKIE)
     if not isinstance(session_id, str) or not session_id:
         return False
-
-    checked_at = st.session_state.get("saas_session_checked_at")
-    if (
-        st.session_state.get("saas_session_id") == session_id
-        and st.session_state.get("user")
-        and isinstance(checked_at, datetime)
-        and datetime.now(UTC) - checked_at < timedelta(seconds=_SAAS_VALIDATE_TTL_SECONDS)
-    ):
-        return True
 
     try:
         session = _saas_client(_api_base_url()).read_session(session_id)
@@ -170,6 +164,16 @@ def _restore_saas_session() -> bool:
 
     _remember_saas_session(session, cookie_manager)
     return True
+
+
+def _has_fresh_saas_session() -> bool:
+    checked_at = st.session_state.get("saas_session_checked_at")
+    return (
+        isinstance(st.session_state.get("saas_session_id"), str)
+        and bool(st.session_state.get("user"))
+        and isinstance(checked_at, datetime)
+        and datetime.now(UTC) - checked_at < timedelta(seconds=_SAAS_VALIDATE_TTL_SECONDS)
+    )
 
 
 def _remember_saas_session(
