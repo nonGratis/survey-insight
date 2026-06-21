@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import suppress
 from datetime import timedelta
 from typing import Annotated, Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -49,6 +50,10 @@ class ReportJobResponse(BaseModel):
     report_id: str
     status: str
     attempts: int
+
+
+class LoginTicketExchangeRequest(BaseModel):
+    ticket: str = Field(min_length=1)
 
 
 SessionCookie = Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)]
@@ -140,9 +145,28 @@ def create_api_app(
         user_info = _oauth_client(request).user_info(credentials)
         user = _upsert_google_user(container, user_info)
         _save_google_tokens(container, user=user, user_info=user_info, credentials=credentials)
-        session = container.session_service.create(user_id=user.id)
+        login_ticket = container.login_ticket_service.create(
+            user_id=user.id,
+            ttl=timedelta(minutes=5),
+        )
 
-        response = RedirectResponse(state_record.next_url)
+        return RedirectResponse(_with_login_ticket(state_record.next_url, login_ticket.ticket))
+
+    @app.post("/v1/auth/session/exchange", response_model=SessionResponse)
+    def exchange_login_ticket(
+        body: LoginTicketExchangeRequest,
+        request: Request,
+        response: Response,
+    ) -> SessionResponse:
+        container = _container(request)
+        try:
+            ticket = container.login_ticket_service.consume(body.ticket)
+        except AuthError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_login_ticket"
+            ) from exc
+        user = _require_user(container, ticket.user_id)
+        session = container.session_service.create(user_id=user.id)
         response.set_cookie(
             SESSION_COOKIE_NAME,
             session.session_id,
@@ -152,7 +176,7 @@ def create_api_app(
             path="/",
             max_age=60 * 60 * 24 * 30,
         )
-        return response
+        return _session_response(user)
 
     @app.post(
         "/v1/reports/jobs", response_model=ReportJobResponse, status_code=status.HTTP_202_ACCEPTED
@@ -300,6 +324,21 @@ def _safe_next_url(next_url: str, app_base_url: str) -> str:
     if app_base_url and next_url.startswith(app_base_url.rstrip("/") + "/"):
         return next_url
     return "/"
+
+
+def _with_login_ticket(next_url: str, ticket: str) -> str:
+    parts = urlsplit(next_url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["login_ticket"] = ticket
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            parts.path,
+            urlencode(query),
+            parts.fragment,
+        )
+    )
 
 
 app = create_api_app()
