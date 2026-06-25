@@ -6,8 +6,9 @@ from urllib.parse import parse_qs, urlsplit
 from fastapi.testclient import TestClient
 from google.oauth2.credentials import Credentials
 
-from api.main import FORM_SCOPES, SESSION_COOKIE_NAME, create_api_app
+from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
+from core.saas.google_scopes import FORM_SCOPES
 from core.saas.inmemory import InMemoryTaskQueue
 from core.saas.models import OAuthAccount, Plan, Quota, User, UserStatus
 from core.saas.settings import load_saas_settings
