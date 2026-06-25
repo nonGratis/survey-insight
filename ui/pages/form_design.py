@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from core.auth import credentials_from_dict
 from core.form_flow import flow_has_interesting_structure, flow_to_dot, parse_form_flow
-from core.forms_api import FormsApiError, get_form_structure
 from core.forms_quality import analyze_form_design
 from core.logger import get_logger
 from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
@@ -14,6 +12,7 @@ from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
+from ui.google_data import cache_token, get_form_structure
 
 log = get_logger(__name__)
 
@@ -22,9 +21,7 @@ render_page_header("Дизайн форми")
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
-    creds,
     refresh_scope="form_design",
     show_status=False,
 )
@@ -34,8 +31,8 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _creds_token: str) -> dict:
-    return get_form_structure(creds, form_id_)
+def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+    return get_form_structure(form_id_)
 
 
 if action.refresh_clicked:
@@ -45,8 +42,8 @@ if action.refresh_clicked:
 
 
 try:
-    structure = _cached_structure(form_id, creds.token or "")
-except FormsApiError as exc:
+    structure = _cached_structure(form_id, cache_token())
+except Exception as exc:  # noqa: BLE001
     log.exception("ui_form_design_get_structure_failed", extra={"form_id": form_id})
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()

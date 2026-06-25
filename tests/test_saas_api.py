@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
@@ -8,8 +8,9 @@ from google.oauth2.credentials import Credentials
 
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
+from core.saas.google_scopes import FORM_SCOPES, SHEETS_SCOPES
 from core.saas.inmemory import InMemoryTaskQueue
-from core.saas.models import Plan, Quota, User, UserStatus
+from core.saas.models import OAuthAccount, Plan, Quota, User, UserStatus
 from core.saas.settings import load_saas_settings
 
 NOW = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
@@ -20,11 +21,20 @@ class _FakeOAuthClient:
         self.last_state: str | None = None
         self.last_code_verifier: str | None = None
         self.last_scopes: tuple[str, ...] = ()
+        self.last_include_granted_scopes = False
 
-    def authorization_url(self, *, state: str, code_verifier: str, scopes) -> str:
+    def authorization_url(
+        self,
+        *,
+        state: str,
+        code_verifier: str,
+        scopes,
+        include_granted_scopes: bool = False,
+    ) -> str:
         self.last_state = state
         self.last_code_verifier = code_verifier
         self.last_scopes = tuple(scopes)
+        self.last_include_granted_scopes = include_granted_scopes
         return f"https://accounts.example/auth?state={state}"
 
     def exchange_code(self, *, code: str, state: str, code_verifier: str, scopes) -> Credentials:
@@ -55,9 +65,79 @@ class _FailingUserInfoOAuthClient(_FakeOAuthClient):
         raise RuntimeError("userinfo failed")
 
 
+class _FakeGoogleFormsClient:
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        assert creds.token == "access-token"
+        return [
+            {
+                "id": "form_1",
+                "name": "Admissions poll",
+                "owner_email": "owner@example.com",
+                "owner_name": "Owner",
+                "created_time": "2026-06-01T10:00:00Z",
+                "modified_time": "2026-06-02T10:00:00Z",
+                "edit_url": "https://docs.google.com/forms/d/form_1/edit",
+            }
+        ]
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        assert form_id == "form_1"
+        return {
+            "title": "Admissions poll",
+            "description": "desc",
+            "sections_count": 2,
+            "questions_count": 5,
+            "linked_sheet_id": None,
+            "is_published": True,
+            "accepting_responses": True,
+        }
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        assert form_id == "form_1"
+        return {
+            "total": 2,
+            "first_response": "2026-06-01T10:00:00",
+            "second_response": "2026-06-01T10:05:00",
+            "last_response": "2026-06-01T10:05:00",
+        }
+
+    def get_form_structure(self, creds: Credentials, form_id: str) -> dict:
+        assert form_id == "form_1"
+        return {"formId": form_id, "info": {"title": "Admissions poll"}, "items": []}
+
+    def list_responses(self, creds: Credentials, form_id: str) -> list[dict]:
+        assert form_id == "form_1"
+        return [{"responseId": "r1", "answers": {"q1": {"textAnswers": {"answers": []}}}}]
+
+
+class _FakeGoogleSheetsClient:
+    def scan_population_tables(self, creds: Credentials, sheet_id: str) -> list[dict]:
+        assert creds.token == "access-token"
+        assert sheet_id == "sheet_1"
+        return [
+            {
+                "source": "Population",
+                "label_header": "Faculty",
+                "count_header": "N",
+                "population": {"FICT": 120, "IPSA": 80},
+            }
+        ]
+
+
 def _test_container() -> SaaSContainer:
     return SaaSContainer.in_memory(
-        load_saas_settings({"APP_ENV": "test", "SESSION_PEPPER": "test-pepper"})
+        load_saas_settings(
+            {
+                "APP_ENV": "test",
+                "API_BASE_URL": "https://api.example.com",
+                "APP_BASE_URL": "https://app.example.com",
+                "GOOGLE_OAUTH_CLIENT_CONFIG_JSON": (
+                    '{"web":{"token_uri":"https://oauth2.googleapis.com/token",'
+                    '"client_id":"client-id","client_secret":"client-secret"}}'
+                ),
+                "SESSION_PEPPER": "test-pepper",
+            }
+        )
     )
 
 
@@ -75,6 +155,27 @@ def _seed_user_session(container: SaaSContainer) -> str:
     container.users.save(user)
     container.quotas.save(user.id, Quota(monthly_report_limit=3, reports_used_this_month=0))
     return container.session_service.create(user_id=user.id, now=NOW).session_id
+
+
+def _seed_google_grant(
+    container: SaaSContainer,
+    user_id: str = "user_1",
+    *,
+    scopes: tuple[str, ...] = FORM_SCOPES,
+) -> None:
+    container.tokens.save(
+        OAuthAccount(
+            user_id=user_id,
+            provider="google",
+            google_sub="google-sub-1",
+            email="owner@example.com",
+            scopes=scopes,
+            encrypted_access_token=container.token_crypto.encrypt("access-token"),
+            encrypted_refresh_token=container.token_crypto.encrypt("refresh-token"),
+            token_expiry=datetime.now(UTC) + timedelta(hours=1),
+            updated_at=NOW,
+        )
+    )
 
 
 def test_api_session_restores_from_cookie_and_never_requires_streamlit_state() -> None:
@@ -123,6 +224,116 @@ def test_api_report_job_requires_session_and_enqueues_with_hashed_form_id() -> N
     report = container.reports.get(payload["report_id"])
     assert report is not None
     assert report.form_id_hash != "form_raw"
+
+
+def test_google_access_returns_connect_url_when_forms_scopes_missing() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get(
+        "/v1/google/access",
+        params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "missing_required_scopes"
+    assert detail["purpose"] == "forms"
+    assert "https://www.googleapis.com/auth/forms.responses.readonly" in detail["missing_scopes"]
+    assert detail["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
+    assert "purpose=forms" in detail["connect_url"]
+
+
+def test_google_auth_start_supports_incremental_forms_purpose() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+
+    response = client.get(
+        "/v1/auth/google/start",
+        params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert oauth.last_include_granted_scopes is True
+    assert "https://www.googleapis.com/auth/forms.body.readonly" in oauth.last_scopes
+    assert "https://www.googleapis.com/auth/drive.metadata.readonly" in oauth.last_scopes
+
+
+def test_forms_api_routes_use_server_side_google_credentials_without_exposing_tokens() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    access = client.get("/v1/google/access", params={"purpose": "forms"})
+    forms = client.get("/v1/forms")
+    summary = client.get("/v1/forms/form_1/summary")
+    stats = client.get("/v1/forms/form_1/response-stats")
+    structure = client.get("/v1/forms/form_1/structure")
+    responses = client.get("/v1/forms/form_1/responses")
+
+    assert access.json() == {"ok": True, "purpose": "forms"}
+    assert forms.status_code == 200
+    assert forms.json()[0]["id"] == "form_1"
+    assert summary.json()["questions_count"] == 5
+    assert stats.json()["total"] == 2
+    assert structure.json()["formId"] == "form_1"
+    assert responses.json()[0]["responseId"] == "r1"
+
+    combined_payload = str(
+        [forms.json(), summary.json(), stats.json(), structure.json(), responses.json()]
+    )
+    assert "access-token" not in combined_payload
+    assert "refresh-token" not in combined_payload
+    assert getattr(container.artifacts, "pdfs", {}) == {}
+
+
+def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=FORM_SCOPES)
+    client = TestClient(create_api_app(container, google_sheets_client=_FakeGoogleSheetsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get(
+        "/v1/sheets/sheet_1/population-tables",
+        params={"next_url": "https://app.example.com/weighting"},
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "missing_required_scopes"
+    assert detail["purpose"] == "sheets"
+    assert "https://www.googleapis.com/auth/spreadsheets.readonly" in detail["missing_scopes"]
+    assert "purpose=sheets" in detail["connect_url"]
+
+
+def test_sheets_population_tables_return_only_detected_tables_without_tokens() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=SHEETS_SCOPES)
+    client = TestClient(create_api_app(container, google_sheets_client=_FakeGoogleSheetsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/sheets/sheet_1/population-tables")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "source": "Population",
+            "label_header": "Faculty",
+            "count_header": "N",
+            "population": {"FICT": 120, "IPSA": 80},
+        }
+    ]
+    combined_payload = str(response.json())
+    assert "access-token" not in combined_payload
+    assert "refresh-token" not in combined_payload
 
 
 def test_google_oauth_callback_creates_cookie_session_and_encrypted_tokens() -> None:

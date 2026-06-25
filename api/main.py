@@ -7,24 +7,37 @@ from datetime import timedelta
 from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
+from api.dependencies import (
+    SESSION_COOKIE_NAME,
+    SessionCookie,
+)
+from api.dependencies import (
+    get_container as _container,
+)
+from api.dependencies import (
+    require_session as _require_session,
+)
+from api.dependencies import (
+    require_user as _require_user,
+)
+from api.routes.google_forms import router as google_forms_router
+from api.routes.google_sheets import router as google_sheets_router
 from core.logger import get_logger
+from core.saas.adapters.google_forms import GoogleFormsApiClient
 from core.saas.adapters.google_oauth import GoogleOAuthClient, GoogleOAuthWebClient
+from core.saas.adapters.google_sheets import GoogleSheetsApiClient
 from core.saas.container import SaaSContainer
 from core.saas.errors import AuthError, InvalidSession, QuotaExceeded
+from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import OAuthAccount, Plan, Quota, ReportJob, Session, User, UserStatus
+from core.saas.ports import GoogleFormsClient, GoogleSheetsClient
 from core.saas.security import hash_secret, utcnow
 
-SESSION_COOKIE_NAME = "session_id"
 log = get_logger(__name__)
-IDENTITY_SCOPES = (
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-)
 DEFAULT_NEW_USER_QUOTA = Quota(monthly_report_limit=20, reports_used_this_month=0)
 
 
@@ -65,12 +78,11 @@ class LoginTicketExchangeRequest(BaseModel):
     ticket: str = Field(min_length=1)
 
 
-SessionCookie = Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)]
-
-
 def create_api_app(
     container: SaaSContainer | None = None,
     oauth_client: GoogleOAuthClient | None = None,
+    google_forms_client: GoogleFormsClient | None = None,
+    google_sheets_client: GoogleSheetsClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Survey Insight API", version="0.1.0")
     app.state.container = container or SaaSContainer.from_settings()
@@ -78,6 +90,10 @@ def create_api_app(
         client_config_json=app.state.container.settings.google_oauth_client_config_json,
         api_base_url=app.state.container.settings.api_base_url,
     )
+    app.state.google_forms_client = google_forms_client or GoogleFormsApiClient()
+    app.state.google_sheets_client = google_sheets_client or GoogleSheetsApiClient()
+    app.include_router(google_forms_router)
+    app.include_router(google_sheets_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -113,10 +129,12 @@ def create_api_app(
     def start_google_auth(
         request: Request,
         next_url: Annotated[str, Query(max_length=2048)] = "/",
+        purpose: Annotated[str, Query(pattern="^(identity|forms|sheets)$")] = "identity",
     ) -> RedirectResponse:
         container = _container(request)
+        scopes = scopes_for_purpose(purpose)
         state_secret = container.oauth_state_service.create(
-            scopes=IDENTITY_SCOPES,
+            scopes=scopes,
             next_url=_safe_next_url(next_url, container.settings.app_base_url),
             ttl=timedelta(minutes=10),
         )
@@ -124,6 +142,7 @@ def create_api_app(
             state=state_secret.state,
             code_verifier=state_secret.record.code_verifier,
             scopes=state_secret.record.scopes,
+            include_granted_scopes=purpose != "identity",
         )
         return RedirectResponse(authorization_url)
 
@@ -250,30 +269,8 @@ def create_api_app(
     return app
 
 
-def _container(request: Request) -> SaaSContainer:
-    return request.app.state.container
-
-
 def _oauth_client(request: Request) -> GoogleOAuthClient:
     return request.app.state.oauth_client
-
-
-def _require_session(request: Request, session_id: SessionCookie = None) -> Session:
-    if not session_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_session")
-    try:
-        return _container(request).session_service.validate(session_id)
-    except InvalidSession as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_session"
-        ) from exc
-
-
-def _require_user(container: SaaSContainer, user_id: str) -> User:
-    user = container.users.get(user_id)
-    if user is None or user.status != UserStatus.ACTIVE:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_user")
-    return user
 
 
 def _job_response(job: ReportJob) -> ReportJobResponse:
@@ -324,20 +321,24 @@ def _save_google_tokens(
     user_info: dict[str, Any],
     credentials: Any,
 ) -> None:
+    existing = container.tokens.get_by_user(user.id)
+    scopes = tuple(
+        dict.fromkeys([*(existing.scopes if existing else ()), *(credentials.scopes or ())])
+    )
+    encrypted_refresh_token = existing.encrypted_refresh_token if existing else None
+    if credentials.refresh_token:
+        encrypted_refresh_token = container.token_crypto.encrypt(credentials.refresh_token)
+
     account = OAuthAccount(
         user_id=user.id,
         provider="google",
         google_sub=str(user_info["id"]),
         email=user.email,
-        scopes=tuple(credentials.scopes or ()),
+        scopes=scopes,
         encrypted_access_token=(
             container.token_crypto.encrypt(credentials.token) if credentials.token else None
         ),
-        encrypted_refresh_token=(
-            container.token_crypto.encrypt(credentials.refresh_token)
-            if credentials.refresh_token
-            else None
-        ),
+        encrypted_refresh_token=encrypted_refresh_token,
         token_expiry=credentials.expiry,
         updated_at=utcnow(),
     )

@@ -19,8 +19,6 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from core.auth import credentials_from_dict
-from core.context_tables import scan_sheets_for_tables
 from core.crosstab import (
     ASSOCIATION_FILTER_MODES,
     IMPORTANT_EFFECT_THRESHOLD,
@@ -35,10 +33,7 @@ from core.crosstab import (
 )
 from core.crosstab_frame import Var, build_analysis_frame, pair_association, short_label, to_float
 from core.forms_api import (
-    FormsApiError,
-    get_form_structure,
     get_linked_sheet_id,
-    list_form_responses,
     parse_question_types,
 )
 from core.forms_quality import (
@@ -55,7 +50,7 @@ from core.response_weights import (
     compute_configured_response_weights,
     weighted_response_distribution,
 )
-from core.sheets_api import SheetsApiError, fetch_all_grids
+from core.sheets_api import SheetsApiError
 from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
@@ -65,6 +60,13 @@ from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
     render_page_header,
+)
+from ui.google_data import (
+    cache_token,
+    get_form_structure,
+    is_saas_mode,
+    list_form_responses,
+    scan_population_tables,
 )
 from ui.report_data import weighting_from_tables
 
@@ -109,11 +111,13 @@ def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
     кеш Streamlit) і делегує розрахунок спільному ядру `weighting_from_tables`
     (те саме, що й глобальний «Звіт» — DRY), повертаючи лише колонку ваг.
     """
+    if is_saas_mode():
+        return None
     sheet_id = get_linked_sheet_id(form)
     if not sheet_id:
         return None
     try:
-        tables = scan_sheets_for_tables(_cached_grids(sheet_id, creds.token or ""))
+        tables = _cached_population_tables(sheet_id, cache_token())
     except SheetsApiError:
         return None
     result = weighting_from_tables(form, responses, tables)
@@ -202,9 +206,7 @@ render_page_header("Запитання")
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
-    creds,
     refresh_scope="questions",
     show_status=False,
 )
@@ -214,31 +216,31 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _creds_token: str) -> dict:
-    return get_form_structure(creds, form_id_)
+def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+    return get_form_structure(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Завантажую відповіді для аналізу…")
-def _cached_responses(form_id_: str, _creds_token: str) -> list[dict]:
-    return list_form_responses(creds, form_id_)
+def _cached_responses(form_id_: str, _cache_token: str) -> list[dict]:
+    return list_form_responses(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Шукаю таблиці популяції у Sheet…")
-def _cached_grids(sheet_id_: str, _creds_token: str) -> dict[str, list[list[str]]]:
-    return fetch_all_grids(creds, sheet_id_)
+def _cached_population_tables(sheet_id_: str, _cache_token: str):
+    return scan_population_tables(sheet_id_)
 
 
 if action.refresh_clicked:
     clear_forms_cache()
     _cached_structure.clear()
     _cached_responses.clear()
-    _cached_grids.clear()
+    _cached_population_tables.clear()
     st.rerun()
 
 
 try:
-    structure = _cached_structure(form_id, creds.token or "")
-except FormsApiError as exc:
+    structure = _cached_structure(form_id, cache_token())
+except Exception as exc:  # noqa: BLE001
     log.exception("ui_questions_get_structure_failed", extra={"form_id": form_id})
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
@@ -248,9 +250,19 @@ form_questions = parse_question_types(structure)
 QUESTION_MODES = ["Відповіді", "Крос-таби"]
 mode = render_mode_switch("Режим аналізу", QUESTION_MODES, key="questions_mode")
 
+
+def _load_responses_or_stop() -> list[dict]:
+    try:
+        return _cached_responses(form_id, cache_token())
+    except Exception as exc:  # noqa: BLE001
+        log.exception("ui_questions_list_responses_failed", extra={"form_id": form_id})
+        render_error_state("Не вдалося завантажити відповіді форми.", details=str(exc))
+        st.stop()
+
+
 if mode == "Відповіді":
     # ПІСЛЯ збору: розподіли + якість даних по питаннях.
-    responses = _cached_responses(form_id, creds.token or "")
+    responses = _load_responses_or_stop()
     render_action_status(ActionBarStatus(responses=len(responses), note="розподіли відповідей"))
     if not responses:
         render_empty_state("Аналіз зʼявиться після перших відповідей форми.")
@@ -638,7 +650,7 @@ def _render_overview(frame: pd.DataFrame, meta: dict[str, Var], w, var_keys: lis
 
 
 if mode == "Крос-таби":
-    responses = _cached_responses(form_id, creds.token or "")
+    responses = _load_responses_or_stop()
     render_action_status(ActionBarStatus(responses=len(responses), note="крос-аналіз"))
     if not responses:
         st.info("Крос-аналіз зʼявиться після збору відповідей.")

@@ -8,7 +8,6 @@ from typing import Protocol
 import streamlit as st
 from google.oauth2.credentials import Credentials
 
-from core.forms_api import FormsApiError
 from ui.components.form_picker import (
     fetch_forms,
     prepare_form_widget,
@@ -102,7 +101,7 @@ def render_action_status(
 
 
 def render_action_bar(
-    creds: Credentials,
+    creds: Credentials | None = None,
     *,
     show_status: bool = True,
     refresh_scope: str,
@@ -113,7 +112,7 @@ def render_action_bar(
     st.markdown(_ACTION_BAR_CSS, unsafe_allow_html=True)
     try:
         forms = fetch_forms(creds)
-    except FormsApiError as exc:
+    except Exception as exc:  # noqa: BLE001
         render_error_state("Не вдалося отримати форми.", details=str(exc))
         return ActionBarState(selected_form=None, refresh_clicked=False, forms_count=0)
 

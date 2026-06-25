@@ -5,7 +5,8 @@ from __future__ import annotations
 import streamlit as st
 from google.oauth2.credentials import Credentials
 
-from core.forms_api import FormsApiError, list_user_forms
+from core.forms_api import list_user_forms
+from ui.google_data import google_data_client_for_session, is_saas_mode
 
 FORM_KEY = "global_form_id"
 FORM_WIDGET_PREFIX = "global_form_select"
@@ -17,14 +18,28 @@ def _fetch_forms(_creds: Credentials, _token: str) -> list[dict]:
     return list_user_forms(_creds)
 
 
-def fetch_forms(creds: Credentials) -> list[dict]:
+@st.cache_data(ttl=120, show_spinner="Завантажую список форм...")
+def _fetch_forms_saas(_session_id: str) -> list[dict]:
+    """Return user's forms through the SaaS API."""
+    return google_data_client_for_session(_session_id).list_forms_for_picker()
+
+
+def fetch_forms(creds: Credentials | None = None) -> list[dict]:
     """Return cached forms for the current access token."""
+    if is_saas_mode():
+        session_id = st.session_state.get("saas_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return []
+        return _fetch_forms_saas(session_id)
+    if creds is None:
+        raise RuntimeError("Local Google credentials are required.")
     return _fetch_forms(creds, creds.token or "")
 
 
 def clear_forms_cache() -> None:
     """Clear cached Drive forms list."""
     _fetch_forms.clear()
+    _fetch_forms_saas.clear()
 
 
 def form_widget_key(scope: str) -> str:
@@ -76,11 +91,11 @@ def ensure_selected_form(forms: list[dict]) -> dict | None:
     return by_id.get(st.session_state[FORM_KEY])
 
 
-def render_form_picker(creds: Credentials) -> dict | None:
+def render_form_picker(creds: Credentials | None = None) -> dict | None:
     """Backward-compatible sidebar picker used by pages not yet migrated."""
     try:
         forms = fetch_forms(creds)
-    except FormsApiError as exc:
+    except Exception as exc:  # noqa: BLE001
         st.sidebar.error(f"Не вдалося отримати форми: {exc}")
         return None
     if not forms:

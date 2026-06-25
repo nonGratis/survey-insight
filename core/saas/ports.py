@@ -106,10 +106,20 @@ class TaskQueue(Protocol):
 class GoogleFormsClient(Protocol):
     def list_forms(self, creds: Credentials) -> Sequence[Mapping[str, object]]: ...
 
+    def get_form_summary(self, creds: Credentials, form_id: str) -> Mapping[str, object]: ...
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> Mapping[str, object]: ...
+
     def get_form_structure(self, creds: Credentials, form_id: str) -> Mapping[str, object]: ...
 
     def list_responses(
         self, creds: Credentials, form_id: str
+    ) -> Sequence[Mapping[str, object]]: ...
+
+
+class GoogleSheetsClient(Protocol):
+    def scan_population_tables(
+        self, creds: Credentials, sheet_id: str
     ) -> Sequence[Mapping[str, object]]: ...
 
 
