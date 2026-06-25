@@ -19,15 +19,10 @@ from datetime import UTC, date, datetime
 import pandas as pd
 import streamlit as st
 
-from core.auth import credentials_from_dict
-from core.forms_api import FormsApiError
 from core.forms_catalog import (
     FormDriveMeta,
     FormEnrichment,
     ResponseStats,
-    enrich_form,
-    fetch_response_stats,
-    list_forms_with_drive_meta,
 )
 from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
@@ -36,6 +31,7 @@ from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
+from ui.google_data import cache_token, get_form_summary, get_response_stats, list_catalog_forms
 
 log = get_logger(__name__)
 
@@ -82,25 +78,22 @@ DEFAULT_VISIBLE_COLUMNS = [
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
-
 
 @st.cache_data(ttl=900, show_spinner="Завантажую каталог форм…")
-def _cached_drive_list(_creds_token: str) -> list[FormDriveMeta]:
+def _cached_drive_list(_cache_token: str) -> list[FormDriveMeta]:
     """Drive list форм, кешується на 15 хв за access_token."""
-    return list_forms_with_drive_meta(creds)
+    return list_catalog_forms()
 
 
 try:
-    forms_meta = _cached_drive_list(creds.token or "")
-except FormsApiError as exc:
-    log.exception("ui_catalog_drive_list_failed", extra={"status": exc.status})
+    forms_meta = _cached_drive_list(cache_token())
+except Exception as exc:  # noqa: BLE001
+    log.exception("ui_catalog_drive_list_failed", extra={"error_code": type(exc).__name__})
     render_error_state("Не вдалося завантажити каталог.", details=str(exc))
     st.stop()
 
 render_page_header("Каталог")
 action = render_action_bar(
-    creds,
     refresh_scope="catalog",
 )
 if action.refresh_clicked:
@@ -271,23 +264,22 @@ def _table_with_enrichment() -> None:
     pending = [f for f in forms_meta if f.id not in enrichments]
     if pending:
         chunk = pending[:DEFAULT_MAX_WORKERS]
-        enrich_results = parallel_map(lambda f: enrich_form(creds, f.id), chunk)
-        sheet_targets: list[tuple[str, str]] = []
+        enrich_results = parallel_map(lambda f: get_form_summary(f.id), chunk)
+        stat_targets: list[str] = []
         for form, result in enrich_results:
             if isinstance(result, Exception):
                 enrichments[form.id] = None  # failed — не пробуємо знову
                 st.toast(f"⚠️ {form.name}: {result}", icon="⚠️")
                 continue
             enrichments[form.id] = result
-            if result.linked_sheet_id:
-                sheet_targets.append((form.id, result.linked_sheet_id))
+            stat_targets.append(form.id)
 
-        if sheet_targets:
+        if stat_targets:
             stat_results = parallel_map(
-                lambda pair: fetch_response_stats(creds, pair[1]),
-                sheet_targets,
+                get_response_stats,
+                stat_targets,
             )
-            for (form_id, _sheet_id), stat_result in stat_results:
+            for form_id, stat_result in stat_results:
                 if isinstance(stat_result, Exception):
                     st.toast(f"⚠️ stats fetch: {stat_result}", icon="⚠️")
                     continue

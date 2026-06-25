@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import streamlit as st
 
-from core.auth import credentials_from_dict
-from core.forms_api import FormsApiError, get_form_structure, list_form_responses
 from core.forms_quality import SORT_MODES
 from core.logger import get_logger
 from core.report import render_pdf
@@ -36,6 +34,7 @@ from ui.components.page_shell import (
     render_error_state,
     render_page_header,
 )
+from ui.google_data import cache_token, get_form_structure, list_form_responses
 from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, top_association_rows
 
 log = get_logger(__name__)
@@ -63,9 +62,7 @@ render_page_header("Звіт")
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
-    creds,
     refresh_scope="export",
     show_status=False,
 )
@@ -75,8 +72,8 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=300, show_spinner="Завантажую дані форми…")
-def _load(form_id_: str, _creds_token: str) -> tuple[dict, list[dict]]:
-    return get_form_structure(creds, form_id_), list_form_responses(creds, form_id_)
+def _load(form_id_: str, _cache_token: str) -> tuple[dict, list[dict]]:
+    return get_form_structure(form_id_), list_form_responses(form_id_)
 
 
 def _weighting_config(form_id_: str) -> dict | None:
@@ -94,8 +91,8 @@ if action.refresh_clicked:
 
 
 try:
-    structure, responses = _load(form_id, creds.token or "")
-except FormsApiError as exc:
+    structure, responses = _load(form_id, cache_token())
+except Exception as exc:  # noqa: BLE001
     log.exception("ui_report_load_failed", extra={"form_id": form_id})
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
@@ -241,7 +238,7 @@ if generate_clicked:
         sections.append(descriptive_section(structure, responses, config))
     if inc_representativeness:
         with st.spinner("Рахую репрезентативність…"):
-            weighting = auto_weighting(creds, structure, responses)
+            weighting = auto_weighting(structure, responses)
         if weighting is not None:
             sections.append(representativeness_section(weighting))
         else:
@@ -253,7 +250,7 @@ if generate_clicked:
             sections.append(associations_section(top_association_rows(structure, responses)))
     if inc_dynamics:
         with st.spinner("Будую прогноз динаміки…"):
-            items, note = dynamics_metrics(creds, form_id, form_title)
+            items, note = dynamics_metrics(form_id, form_title)
         if items:
             sections.append(dynamics_section(items, note))
 
