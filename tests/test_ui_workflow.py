@@ -111,6 +111,14 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
     assert "ActionBarStatus(note=" not in catalog
 
 
+def test_catalog_parallel_enrichment_uses_session_bound_data_client() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert "data = google_data_client()" in catalog
+    assert "data.get_form_summary(f.id)" in catalog
+    assert "data.get_response_stats" in catalog
+    assert "session_id=data_token" not in catalog
+
+
 def test_catalog_table_uses_dynamic_min_max_height() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "TABLE_MIN_HEIGHT_PX = 360" in catalog
