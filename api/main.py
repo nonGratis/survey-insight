@@ -317,7 +317,9 @@ def _save_google_tokens(
     credentials: Any,
 ) -> None:
     existing = container.tokens.get_by_user(user.id)
-    scopes = tuple(dict.fromkeys([*(existing.scopes if existing else ()), *(credentials.scopes or ())]))
+    scopes = tuple(
+        dict.fromkeys([*(existing.scopes if existing else ()), *(credentials.scopes or ())])
+    )
     encrypted_refresh_token = existing.encrypted_refresh_token if existing else None
     if credentials.refresh_token:
         encrypted_refresh_token = container.token_crypto.encrypt(credentials.refresh_token)

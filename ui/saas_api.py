@@ -125,9 +125,7 @@ class SaaSApiClient:
                 if detail.get("code") == "missing_required_scopes":
                     raise MissingGoogleScopesError(
                         purpose=str(detail.get("purpose") or ""),
-                        missing_scopes=[
-                            str(scope) for scope in detail.get("missing_scopes", [])
-                        ],
+                        missing_scopes=[str(scope) for scope in detail.get("missing_scopes", [])],
                         connect_url=str(detail.get("connect_url") or ""),
                     )
             response.raise_for_status()
