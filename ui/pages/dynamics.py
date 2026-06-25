@@ -34,7 +34,12 @@ from ui.components.page_shell import (
     render_page_header,
     render_state,
 )
-from ui.google_data import cache_token, get_form_structure, list_response_timestamps
+from ui.google_data import (
+    cache_token,
+    clear_form_cache,
+    get_form_structure,
+    list_response_timestamps,
+)
 
 log = get_logger(__name__)
 
@@ -117,6 +122,7 @@ def _cached_forecast(
 
 if action.refresh_clicked:
     clear_forms_cache()
+    clear_form_cache(form_id)
     _cached_structure.clear()
     _cached_timestamps.clear()
     _cached_forecast.clear()
