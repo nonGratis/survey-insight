@@ -23,7 +23,6 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from core.auth import credentials_from_dict
 from core.context_tables import (
     ContextTable,
     assign_tables_to_questions,
@@ -32,16 +31,13 @@ from core.context_tables import (
     scan_sheets_for_tables,
 )
 from core.forms_api import (
-    FormsApiError,
-    get_form_structure,
     get_linked_sheet_id,
-    list_form_responses,
     parse_question_types,
 )
 from core.logger import get_logger
 from core.report import render_pdf
 from core.reports import representativeness_report
-from core.sheets_api import SheetsApiError, fetch_all_grids
+from core.sheets_api import SheetsApiError
 from core.weighting import (
     RID_COLUMN,
     Dimension,
@@ -57,6 +53,12 @@ from ui.components.page_shell import (
     render_empty_state,
     render_error_state,
     render_page_header,
+)
+from ui.google_data import (
+    cache_token,
+    fetch_sheet_grids,
+    get_form_structure,
+    list_form_responses,
 )
 
 log = get_logger(__name__)
@@ -74,9 +76,7 @@ render_page_header(
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
 action = render_action_bar(
-    creds,
     refresh_scope="weighting",
     show_status=False,
 )
@@ -86,18 +86,18 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _creds_token: str) -> dict:
-    return get_form_structure(creds, form_id_)
+def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+    return get_form_structure(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Завантажую відповіді…")
-def _cached_responses(form_id_: str, _creds_token: str) -> list[dict]:
-    return list_form_responses(creds, form_id_)
+def _cached_responses(form_id_: str, _cache_token: str) -> list[dict]:
+    return list_form_responses(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Шукаю таблиці популяції у Sheet…")
-def _cached_grids(sheet_id_: str, _creds_token: str) -> dict[str, list[list[str]]]:
-    return fetch_all_grids(creds, sheet_id_)
+def _cached_grids(sheet_id_: str, _cache_token: str) -> dict[str, list[list[str]]]:
+    return fetch_sheet_grids(sheet_id_)
 
 
 if action.refresh_clicked:
@@ -109,9 +109,9 @@ if action.refresh_clicked:
 
 
 try:
-    structure = _cached_structure(form_id, creds.token or "")
-    responses = _cached_responses(form_id, creds.token or "")
-except FormsApiError as exc:
+    structure = _cached_structure(form_id, cache_token())
+    responses = _cached_responses(form_id, cache_token())
+except Exception as exc:  # noqa: BLE001
     log.exception("ui_weighting_load_failed", extra={"form_id": form_id})
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
@@ -194,9 +194,9 @@ sheet_id = get_linked_sheet_id(structure)
 auto_tables: list[ContextTable] = []
 if sheet_id:
     try:
-        grids = _cached_grids(sheet_id, creds.token or "")
+        grids = _cached_grids(sheet_id, cache_token())
         auto_tables = scan_sheets_for_tables(grids)
-    except SheetsApiError as exc:
+    except (RuntimeError, SheetsApiError) as exc:
         log.warning("ui_weighting_sheet_scan_failed", extra={"sheet_id": sheet_id})
         st.warning(f"Не вдалося просканувати Sheet (зважування лише з CSV): {exc}")
 

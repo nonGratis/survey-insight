@@ -12,7 +12,6 @@ from datetime import datetime
 import numpy as np
 import streamlit as st
 
-from core.auth import credentials_from_dict
 from core.charts_timeline import forecast_window_axis_ranges, plot_timeline_with_forecast
 from core.detection import Changepoint
 from core.forecast import (
@@ -22,12 +21,7 @@ from core.forecast import (
     detect_test_responses,
     forecast_current_wave,
 )
-from core.forms_api import (
-    FormsApiError,
-    get_form_structure,
-    get_linked_sheet_id,
-    list_response_timestamps,
-)
+from core.forms_api import get_linked_sheet_id
 from core.logger import get_logger
 from core.timeline import build_timeline_from_timestamps
 from ui.components.action_bar import ActionBarStatus, render_action_bar, render_action_status
@@ -40,6 +34,7 @@ from ui.components.page_shell import (
     render_page_header,
     render_state,
 )
+from ui.google_data import cache_token, get_form_structure, list_response_timestamps
 
 log = get_logger(__name__)
 
@@ -48,10 +43,7 @@ render_page_header("Динаміка")
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
-
 action = render_action_bar(
-    creds,
     refresh_scope="dynamics",
     show_status=False,
 )
@@ -61,13 +53,13 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _creds_token: str) -> dict:
-    return get_form_structure(creds, form_id_)
+def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+    return get_form_structure(form_id_)
 
 
 try:
-    structure = _cached_structure(form_id, creds.token or "")
-except FormsApiError as exc:
+    structure = _cached_structure(form_id, cache_token())
+except Exception as exc:  # noqa: BLE001
     log.exception("ui_dynamics_get_structure_failed", extra={"form_id": form_id})
     render_error_state("Не вдалося завантажити форму.", details=str(exc))
     st.stop()
@@ -88,9 +80,9 @@ if not sheet_id:
 
 
 @st.cache_data(ttl=60, show_spinner="Завантажую відповіді…")
-def _cached_timestamps(form_id_: str, _creds_token: str) -> list[datetime]:
+def _cached_timestamps(form_id_: str, _cache_token: str) -> list[datetime]:
     """Forms API timestamps, кешовано на 60s за access_token+form_id."""
-    return list_response_timestamps(creds, form_id_)
+    return list_response_timestamps(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Обчислюю прогноз…")
@@ -180,11 +172,11 @@ def _render_forecast_details(
 
 
 try:
-    timestamps = _cached_timestamps(form_id, creds.token or "")
-except FormsApiError as exc:
+    timestamps = _cached_timestamps(form_id, cache_token())
+except Exception as exc:  # noqa: BLE001
     log.exception(
         "ui_dynamics_list_timestamps_failed",
-        extra={"form_id": form_id, "status": exc.status},
+        extra={"form_id": form_id, "error_code": type(exc).__name__},
     )
     render_error_state("Не вдалося отримати timestamps відповідей.", details=str(exc))
     st.stop()
