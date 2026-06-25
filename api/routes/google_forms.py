@@ -52,6 +52,18 @@ class ResponseStatsResponse(BaseModel):
     last_response: str | None = None
 
 
+class ResponseTimestampsResponse(BaseModel):
+    timestamps: list[str]
+
+
+class CatalogFormRow(BaseModel):
+    status: str
+    error_code: str | None = None
+    form: FormListItem
+    summary: FormSummaryResponse | None = None
+    response_stats: ResponseStatsResponse | None = None
+
+
 @router.get("/google/access", response_model=GoogleAccessResponse)
 def check_google_access(
     request: Request,
@@ -75,6 +87,25 @@ def list_forms(
         ]
     except FormsApiError as exc:
         raise google_http_exception(exc) from exc
+
+
+@router.get("/forms/catalog", response_model=list[CatalogFormRow])
+def read_forms_catalog(
+    request: Request,
+    session: Annotated[Session, Depends(require_session)],
+) -> list[CatalogFormRow]:
+    creds = require_google_credentials(request, session, purpose="forms")
+    try:
+        forms = [
+            FormListItem.model_validate(item) for item in _forms_client(request).list_forms(creds)
+        ]
+    except FormsApiError as exc:
+        raise google_http_exception(exc) from exc
+
+    rows: list[CatalogFormRow] = []
+    for form in forms:
+        rows.append(_catalog_row(request, creds, form))
+    return rows
 
 
 @router.get("/forms/{form_id}/summary", response_model=FormSummaryResponse)
@@ -102,6 +133,21 @@ def read_form_response_stats(
     try:
         return ResponseStatsResponse.model_validate(
             _forms_client(request).get_response_stats(creds, form_id)
+        )
+    except FormsApiError as exc:
+        raise google_http_exception(exc) from exc
+
+
+@router.get("/forms/{form_id}/response-timestamps", response_model=ResponseTimestampsResponse)
+def read_form_response_timestamps(
+    form_id: str,
+    request: Request,
+    session: Annotated[Session, Depends(require_session)],
+) -> ResponseTimestampsResponse:
+    creds = require_google_credentials(request, session, purpose="forms")
+    try:
+        return ResponseTimestampsResponse(
+            timestamps=list(_forms_client(request).list_response_timestamps(creds, form_id))
         )
     except FormsApiError as exc:
         raise google_http_exception(exc) from exc
@@ -179,6 +225,35 @@ def google_http_exception(exc: FormsApiError) -> HTTPException:
 
 def _forms_client(request: Request) -> GoogleFormsClient:
     return request.app.state.google_forms_client
+
+
+def _catalog_row(request: Request, creds: Any, form: FormListItem) -> CatalogFormRow:
+    try:
+        summary = FormSummaryResponse.model_validate(
+            _forms_client(request).get_form_summary(creds, form.id)
+        )
+        stats = ResponseStatsResponse.model_validate(
+            _forms_client(request).get_response_stats(creds, form.id)
+        )
+    except FormsApiError as exc:
+        return CatalogFormRow(
+            status=_catalog_status(exc),
+            error_code="google_forms_error",
+            form=form,
+        )
+    return CatalogFormRow(status="ok", form=form, summary=summary, response_stats=stats)
+
+
+def _catalog_status(exc: FormsApiError) -> str:
+    if exc.status in {401, 403}:
+        return "no_access"
+    if exc.status == 404:
+        return "deleted"
+    if exc.status == 429:
+        return "rate_limited"
+    if exc.status == 400:
+        return "unsupported"
+    return "api_error"
 
 
 def _missing_scopes(container: SaaSContainer, user_id: str, purpose: str) -> tuple[str, ...]:
