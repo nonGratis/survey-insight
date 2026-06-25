@@ -34,6 +34,9 @@ class GoogleFormsApiClient:
             "last_response": _format_timestamp(timestamps[-1]) if timestamps else None,
         }
 
+    def list_response_timestamps(self, creds: Credentials, form_id: str) -> list[str]:
+        return [_format_timestamp(item) for item in list_response_timestamps(creds, form_id)]
+
     def get_form_structure(self, creds: Credentials, form_id: str) -> dict[str, Any]:
         return get_form_structure(creds, form_id)
 

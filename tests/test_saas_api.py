@@ -101,6 +101,10 @@ class _FakeGoogleFormsClient:
             "last_response": "2026-06-01T10:05:00",
         }
 
+    def list_response_timestamps(self, creds: Credentials, form_id: str) -> list[str]:
+        assert form_id == "form_1"
+        return ["2026-06-01T10:00:00", "2026-06-01T10:05:00"]
+
     def get_form_structure(self, creds: Credentials, form_id: str) -> dict:
         assert form_id == "form_1"
         return {"formId": form_id, "info": {"title": "Admissions poll"}, "items": []}
@@ -122,6 +126,29 @@ class _FakeGoogleSheetsClient:
                 "population": {"FICT": 120, "IPSA": 80},
             }
         ]
+
+
+class _PartiallyFailingGoogleFormsClient(_FakeGoogleFormsClient):
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        return [
+            {
+                "id": "form_1",
+                "name": "Admissions poll",
+                "owner_email": "owner@example.com",
+            },
+            {
+                "id": "form_deleted",
+                "name": "Deleted poll",
+                "owner_email": "owner@example.com",
+            },
+        ]
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        if form_id == "form_deleted":
+            from core.forms_api import FormsApiError
+
+            raise FormsApiError("deleted", status=404)
+        return super().get_form_summary(creds, form_id)
 
 
 def _test_container() -> SaaSContainer:
@@ -274,6 +301,7 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
     forms = client.get("/v1/forms")
     summary = client.get("/v1/forms/form_1/summary")
     stats = client.get("/v1/forms/form_1/response-stats")
+    timestamps = client.get("/v1/forms/form_1/response-timestamps")
     structure = client.get("/v1/forms/form_1/structure")
     responses = client.get("/v1/forms/form_1/responses")
 
@@ -282,6 +310,8 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
     assert forms.json()[0]["id"] == "form_1"
     assert summary.json()["questions_count"] == 5
     assert stats.json()["total"] == 2
+    assert timestamps.json() == {"timestamps": ["2026-06-01T10:00:00", "2026-06-01T10:05:00"]}
+    assert "answers" not in str(timestamps.json())
     assert structure.json()["formId"] == "form_1"
     assert responses.json()[0]["responseId"] == "r1"
 
@@ -291,6 +321,28 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
     assert "access-token" not in combined_payload
     assert "refresh-token" not in combined_payload
     assert getattr(container.artifacts, "pdfs", {}) == {}
+
+
+def test_forms_catalog_returns_partial_row_failures() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(
+        create_api_app(container, google_forms_client=_PartiallyFailingGoogleFormsClient())
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/forms/catalog")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["summary"]["questions_count"] == 5
+    assert rows[0]["response_stats"]["total"] == 2
+    assert rows[1]["form"]["id"] == "form_deleted"
+    assert rows[1]["status"] == "deleted"
+    assert rows[1]["summary"] is None
+    assert rows[1]["response_stats"] is None
 
 
 def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
