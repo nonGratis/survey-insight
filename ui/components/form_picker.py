@@ -6,7 +6,7 @@ import streamlit as st
 from google.oauth2.credentials import Credentials
 
 from core.forms_api import list_user_forms
-from ui.google_data import is_saas_mode, list_forms_for_picker
+from ui.google_data import google_data_client_for_session, is_saas_mode
 
 FORM_KEY = "global_form_id"
 FORM_WIDGET_PREFIX = "global_form_select"
@@ -21,7 +21,7 @@ def _fetch_forms(_creds: Credentials, _token: str) -> list[dict]:
 @st.cache_data(ttl=120, show_spinner="Завантажую список форм...")
 def _fetch_forms_saas(_session_id: str) -> list[dict]:
     """Return user's forms through the SaaS API."""
-    return list_forms_for_picker()
+    return google_data_client_for_session(_session_id).list_forms_for_picker()
 
 
 def fetch_forms(creds: Credentials | None = None) -> list[dict]:

@@ -31,7 +31,7 @@ from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
-from ui.google_data import cache_token, get_form_summary, get_response_stats, list_catalog_forms
+from ui.google_data import cache_token, google_data_client, list_catalog_forms
 
 log = get_logger(__name__)
 
@@ -260,11 +260,15 @@ def _table_with_enrichment() -> None:
     """Один chunk enrichment'у + рендер таблиці. Тікає кожні 2с."""
     enrichments = st.session_state["form_enrichments"]
     stats = st.session_state["form_response_stats"]
+    data = google_data_client()
 
     pending = [f for f in forms_meta if f.id not in enrichments]
     if pending:
         chunk = pending[:DEFAULT_MAX_WORKERS]
-        enrich_results = parallel_map(lambda f: get_form_summary(f.id), chunk)
+        enrich_results = parallel_map(
+            lambda f: data.get_form_summary(f.id),
+            chunk,
+        )
         stat_targets: list[str] = []
         for form, result in enrich_results:
             if isinstance(result, Exception):
@@ -276,7 +280,7 @@ def _table_with_enrichment() -> None:
 
         if stat_targets:
             stat_results = parallel_map(
-                get_response_stats,
+                data.get_response_stats,
                 stat_targets,
             )
             for form_id, stat_result in stat_results:
