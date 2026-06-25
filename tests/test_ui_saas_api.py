@@ -146,6 +146,14 @@ def test_forms_client_methods_send_session_cookie() -> None:
             "/v1/forms/form_1/response-stats": {"total": 2},
             "/v1/forms/form_1/structure": {"formId": "form_1"},
             "/v1/forms/form_1/responses": [{"responseId": "r1"}],
+            "/v1/sheets/sheet_1/population-tables": [
+                {
+                    "source": "Population",
+                    "label_header": "Faculty",
+                    "count_header": "N",
+                    "population": {"FICT": 120},
+                }
+            ],
         }
         return httpx.Response(200, json=payloads[request.url.path])
 
@@ -159,10 +167,16 @@ def test_forms_client_methods_send_session_cookie() -> None:
     assert client.get_response_stats("raw-session-id", "form_1")["total"] == 2
     assert client.get_form_structure("raw-session-id", "form_1")["formId"] == "form_1"
     assert client.list_form_responses("raw-session-id", "form_1")[0]["responseId"] == "r1"
+    assert client.list_population_tables(
+        "raw-session-id",
+        "sheet_1",
+        next_url="https://app.example.com/weighting",
+    )[0]["population"] == {"FICT": 120}
     assert seen_paths == [
         "/v1/forms",
         "/v1/forms/form_1/summary",
         "/v1/forms/form_1/response-stats",
         "/v1/forms/form_1/structure",
         "/v1/forms/form_1/responses",
+        "/v1/sheets/sheet_1/population-tables",
     ]

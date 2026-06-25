@@ -13,6 +13,7 @@ from typing import Any
 import streamlit as st
 
 from core.auth import credentials_from_dict
+from core.context_tables import ContextTable, scan_sheets_for_tables
 from core.forms_api import (
     get_form_structure as local_get_form_structure,
 )
@@ -111,10 +112,22 @@ def list_response_timestamps(form_id: str) -> list[datetime]:
     return timestamps
 
 
-def fetch_sheet_grids(sheet_id: str) -> dict[str, list[list[str]]]:
+def scan_population_tables(sheet_id: str) -> list[ContextTable]:
     if is_saas_mode():
-        raise RuntimeError("SaaS Sheets access is not implemented yet.")
-    return local_fetch_all_grids(_local_credentials(), sheet_id)
+        return [
+            ContextTable(
+                source=str(item.get("source") or ""),
+                label_header=str(item.get("label_header") or ""),
+                count_header=str(item.get("count_header") or ""),
+                population={str(k): int(v) for k, v in dict(item.get("population") or {}).items()},
+            )
+            for item in _client().list_population_tables(
+                _session_id(),
+                sheet_id,
+                next_url=_next_url(),
+            )
+        ]
+    return scan_sheets_for_tables(local_fetch_all_grids(_local_credentials(), sheet_id))
 
 
 @st.cache_resource
@@ -127,6 +140,11 @@ def _session_id() -> str:
     if not isinstance(session_id, str) or not session_id:
         raise RuntimeError("SaaS session is missing.")
     return session_id
+
+
+def _next_url() -> str:
+    app_base = os.environ.get("APP_BASE_URL", "").rstrip("/")
+    return f"{app_base}/" if app_base else "/"
 
 
 def _local_credentials():

@@ -28,7 +28,6 @@ from core.context_tables import (
     assign_tables_to_questions,
     match_population,
     parse_population_csv,
-    scan_sheets_for_tables,
 )
 from core.forms_api import (
     get_linked_sheet_id,
@@ -56,10 +55,11 @@ from ui.components.page_shell import (
 )
 from ui.google_data import (
     cache_token,
-    fetch_sheet_grids,
     get_form_structure,
     list_form_responses,
+    scan_population_tables,
 )
+from ui.saas_api import MissingGoogleScopesError
 
 log = get_logger(__name__)
 
@@ -96,15 +96,15 @@ def _cached_responses(form_id_: str, _cache_token: str) -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner="Шукаю таблиці популяції у Sheet…")
-def _cached_grids(sheet_id_: str, _cache_token: str) -> dict[str, list[list[str]]]:
-    return fetch_sheet_grids(sheet_id_)
+def _cached_population_tables(sheet_id_: str, _cache_token: str) -> list[ContextTable]:
+    return scan_population_tables(sheet_id_)
 
 
 if action.refresh_clicked:
     clear_forms_cache()
     _cached_structure.clear()
     _cached_responses.clear()
-    _cached_grids.clear()
+    _cached_population_tables.clear()
     st.rerun()
 
 
@@ -194,9 +194,11 @@ sheet_id = get_linked_sheet_id(structure)
 auto_tables: list[ContextTable] = []
 if sheet_id:
     try:
-        grids = _cached_grids(sheet_id, cache_token())
-        auto_tables = scan_sheets_for_tables(grids)
-    except (RuntimeError, SheetsApiError) as exc:
+        auto_tables = _cached_population_tables(sheet_id, cache_token())
+    except MissingGoogleScopesError as exc:
+        st.warning("Для автоматичного пошуку таблиць популяції потрібен доступ до Google Sheets.")
+        st.link_button("Підключити Google Sheets", exc.connect_url, type="primary")
+    except SheetsApiError as exc:
         log.warning("ui_weighting_sheet_scan_failed", extra={"sheet_id": sheet_id})
         st.warning(f"Не вдалося просканувати Sheet (зважування лише з CSV): {exc}")
 

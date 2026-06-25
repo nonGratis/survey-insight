@@ -117,5 +117,11 @@ class GoogleFormsClient(Protocol):
     ) -> Sequence[Mapping[str, object]]: ...
 
 
+class GoogleSheetsClient(Protocol):
+    def scan_population_tables(
+        self, creds: Credentials, sheet_id: str
+    ) -> Sequence[Mapping[str, object]]: ...
+
+
 class AuditLog(Protocol):
     def record(self, event: AuditEvent) -> None: ...

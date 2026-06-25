@@ -14,7 +14,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from core.context_tables import ContextTable, assign_tables_to_questions, scan_sheets_for_tables
+from core.context_tables import ContextTable, assign_tables_to_questions
 from core.crosstab import PairAssociation, association_scan, crosstab
 from core.crosstab_frame import answer_values
 from core.forecast import ForecastError, classify_form_type, forecast_current_wave
@@ -23,7 +23,7 @@ from core.report import Metric
 from core.sheets_api import SheetsApiError
 from core.timeline import build_timeline_from_timestamps
 from core.weighting import Dimension, WeightingResult, compute_weighting
-from ui.google_data import fetch_sheet_grids, list_response_timestamps
+from ui.google_data import list_response_timestamps, scan_population_tables
 
 _SHORT = 40  # обрізання довгих формулювань у таблиці зв'язків
 
@@ -52,7 +52,7 @@ def auto_weighting(structure: dict, responses: list[dict]) -> WeightingResult | 
     if not sheet_id:
         return None
     try:
-        tables = scan_sheets_for_tables(fetch_sheet_grids(sheet_id))
+        tables = scan_population_tables(sheet_id)
     except (RuntimeError, SheetsApiError):
         return None
     return weighting_from_tables(structure, responses, tables)
