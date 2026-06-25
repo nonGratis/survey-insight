@@ -26,7 +26,7 @@ from core.auth import (
     save_verifier,
 )
 from core.logger import get_logger, hash_email
-from ui.saas_api import SaaSApiClient, SaaSSession
+from ui.saas_api import MissingGoogleScopesError, SaaSApiClient, SaaSSession
 
 log = get_logger(__name__)
 
@@ -332,16 +332,32 @@ def render_login(
     return False
 
 
-def ensure_api_access() -> bool:
-    """Gate pages that still use direct Google API credentials."""
+def ensure_api_access(purpose: str = "forms") -> bool:
+    """Gate pages that need Google API data."""
     if _saas_auth_enabled():
         if not ensure_login_state():
             return False
-        st.info(
-            "Production-вхід працює. Ця сторінка ще очікує міграцію читання "
-            "Google Forms у SaaS API, щоб Streamlit не тримав OAuth-токени."
-        )
-        return False
+        session_id = st.session_state.get("saas_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return False
+        try:
+            _saas_client(_api_base_url()).check_google_access(
+                session_id,
+                purpose=purpose,
+                next_url=f"{_app_base_url()}/",
+            )
+        except MissingGoogleScopesError as exc:
+            st.warning(
+                "Цій сторінці потрібен доступ до Google Forms. "
+                "Натисни кнопку нижче, щоб додати дозвіл через захищений SaaS API."
+            )
+            st.link_button("Підключити Google Forms", exc.connect_url, type="primary")
+            return False
+        except httpx.HTTPError as exc:
+            log.exception("saas_google_access_check_failed")
+            st.error(f"Не вдалося перевірити доступ до Google API: {exc}")
+            return False
+        return True
 
     creds_dict = st.session_state.get("credentials")
     if has_api_scopes(creds_dict):
