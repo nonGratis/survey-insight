@@ -251,6 +251,7 @@ form_questions = parse_question_types(structure)
 QUESTION_MODES = ["Відповіді", "Крос-таби"]
 mode = render_mode_switch("Режим аналізу", QUESTION_MODES, key="questions_mode")
 
+
 def _load_responses_or_stop() -> list[dict]:
     try:
         return _cached_responses(form_id, cache_token())

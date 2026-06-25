@@ -70,7 +70,9 @@ def list_forms(
 ) -> list[FormListItem]:
     creds = require_google_credentials(request, session, purpose="forms")
     try:
-        return [FormListItem.model_validate(item) for item in _forms_client(request).list_forms(creds)]
+        return [
+            FormListItem.model_validate(item) for item in _forms_client(request).list_forms(creds)
+        ]
     except FormsApiError as exc:
         raise google_http_exception(exc) from exc
 
