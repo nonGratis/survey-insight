@@ -19,7 +19,6 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from core.context_tables import scan_sheets_for_tables
 from core.crosstab import (
     ASSOCIATION_FILTER_MODES,
     IMPORTANT_EFFECT_THRESHOLD,
@@ -64,10 +63,10 @@ from ui.components.page_shell import (
 )
 from ui.google_data import (
     cache_token,
-    fetch_sheet_grids,
     get_form_structure,
     is_saas_mode,
     list_form_responses,
+    scan_population_tables,
 )
 from ui.report_data import weighting_from_tables
 
@@ -118,7 +117,7 @@ def _auto_weights(form: dict, responses: list[dict]) -> list[float] | None:
     if not sheet_id:
         return None
     try:
-        tables = scan_sheets_for_tables(_cached_grids(sheet_id, cache_token()))
+        tables = _cached_population_tables(sheet_id, cache_token())
     except SheetsApiError:
         return None
     result = weighting_from_tables(form, responses, tables)
@@ -227,15 +226,15 @@ def _cached_responses(form_id_: str, _cache_token: str) -> list[dict]:
 
 
 @st.cache_data(ttl=300, show_spinner="Шукаю таблиці популяції у Sheet…")
-def _cached_grids(sheet_id_: str, _cache_token: str) -> dict[str, list[list[str]]]:
-    return fetch_sheet_grids(sheet_id_)
+def _cached_population_tables(sheet_id_: str, _cache_token: str):
+    return scan_population_tables(sheet_id_)
 
 
 if action.refresh_clicked:
     clear_forms_cache()
     _cached_structure.clear()
     _cached_responses.clear()
-    _cached_grids.clear()
+    _cached_population_tables.clear()
     st.rerun()
 
 

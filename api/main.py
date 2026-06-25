@@ -25,14 +25,16 @@ from api.dependencies import (
     require_user as _require_user,
 )
 from api.routes.google_forms import router as google_forms_router
+from api.routes.google_sheets import router as google_sheets_router
 from core.logger import get_logger
 from core.saas.adapters.google_forms import GoogleFormsApiClient
 from core.saas.adapters.google_oauth import GoogleOAuthClient, GoogleOAuthWebClient
+from core.saas.adapters.google_sheets import GoogleSheetsApiClient
 from core.saas.container import SaaSContainer
 from core.saas.errors import AuthError, InvalidSession, QuotaExceeded
 from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import OAuthAccount, Plan, Quota, ReportJob, Session, User, UserStatus
-from core.saas.ports import GoogleFormsClient
+from core.saas.ports import GoogleFormsClient, GoogleSheetsClient
 from core.saas.security import hash_secret, utcnow
 
 log = get_logger(__name__)
@@ -80,6 +82,7 @@ def create_api_app(
     container: SaaSContainer | None = None,
     oauth_client: GoogleOAuthClient | None = None,
     google_forms_client: GoogleFormsClient | None = None,
+    google_sheets_client: GoogleSheetsClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Survey Insight API", version="0.1.0")
     app.state.container = container or SaaSContainer.from_settings()
@@ -88,7 +91,9 @@ def create_api_app(
         api_base_url=app.state.container.settings.api_base_url,
     )
     app.state.google_forms_client = google_forms_client or GoogleFormsApiClient()
+    app.state.google_sheets_client = google_sheets_client or GoogleSheetsApiClient()
     app.include_router(google_forms_router)
+    app.include_router(google_sheets_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:

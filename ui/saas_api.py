@@ -110,6 +110,22 @@ class SaaSApiClient:
     def list_form_responses(self, session_id: str, form_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/responses"))
 
+    def list_population_tables(
+        self,
+        session_id: str,
+        sheet_id: str,
+        *,
+        next_url: str = "/",
+    ) -> list[dict[str, Any]]:
+        return list(
+            self._request_with_session(
+                session_id,
+                "GET",
+                f"/v1/sheets/{sheet_id}/population-tables",
+                params={"next_url": next_url},
+            )
+        )
+
     def _request_with_session(
         self,
         session_id: str,

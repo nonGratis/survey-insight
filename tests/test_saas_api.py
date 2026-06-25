@@ -8,7 +8,7 @@ from google.oauth2.credentials import Credentials
 
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
-from core.saas.google_scopes import FORM_SCOPES
+from core.saas.google_scopes import FORM_SCOPES, SHEETS_SCOPES
 from core.saas.inmemory import InMemoryTaskQueue
 from core.saas.models import OAuthAccount, Plan, Quota, User, UserStatus
 from core.saas.settings import load_saas_settings
@@ -110,6 +110,20 @@ class _FakeGoogleFormsClient:
         return [{"responseId": "r1", "answers": {"q1": {"textAnswers": {"answers": []}}}}]
 
 
+class _FakeGoogleSheetsClient:
+    def scan_population_tables(self, creds: Credentials, sheet_id: str) -> list[dict]:
+        assert creds.token == "access-token"
+        assert sheet_id == "sheet_1"
+        return [
+            {
+                "source": "Population",
+                "label_header": "Faculty",
+                "count_header": "N",
+                "population": {"FICT": 120, "IPSA": 80},
+            }
+        ]
+
+
 def _test_container() -> SaaSContainer:
     return SaaSContainer.in_memory(
         load_saas_settings(
@@ -143,14 +157,19 @@ def _seed_user_session(container: SaaSContainer) -> str:
     return container.session_service.create(user_id=user.id, now=NOW).session_id
 
 
-def _seed_google_grant(container: SaaSContainer, user_id: str = "user_1") -> None:
+def _seed_google_grant(
+    container: SaaSContainer,
+    user_id: str = "user_1",
+    *,
+    scopes: tuple[str, ...] = FORM_SCOPES,
+) -> None:
     container.tokens.save(
         OAuthAccount(
             user_id=user_id,
             provider="google",
             google_sub="google-sub-1",
             email="owner@example.com",
-            scopes=FORM_SCOPES,
+            scopes=scopes,
             encrypted_access_token=container.token_crypto.encrypt("access-token"),
             encrypted_refresh_token=container.token_crypto.encrypt("refresh-token"),
             token_expiry=datetime.now(UTC) + timedelta(hours=1),
@@ -272,6 +291,49 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
     assert "access-token" not in combined_payload
     assert "refresh-token" not in combined_payload
     assert getattr(container.artifacts, "pdfs", {}) == {}
+
+
+def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=FORM_SCOPES)
+    client = TestClient(create_api_app(container, google_sheets_client=_FakeGoogleSheetsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get(
+        "/v1/sheets/sheet_1/population-tables",
+        params={"next_url": "https://app.example.com/weighting"},
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "missing_required_scopes"
+    assert detail["purpose"] == "sheets"
+    assert "https://www.googleapis.com/auth/spreadsheets.readonly" in detail["missing_scopes"]
+    assert "purpose=sheets" in detail["connect_url"]
+
+
+def test_sheets_population_tables_return_only_detected_tables_without_tokens() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=SHEETS_SCOPES)
+    client = TestClient(create_api_app(container, google_sheets_client=_FakeGoogleSheetsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/sheets/sheet_1/population-tables")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "source": "Population",
+            "label_header": "Faculty",
+            "count_header": "N",
+            "population": {"FICT": 120, "IPSA": 80},
+        }
+    ]
+    combined_payload = str(response.json())
+    assert "access-token" not in combined_payload
+    assert "refresh-token" not in combined_payload
 
 
 def test_google_oauth_callback_creates_cookie_session_and_encrypted_tokens() -> None:
