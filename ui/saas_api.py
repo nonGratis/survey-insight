@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
 
+from core.logger import get_logger
+
 SESSION_COOKIE_NAME = "session_id"
+log = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,9 @@ class SaaSApiClient:
     def list_forms(self, session_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", "/v1/forms"))
 
+    def list_forms_catalog(self, session_id: str) -> list[dict[str, Any]]:
+        return list(self._request_with_session(session_id, "GET", "/v1/forms/catalog"))
+
     def get_form_summary(self, session_id: str, form_id: str) -> dict[str, Any]:
         return dict(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/summary"))
 
@@ -109,6 +116,14 @@ class SaaSApiClient:
 
     def list_form_responses(self, session_id: str, form_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/responses"))
+
+    def list_response_timestamps(self, session_id: str, form_id: str) -> list[str]:
+        payload = self._request_with_session(
+            session_id,
+            "GET",
+            f"/v1/forms/{form_id}/response-timestamps",
+        )
+        return [str(item) for item in payload.get("timestamps", [])]
 
     def list_population_tables(
         self,
@@ -133,19 +148,49 @@ class SaaSApiClient:
         path: str,
         **kwargs: Any,
     ) -> Any:
+        start = time.perf_counter()
+        status_code = 0
+        error_code = ""
         with self._client() as client:
             client.cookies.set(SESSION_COOKIE_NAME, session_id)
-            response = client.request(method, path, **kwargs)
-            if response.status_code == 403:
-                detail = _detail_payload(response)
-                if detail.get("code") == "missing_required_scopes":
-                    raise MissingGoogleScopesError(
-                        purpose=str(detail.get("purpose") or ""),
-                        missing_scopes=[str(scope) for scope in detail.get("missing_scopes", [])],
-                        connect_url=str(detail.get("connect_url") or ""),
-                    )
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = client.request(method, path, **kwargs)
+                status_code = response.status_code
+                if response.status_code == 403:
+                    detail = _detail_payload(response)
+                    if detail.get("code") == "missing_required_scopes":
+                        error_code = "missing_required_scopes"
+                        raise MissingGoogleScopesError(
+                            purpose=str(detail.get("purpose") or ""),
+                            missing_scopes=[
+                                str(scope) for scope in detail.get("missing_scopes", [])
+                            ],
+                            connect_url=str(detail.get("connect_url") or ""),
+                        )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                error_code = _error_code(exc.response) or type(exc).__name__
+                raise
+            except Exception as exc:
+                if not error_code:
+                    error_code = type(exc).__name__
+                raise
+            finally:
+                duration_ms = round((time.perf_counter() - start) * 1000, 1)
+                log.info(
+                    "ui_saas_api_request",
+                    extra={
+                        "method": method,
+                        "path": path,
+                        "status": status_code,
+                        "duration_ms": duration_ms,
+                        "error_code": error_code,
+                        "cache_hit": False,
+                        "cache_layer": "none",
+                    },
+                )
 
     def _client(self) -> httpx.Client:
         return httpx.Client(
@@ -183,3 +228,9 @@ def _detail_payload(response: httpx.Response) -> dict[str, Any]:
         return {}
     detail = payload.get("detail")
     return detail if isinstance(detail, dict) else {}
+
+
+def _error_code(response: httpx.Response) -> str:
+    detail = _detail_payload(response)
+    code = detail.get("code")
+    return str(code) if code else ""

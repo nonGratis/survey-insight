@@ -26,6 +26,8 @@ from core.auth import (
     save_verifier,
 )
 from core.logger import get_logger, hash_email
+from ui.data_access_cache import ACCESS_TTL_SECONDS, CacheKey, get_or_load, session_cache_key
+from ui.google_data import clear_google_data_cache
 from ui.saas_api import MissingGoogleScopesError, SaaSApiClient, SaaSSession
 
 log = get_logger(__name__)
@@ -276,6 +278,8 @@ def _render_logged_in(location: str = "sidebar") -> None:
                 )
             except httpx.HTTPError:
                 log.exception("saas_logout_failed")
+            if isinstance(session_id, str):
+                clear_google_data_cache(session_id=session_id)
             _clear_saas_session()
         else:
             st.session_state.pop("credentials", None)
@@ -341,10 +345,18 @@ def ensure_api_access(purpose: str = "forms") -> bool:
         if not isinstance(session_id, str) or not session_id:
             return False
         try:
-            _saas_client(_api_base_url()).check_google_access(
-                session_id,
-                purpose=purpose,
-                next_url=f"{_app_base_url()}/",
+            get_or_load(
+                CacheKey(
+                    session_key=session_cache_key(session_id),
+                    data_kind="access_check",
+                    purpose=purpose,
+                ),
+                ttl_seconds=ACCESS_TTL_SECONDS,
+                loader=lambda: _saas_client(_api_base_url()).check_google_access(
+                    session_id,
+                    purpose=purpose,
+                    next_url=f"{_app_base_url()}/",
+                ),
             )
         except MissingGoogleScopesError as exc:
             st.warning(
