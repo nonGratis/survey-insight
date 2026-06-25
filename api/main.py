@@ -24,6 +24,7 @@ from api.dependencies import (
 from api.dependencies import (
     require_user as _require_user,
 )
+from api.middleware import request_timing_middleware
 from api.routes.google_forms import router as google_forms_router
 from api.routes.google_sheets import router as google_sheets_router
 from core.logger import get_logger
@@ -85,6 +86,7 @@ def create_api_app(
     google_sheets_client: GoogleSheetsClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Survey Insight API", version="0.1.0")
+    app.middleware("http")(request_timing_middleware)
     app.state.container = container or SaaSContainer.from_settings()
     app.state.oauth_client = oauth_client or GoogleOAuthWebClient(
         client_config_json=app.state.container.settings.google_oauth_client_config_json,
