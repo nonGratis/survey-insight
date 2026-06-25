@@ -7,39 +7,35 @@ from datetime import timedelta
 from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
-from core.forms_api import FormsApiError
+from api.dependencies import (
+    SESSION_COOKIE_NAME,
+    SessionCookie,
+)
+from api.dependencies import (
+    get_container as _container,
+)
+from api.dependencies import (
+    require_session as _require_session,
+)
+from api.dependencies import (
+    require_user as _require_user,
+)
+from api.routes.google_forms import router as google_forms_router
 from core.logger import get_logger
 from core.saas.adapters.google_forms import GoogleFormsApiClient
 from core.saas.adapters.google_oauth import GoogleOAuthClient, GoogleOAuthWebClient
 from core.saas.container import SaaSContainer
-from core.saas.errors import AuthError, InvalidSession, MissingRequiredScopes, QuotaExceeded
-from core.saas.google_credentials import GoogleCredentialService
+from core.saas.errors import AuthError, InvalidSession, QuotaExceeded
+from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import OAuthAccount, Plan, Quota, ReportJob, Session, User, UserStatus
 from core.saas.ports import GoogleFormsClient
 from core.saas.security import hash_secret, utcnow
 
-SESSION_COOKIE_NAME = "session_id"
 log = get_logger(__name__)
-IDENTITY_SCOPES = (
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-)
-FORM_SCOPES = IDENTITY_SCOPES + (
-    "https://www.googleapis.com/auth/drive.metadata.readonly",
-    "https://www.googleapis.com/auth/forms.body.readonly",
-    "https://www.googleapis.com/auth/forms.responses.readonly",
-)
-SHEETS_SCOPES = FORM_SCOPES + ("https://www.googleapis.com/auth/spreadsheets.readonly",)
-OAUTH_PURPOSE_SCOPES = {
-    "identity": IDENTITY_SCOPES,
-    "forms": FORM_SCOPES,
-    "sheets": SHEETS_SCOPES,
-}
 DEFAULT_NEW_USER_QUOTA = Quota(monthly_report_limit=20, reports_used_this_month=0)
 
 
@@ -76,43 +72,8 @@ class ReportJobResponse(BaseModel):
     attempts: int
 
 
-class GoogleAccessResponse(BaseModel):
-    ok: bool
-    purpose: str
-
-
-class FormListItem(BaseModel):
-    id: str
-    name: str
-    owner_email: str | None = None
-    owner_name: str | None = None
-    created_time: str | None = None
-    modified_time: str | None = None
-    edit_url: str | None = None
-
-
-class FormSummaryResponse(BaseModel):
-    title: str
-    description: str
-    sections_count: int
-    questions_count: int
-    linked_sheet_id: str | None = None
-    is_published: bool | None = None
-    accepting_responses: bool | None = None
-
-
-class ResponseStatsResponse(BaseModel):
-    total: int
-    first_response: str | None = None
-    second_response: str | None = None
-    last_response: str | None = None
-
-
 class LoginTicketExchangeRequest(BaseModel):
     ticket: str = Field(min_length=1)
-
-
-SessionCookie = Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)]
 
 
 def create_api_app(
@@ -127,6 +88,7 @@ def create_api_app(
         api_base_url=app.state.container.settings.api_base_url,
     )
     app.state.google_forms_client = google_forms_client or GoogleFormsApiClient()
+    app.include_router(google_forms_router)
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
@@ -165,7 +127,7 @@ def create_api_app(
         purpose: Annotated[str, Query(pattern="^(identity|forms|sheets)$")] = "identity",
     ) -> RedirectResponse:
         container = _container(request)
-        scopes = _scopes_for_purpose(purpose)
+        scopes = scopes_for_purpose(purpose)
         state_secret = container.oauth_state_service.create(
             scopes=scopes,
             next_url=_safe_next_url(next_url, container.settings.app_base_url),
@@ -256,82 +218,6 @@ def create_api_app(
             session_id=session.session_id,
         )
 
-    @app.get("/v1/google/access", response_model=GoogleAccessResponse)
-    def check_google_access(
-        request: Request,
-        session: Annotated[Session, Depends(_require_session)],
-        purpose: Annotated[str, Query(pattern="^(forms|sheets)$")] = "forms",
-        next_url: Annotated[str, Query(max_length=2048)] = "/",
-    ) -> GoogleAccessResponse:
-        _require_google_credentials(request, session, purpose=purpose, next_url=next_url)
-        return GoogleAccessResponse(ok=True, purpose=purpose)
-
-    @app.get("/v1/forms", response_model=list[FormListItem])
-    def list_forms(
-        request: Request,
-        session: Annotated[Session, Depends(_require_session)],
-    ) -> list[FormListItem]:
-        creds = _require_google_credentials(request, session, purpose="forms")
-        try:
-            return [
-                FormListItem.model_validate(item)
-                for item in _google_forms_client(request).list_forms(creds)
-            ]
-        except FormsApiError as exc:
-            raise _google_http_exception(exc) from exc
-
-    @app.get("/v1/forms/{form_id}/summary", response_model=FormSummaryResponse)
-    def read_form_summary(
-        form_id: str,
-        request: Request,
-        session: Annotated[Session, Depends(_require_session)],
-    ) -> FormSummaryResponse:
-        creds = _require_google_credentials(request, session, purpose="forms")
-        try:
-            return FormSummaryResponse.model_validate(
-                _google_forms_client(request).get_form_summary(creds, form_id)
-            )
-        except FormsApiError as exc:
-            raise _google_http_exception(exc) from exc
-
-    @app.get("/v1/forms/{form_id}/response-stats", response_model=ResponseStatsResponse)
-    def read_form_response_stats(
-        form_id: str,
-        request: Request,
-        session: Annotated[Session, Depends(_require_session)],
-    ) -> ResponseStatsResponse:
-        creds = _require_google_credentials(request, session, purpose="forms")
-        try:
-            return ResponseStatsResponse.model_validate(
-                _google_forms_client(request).get_response_stats(creds, form_id)
-            )
-        except FormsApiError as exc:
-            raise _google_http_exception(exc) from exc
-
-    @app.get("/v1/forms/{form_id}/structure", response_model=dict[str, Any])
-    def read_form_structure(
-        form_id: str,
-        request: Request,
-        session: Annotated[Session, Depends(_require_session)],
-    ) -> dict[str, Any]:
-        creds = _require_google_credentials(request, session, purpose="forms")
-        try:
-            return dict(_google_forms_client(request).get_form_structure(creds, form_id))
-        except FormsApiError as exc:
-            raise _google_http_exception(exc) from exc
-
-    @app.get("/v1/forms/{form_id}/responses", response_model=list[dict[str, Any]])
-    def read_form_responses(
-        form_id: str,
-        request: Request,
-        session: Annotated[Session, Depends(_require_session)],
-    ) -> list[dict[str, Any]]:
-        creds = _require_google_credentials(request, session, purpose="forms")
-        try:
-            return [dict(item) for item in _google_forms_client(request).list_responses(creds, form_id)]
-        except FormsApiError as exc:
-            raise _google_http_exception(exc) from exc
-
     @app.post(
         "/v1/reports/jobs", response_model=ReportJobResponse, status_code=status.HTTP_202_ACCEPTED
     )
@@ -378,93 +264,8 @@ def create_api_app(
     return app
 
 
-def _container(request: Request) -> SaaSContainer:
-    return request.app.state.container
-
-
 def _oauth_client(request: Request) -> GoogleOAuthClient:
     return request.app.state.oauth_client
-
-
-def _google_forms_client(request: Request) -> GoogleFormsClient:
-    return request.app.state.google_forms_client
-
-
-def _scopes_for_purpose(purpose: str) -> tuple[str, ...]:
-    try:
-        return OAUTH_PURPOSE_SCOPES[purpose]
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid_purpose") from exc
-
-
-def _require_google_credentials(
-    request: Request,
-    session: Session,
-    *,
-    purpose: str,
-    next_url: str = "/",
-) -> Any:
-    container = _container(request)
-    try:
-        return GoogleCredentialService(
-            tokens=container.tokens,
-            token_crypto=container.token_crypto,
-            client_config_json=container.settings.google_oauth_client_config_json,
-        ).credentials_for_user(
-            session.user_id,
-            required_scopes=_scopes_for_purpose(purpose),
-        )
-    except MissingRequiredScopes as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "missing_required_scopes",
-                "purpose": purpose,
-                "missing_scopes": list(_missing_scopes(container, session.user_id, purpose)),
-                "connect_url": _google_connect_url(request, purpose=purpose, next_url=next_url),
-            },
-        ) from exc
-
-
-def _missing_scopes(container: SaaSContainer, user_id: str, purpose: str) -> tuple[str, ...]:
-    account = container.tokens.get_by_user(user_id)
-    granted = set(account.scopes if account else ())
-    return tuple(scope for scope in _scopes_for_purpose(purpose) if scope not in granted)
-
-
-def _google_connect_url(request: Request, *, purpose: str, next_url: str) -> str:
-    container = _container(request)
-    safe_next = _safe_next_url(next_url, container.settings.app_base_url)
-    query = urlencode({"purpose": purpose, "next_url": safe_next})
-    return f"{container.settings.api_base_url.rstrip('/')}/v1/auth/google/start?{query}"
-
-
-def _google_http_exception(exc: FormsApiError) -> HTTPException:
-    if exc.status in {401, 403}:
-        code = status.HTTP_403_FORBIDDEN
-    elif exc.status == 404:
-        code = status.HTTP_404_NOT_FOUND
-    else:
-        code = status.HTTP_503_SERVICE_UNAVAILABLE if exc.status in {429, 500, 502, 503, 504} else 502
-    return HTTPException(status_code=code, detail={"code": "google_forms_error", "message": str(exc)})
-
-
-def _require_session(request: Request, session_id: SessionCookie = None) -> Session:
-    if not session_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_session")
-    try:
-        return _container(request).session_service.validate(session_id)
-    except InvalidSession as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_session"
-        ) from exc
-
-
-def _require_user(container: SaaSContainer, user_id: str) -> User:
-    user = container.users.get(user_id)
-    if user is None or user.status != UserStatus.ACTIVE:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_user")
-    return user
 
 
 def _job_response(job: ReportJob) -> ReportJobResponse:
