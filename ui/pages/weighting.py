@@ -55,6 +55,8 @@ from ui.components.page_shell import (
 )
 from ui.google_data import (
     cache_token,
+    clear_form_cache,
+    clear_responses_cache,
     get_form_structure,
     list_form_responses,
     scan_population_tables,
@@ -102,6 +104,8 @@ def _cached_population_tables(sheet_id_: str, _cache_token: str) -> list[Context
 
 if action.refresh_clicked:
     clear_forms_cache()
+    clear_form_cache(form_id)
+    clear_responses_cache(form_id)
     _cached_structure.clear()
     _cached_responses.clear()
     _cached_population_tables.clear()

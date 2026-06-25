@@ -12,7 +12,7 @@ from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
-from ui.google_data import cache_token, get_form_structure
+from ui.google_data import cache_token, clear_form_cache, get_form_structure
 
 log = get_logger(__name__)
 
@@ -37,6 +37,7 @@ def _cached_structure(form_id_: str, _cache_token: str) -> dict:
 
 if action.refresh_clicked:
     clear_forms_cache()
+    clear_form_cache(form_id)
     _cached_structure.clear()
     st.rerun()
 

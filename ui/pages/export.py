@@ -34,7 +34,13 @@ from ui.components.page_shell import (
     render_error_state,
     render_page_header,
 )
-from ui.google_data import cache_token, get_form_structure, list_form_responses
+from ui.google_data import (
+    cache_token,
+    clear_form_cache,
+    clear_responses_cache,
+    get_form_structure,
+    list_form_responses,
+)
 from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, top_association_rows
 from ui.saas_api import MissingGoogleScopesError
 
@@ -86,6 +92,8 @@ def _weighting_config(form_id_: str) -> dict | None:
 
 if action.refresh_clicked:
     clear_forms_cache()
+    clear_form_cache(form_id)
+    clear_responses_cache(form_id)
     _load.clear()
     st.session_state.pop(f"report_pdf_{form_id}", None)
     st.rerun()

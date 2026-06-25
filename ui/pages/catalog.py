@@ -31,7 +31,12 @@ from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
-from ui.google_data import cache_token, google_data_client, list_catalog_forms
+from ui.google_data import (
+    cache_token,
+    clear_catalog_cache,
+    google_data_client,
+    list_catalog_snapshot,
+)
 
 log = get_logger(__name__)
 
@@ -80,13 +85,15 @@ if not ensure_api_access():
 
 
 @st.cache_data(ttl=900, show_spinner="Завантажую каталог форм…")
-def _cached_drive_list(_cache_token: str) -> list[FormDriveMeta]:
-    """Drive list форм, кешується на 15 хв за access_token."""
-    return list_catalog_forms()
+def _cached_catalog_snapshot(
+    _cache_token: str,
+) -> tuple[list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]]:
+    """Catalog snapshot; SaaS uses aggregate API, local mode keeps Drive list fallback."""
+    return list_catalog_snapshot()
 
 
 try:
-    forms_meta = _cached_drive_list(cache_token())
+    forms_meta, initial_enrichments, initial_stats = _cached_catalog_snapshot(cache_token())
 except Exception as exc:  # noqa: BLE001
     log.exception("ui_catalog_drive_list_failed", extra={"error_code": type(exc).__name__})
     render_error_state("Не вдалося завантажити каталог.", details=str(exc))
@@ -98,7 +105,8 @@ action = render_action_bar(
 )
 if action.refresh_clicked:
     clear_forms_cache()
-    _cached_drive_list.clear()
+    clear_catalog_cache()
+    _cached_catalog_snapshot.clear()
     st.session_state["form_enrichments"] = {}
     st.session_state["form_response_stats"] = {}
     st.rerun()
@@ -115,6 +123,8 @@ if not forms_meta:
 # Це різнить "ще не пробували" (ключ відсутній) від "пробували — failed" (None).
 st.session_state.setdefault("form_enrichments", {})
 st.session_state.setdefault("form_response_stats", {})
+st.session_state["form_enrichments"].update(initial_enrichments)
+st.session_state["form_response_stats"].update(initial_stats)
 
 
 def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
@@ -255,9 +265,8 @@ def _build_dataframe(
 filter_values = _render_table_filters(forms_meta)
 
 
-@st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
-def _table_with_enrichment() -> None:
-    """Один chunk enrichment'у + рендер таблиці. Тікає кожні 2с."""
+def _render_table_with_enrichment() -> None:
+    """One enrichment chunk plus table render."""
     enrichments = st.session_state["form_enrichments"]
     stats = st.session_state["form_response_stats"]
     data = google_data_client()
@@ -337,4 +346,12 @@ def _table_with_enrichment() -> None:
             st.rerun()
 
 
-_table_with_enrichment()
+@st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
+def _table_with_enrichment_fragment() -> None:
+    _render_table_with_enrichment()
+
+
+if any(f.id not in st.session_state["form_enrichments"] for f in forms_meta):
+    _table_with_enrichment_fragment()
+else:
+    _render_table_with_enrichment()
