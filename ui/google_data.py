@@ -95,30 +95,11 @@ class GoogleDataClient:
     def list_catalog_snapshot(
         self,
     ) -> tuple[list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]]:
-        if not is_saas_mode():
-            return local_list_catalog_forms(self._local_credentials()), {}, {}
-
-        session_id = _require_session_id(self.session_id)
-        rows = get_or_load(
-            _cache_key(session_id, "catalog_snapshot"),
-            ttl_seconds=CATALOG_TTL_SECONDS,
-            loader=lambda: _client().list_forms_catalog(session_id),
-        )
-        forms: list[FormDriveMeta] = []
-        enrichments: dict[str, FormEnrichment | None] = {}
-        stats: dict[str, ResponseStats] = {}
-        for row in rows:
-            form = _form_meta_from_catalog_row(row)
-            forms.append(form)
-            summary = row.get("summary")
-            if isinstance(summary, dict):
-                enrichments[form.id] = FormEnrichment(**summary)
-            else:
-                enrichments[form.id] = None
-            response_stats = row.get("response_stats")
-            if isinstance(response_stats, dict):
-                stats[form.id] = ResponseStats(**response_stats)
-        return forms, enrichments, stats
+        # Catalog initial render must stay fast: show Drive metadata first and let
+        # the page progressively enrich rows in chunks. The aggregate catalog API
+        # remains available for future bounded/server-side use, but it must not
+        # block the first Streamlit render.
+        return self.list_catalog_forms(), {}, {}
 
     def get_form_summary(self, form_id: str) -> FormEnrichment:
         if is_saas_mode():
@@ -295,7 +276,6 @@ def clear_catalog_cache(session_id: str | None = None) -> None:
     for kind in (
         "forms_list",
         "catalog_metadata",
-        "catalog_snapshot",
         "form_summary",
         "response_stats",
     ):
@@ -374,19 +354,6 @@ def _local_credentials():
     if not creds_dict:
         raise RuntimeError("Local Google credentials are missing.")
     return credentials_from_dict(creds_dict)
-
-
-def _form_meta_from_catalog_row(row: dict[str, Any]) -> FormDriveMeta:
-    form = dict(row.get("form") or {})
-    return FormDriveMeta(
-        id=str(form.get("id") or ""),
-        name=str(form.get("name") or ""),
-        owner_email=str(form.get("owner_email") or ""),
-        owner_name=str(form.get("owner_name") or ""),
-        created_time=str(form.get("created_time") or ""),
-        modified_time=str(form.get("modified_time") or ""),
-        edit_url=str(form.get("edit_url") or ""),
-    )
 
 
 def _format_timestamp(value: datetime) -> str:
