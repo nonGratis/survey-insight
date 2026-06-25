@@ -36,6 +36,7 @@ from ui.components.page_shell import (
 )
 from ui.google_data import cache_token, get_form_structure, list_form_responses
 from ui.report_data import auto_weighting, dynamics_metrics, report_subtitle, top_association_rows
+from ui.saas_api import MissingGoogleScopesError
 
 log = get_logger(__name__)
 
@@ -238,7 +239,12 @@ if generate_clicked:
         sections.append(descriptive_section(structure, responses, config))
     if inc_representativeness:
         with st.spinner("Рахую репрезентативність…"):
-            weighting = auto_weighting(structure, responses)
+            try:
+                weighting = auto_weighting(structure, responses)
+            except MissingGoogleScopesError as exc:
+                st.warning("Для секції репрезентативності потрібен доступ до Google Sheets.")
+                st.link_button("Підключити Google Sheets", exc.connect_url, type="primary")
+                weighting = None
         if weighting is not None:
             sections.append(representativeness_section(weighting))
         else:
