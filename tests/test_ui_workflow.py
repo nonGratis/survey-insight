@@ -119,6 +119,13 @@ def test_catalog_parallel_enrichment_uses_session_bound_data_client() -> None:
     assert "session_id=data_token" not in catalog
 
 
+def test_catalog_initial_load_uses_fast_snapshot_not_blocking_aggregate() -> None:
+    google_data = (ROOT / "ui/google_data.py").read_text(encoding="utf-8")
+    assert "Catalog initial render must stay fast" in google_data
+    assert "return self.list_catalog_forms(), {}, {}" in google_data
+    assert "list_forms_catalog(session_id)" not in google_data
+
+
 def test_catalog_table_uses_dynamic_min_max_height() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "TABLE_MIN_HEIGHT_PX = 360" in catalog
