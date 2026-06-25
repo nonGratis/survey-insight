@@ -6,7 +6,7 @@ import streamlit as st
 from google.oauth2.credentials import Credentials
 
 from core.forms_api import list_user_forms
-from ui.google_data import google_data_client_for_session, is_saas_mode
+from ui.google_data import clear_forms_list_cache, google_data_client_for_session, is_saas_mode
 
 FORM_KEY = "global_form_id"
 FORM_WIDGET_PREFIX = "global_form_select"
@@ -40,6 +40,7 @@ def clear_forms_cache() -> None:
     """Clear cached Drive forms list."""
     _fetch_forms.clear()
     _fetch_forms_saas.clear()
+    clear_forms_list_cache()
 
 
 def form_widget_key(scope: str) -> str:
