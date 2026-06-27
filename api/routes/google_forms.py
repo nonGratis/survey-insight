@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
 from typing import Annotated, Any
@@ -14,6 +16,7 @@ from pydantic import BaseModel
 from api.dependencies import get_container, require_session
 from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
 from core.forms_api import FormsApiError
+from core.logger import get_logger
 from core.saas.container import SaaSContainer
 from core.saas.errors import MissingRequiredScopes
 from core.saas.google_credentials import GoogleCredentialService
@@ -22,6 +25,7 @@ from core.saas.models import Session
 from core.saas.ports import GoogleFormsClient
 
 router = APIRouter(prefix="/v1", tags=["google-forms"])
+log = get_logger(__name__)
 
 CATALOG_SUMMARY_TTL_SECONDS = int(os.getenv("SI_API_CATALOG_SUMMARY_TTL_SECONDS", "600"))
 RESPONSE_STATS_TTL_SECONDS = int(os.getenv("SI_API_RESPONSE_STATS_TTL_SECONDS", "120"))
@@ -142,7 +146,8 @@ def enrich_forms_catalog(
 ) -> list[CatalogEnrichRow]:
     creds = require_google_credentials(request, session, purpose="forms")
     form_ids = _bounded_form_ids(body.form_ids)
-    return _catalog_enrich_rows_with_budget(
+    start = time.perf_counter()
+    rows = _catalog_enrich_rows_with_budget(
         request,
         creds,
         user_id=session.user_id,
@@ -150,6 +155,14 @@ def enrich_forms_catalog(
         include_summary=body.include_summary,
         include_stats=body.include_stats,
     )
+    _log_catalog_enrich_telemetry(
+        rows,
+        chunk_size=len(form_ids),
+        include_summary=body.include_summary,
+        include_stats=body.include_stats,
+        duration_ms=round((time.perf_counter() - start) * 1000, 1),
+    )
+    return rows
 
 
 @router.get("/forms/{form_id}/summary", response_model=FormSummaryResponse)
@@ -437,6 +450,35 @@ def _oldest_fetched_at(values: list[datetime]) -> str | None:
     if not values:
         return None
     return min(values).isoformat()
+
+
+def _log_catalog_enrich_telemetry(
+    rows: list[CatalogEnrichRow],
+    *,
+    chunk_size: int,
+    include_summary: bool,
+    include_stats: bool,
+    duration_ms: float,
+) -> None:
+    status_counts = Counter(row.status for row in rows)
+    log.info(
+        "forms_catalog_enrich_completed",
+        extra={
+            "chunk_size": chunk_size,
+            "row_count": len(rows),
+            "include_summary": include_summary,
+            "include_stats": include_stats,
+            "duration_ms": duration_ms,
+            "cache_hit_count": sum(1 for row in rows if row.cache_hit),
+            "timeout_count": status_counts.get("timeout", 0),
+            "api_error_count": status_counts.get("api_error", 0),
+            "rate_limited_count": status_counts.get("rate_limited", 0),
+            "no_access_count": status_counts.get("no_access", 0),
+            "deleted_count": status_counts.get("deleted", 0),
+            "unsupported_count": status_counts.get("unsupported", 0),
+            "ok_count": status_counts.get("ok", 0),
+        },
+    )
 
 
 def _catalog_status(exc: FormsApiError) -> str:

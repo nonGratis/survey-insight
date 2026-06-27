@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 from google.oauth2.credentials import Credentials
 
 import api.routes.google_forms as google_forms_routes
-from api.google_data_cache import clear_api_cache
+from api.google_data_cache import ApiCacheKey, clear_api_cache, get_or_load
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
 from core.saas.google_scopes import FORM_SCOPES, SHEETS_SCOPES
@@ -424,6 +425,53 @@ def test_forms_catalog_enrich_reuses_api_side_summary_and_stats_cache() -> None:
     assert rows[0]["fetched_at"]
     assert forms_client.summary_calls == 1
     assert forms_client.stats_calls == 1
+
+
+def test_forms_catalog_enrich_logs_aggregate_safe_telemetry(caplog) -> None:
+    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
+
+    google_forms_routes._log_catalog_enrich_telemetry(
+        [
+            google_forms_routes.CatalogEnrichRow(
+                form_id="raw-form-id-1",
+                status="ok",
+                cache_hit=True,
+            ),
+            google_forms_routes.CatalogEnrichRow(
+                form_id="raw-form-id-2",
+                status="timeout",
+                error_code="catalog_enrich_timeout",
+            ),
+        ],
+        chunk_size=2,
+        include_summary=True,
+        include_stats=True,
+        duration_ms=12.5,
+    )
+
+    record = next(r for r in caplog.records if r.message == "forms_catalog_enrich_completed")
+    assert record.chunk_size == 2
+    assert record.cache_hit_count == 1
+    assert record.timeout_count == 1
+    assert record.ok_count == 1
+    assert "raw-form-id" not in str(record.__dict__)
+
+
+def test_api_google_data_cache_logs_hashed_resource_id(caplog) -> None:
+    clear_api_cache()
+    caplog.set_level(logging.INFO, logger="api.google_data_cache")
+
+    result = get_or_load(
+        ApiCacheKey(user_id="user_1", data_kind="form_summary", resource_id="raw-form-id"),
+        ttl_seconds=60,
+        loader=lambda: "loaded",
+    )
+
+    assert result.value == "loaded"
+    record = next(r for r in caplog.records if r.message == "api_google_data_cache_access")
+    assert record.resource_hash
+    assert record.resource_hash != "raw-form-id"
+    assert "raw-form-id" not in str(record.__dict__)
 
 
 def test_forms_catalog_enrich_returns_timeout_rows_within_budget(monkeypatch) -> None:

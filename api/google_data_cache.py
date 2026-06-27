@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from collections.abc import Callable
@@ -79,6 +80,12 @@ def clear_api_cache() -> None:
         _CACHE.clear()
 
 
+def _hash_resource(resource_id: str) -> str:
+    if not resource_id:
+        return ""
+    return hashlib.sha256(resource_id.encode("utf-8")).hexdigest()[:16]
+
+
 def _log_cache_event(key: ApiCacheKey, *, cache_hit: bool) -> None:
     log.info(
         "api_google_data_cache_access",
@@ -86,6 +93,6 @@ def _log_cache_event(key: ApiCacheKey, *, cache_hit: bool) -> None:
             "cache_hit": cache_hit,
             "cache_layer": "api_google_data",
             "data_kind": key.data_kind,
-            "resource_id": key.resource_id,
+            "resource_hash": _hash_resource(key.resource_id),
         },
     )
