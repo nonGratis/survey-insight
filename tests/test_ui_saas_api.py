@@ -143,6 +143,14 @@ def test_forms_client_methods_send_session_cookie() -> None:
         payloads = {
             "/v1/forms": [{"id": "form_1", "name": "Survey"}],
             "/v1/forms/catalog": [{"status": "ok", "form": {"id": "form_1", "name": "Survey"}}],
+            "/v1/forms/catalog/enrich": [
+                {
+                    "form_id": "form_1",
+                    "status": "ok",
+                    "summary": {"title": "Survey", "questions_count": 1},
+                    "response_stats": {"total": 2},
+                }
+            ],
             "/v1/forms/form_1/summary": {"title": "Survey", "questions_count": 1},
             "/v1/forms/form_1/response-stats": {"total": 2},
             "/v1/forms/form_1/response-timestamps": {"timestamps": ["2026-06-01T10:00:00"]},
@@ -166,6 +174,7 @@ def test_forms_client_methods_send_session_cookie() -> None:
 
     assert client.list_forms("raw-session-id")[0]["id"] == "form_1"
     assert client.list_forms_catalog("raw-session-id")[0]["status"] == "ok"
+    assert client.enrich_forms_catalog("raw-session-id", ["form_1"])[0]["form_id"] == "form_1"
     assert client.get_form_summary("raw-session-id", "form_1")["title"] == "Survey"
     assert client.get_response_stats("raw-session-id", "form_1")["total"] == 2
     assert client.list_response_timestamps("raw-session-id", "form_1") == ["2026-06-01T10:00:00"]
@@ -179,6 +188,7 @@ def test_forms_client_methods_send_session_cookie() -> None:
     assert seen_paths == [
         "/v1/forms",
         "/v1/forms/catalog",
+        "/v1/forms/catalog/enrich",
         "/v1/forms/form_1/summary",
         "/v1/forms/form_1/response-stats",
         "/v1/forms/form_1/response-timestamps",

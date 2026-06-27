@@ -103,6 +103,27 @@ class SaaSApiClient:
     def list_forms_catalog(self, session_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", "/v1/forms/catalog"))
 
+    def enrich_forms_catalog(
+        self,
+        session_id: str,
+        form_ids: list[str],
+        *,
+        include_summary: bool = True,
+        include_stats: bool = True,
+    ) -> list[dict[str, Any]]:
+        return list(
+            self._request_with_session(
+                session_id,
+                "POST",
+                "/v1/forms/catalog/enrich",
+                json={
+                    "form_ids": form_ids,
+                    "include_summary": include_summary,
+                    "include_stats": include_stats,
+                },
+            )
+        )
+
     def get_form_summary(self, session_id: str, form_id: str) -> dict[str, Any]:
         return dict(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/summary"))
 

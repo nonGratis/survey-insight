@@ -345,6 +345,35 @@ def test_forms_catalog_returns_partial_row_failures() -> None:
     assert rows[1]["response_stats"] is None
 
 
+def test_forms_catalog_enrich_returns_chunk_rows_with_partial_failures() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(
+        create_api_app(container, google_forms_client=_PartiallyFailingGoogleFormsClient())
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.post(
+        "/v1/forms/catalog/enrich",
+        json={
+            "form_ids": ["form_1", "form_deleted"],
+            "include_summary": True,
+            "include_stats": True,
+        },
+    )
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows[0]["form_id"] == "form_1"
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["summary"]["questions_count"] == 5
+    assert rows[0]["response_stats"]["total"] == 2
+    assert rows[1]["form_id"] == "form_deleted"
+    assert rows[1]["status"] == "deleted"
+    assert rows[1]["error_code"] == "google_forms_summary_error"
+
+
 def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
     container = _test_container()
     session_id = _seed_user_session(container)

@@ -58,6 +58,15 @@ from ui.saas_api import SaaSApiClient
 
 
 @dataclass(frozen=True)
+class CatalogEnrichmentResult:
+    form_id: str
+    status: str
+    error_code: str | None = None
+    summary: FormEnrichment | None = None
+    response_stats: ResponseStats | None = None
+
+
+@dataclass(frozen=True)
 class GoogleDataClient:
     """Session-bound Google data facade for Streamlit pages.
 
@@ -130,6 +139,48 @@ class GoogleDataClient:
             second_response=_format_timestamp(timestamps[1]) if len(timestamps) >= 2 else None,
             last_response=_format_timestamp(timestamps[-1]) if timestamps else None,
         )
+
+    def enrich_catalog_forms(
+        self,
+        form_ids: list[str],
+        *,
+        include_summary: bool = True,
+        include_stats: bool = True,
+    ) -> list[CatalogEnrichmentResult]:
+        if is_saas_mode():
+            session_id = _require_session_id(self.session_id)
+            return [
+                _catalog_enrichment_from_payload(row)
+                for row in _client().enrich_forms_catalog(
+                    session_id,
+                    form_ids,
+                    include_summary=include_summary,
+                    include_stats=include_stats,
+                )
+            ]
+
+        results: list[CatalogEnrichmentResult] = []
+        for form_id in form_ids:
+            try:
+                results.append(
+                    CatalogEnrichmentResult(
+                        form_id=form_id,
+                        status="ok",
+                        summary=self.get_form_summary(form_id) if include_summary else None,
+                        response_stats=(
+                            self.get_response_stats(form_id) if include_stats else None
+                        ),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - keep catalog partial in local mode.
+                results.append(
+                    CatalogEnrichmentResult(
+                        form_id=form_id,
+                        status="api_error",
+                        error_code=type(exc).__name__,
+                    )
+                )
+        return results
 
     def get_form_structure(self, form_id: str) -> dict[str, Any]:
         if is_saas_mode():
@@ -245,6 +296,19 @@ def get_response_stats(form_id: str) -> ResponseStats:
     return google_data_client().get_response_stats(form_id)
 
 
+def enrich_catalog_forms(
+    form_ids: list[str],
+    *,
+    include_summary: bool = True,
+    include_stats: bool = True,
+) -> list[CatalogEnrichmentResult]:
+    return google_data_client().enrich_catalog_forms(
+        form_ids,
+        include_summary=include_summary,
+        include_stats=include_stats,
+    )
+
+
 def get_form_structure(form_id: str) -> dict[str, Any]:
     return google_data_client().get_form_structure(form_id)
 
@@ -358,3 +422,17 @@ def _local_credentials():
 
 def _format_timestamp(value: datetime) -> str:
     return value.isoformat(timespec="seconds")
+
+
+def _catalog_enrichment_from_payload(payload: dict[str, Any]) -> CatalogEnrichmentResult:
+    summary_payload = payload.get("summary")
+    stats_payload = payload.get("response_stats")
+    return CatalogEnrichmentResult(
+        form_id=str(payload.get("form_id") or ""),
+        status=str(payload.get("status") or "api_error"),
+        error_code=(
+            str(payload.get("error_code")) if payload.get("error_code") is not None else None
+        ),
+        summary=FormEnrichment(**summary_payload) if isinstance(summary_payload, dict) else None,
+        response_stats=ResponseStats(**stats_payload) if isinstance(stats_payload, dict) else None,
+    )

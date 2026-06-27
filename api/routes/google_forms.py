@@ -64,6 +64,20 @@ class CatalogFormRow(BaseModel):
     response_stats: ResponseStatsResponse | None = None
 
 
+class CatalogEnrichRequest(BaseModel):
+    form_ids: list[str]
+    include_summary: bool = True
+    include_stats: bool = True
+
+
+class CatalogEnrichRow(BaseModel):
+    form_id: str
+    status: str
+    error_code: str | None = None
+    summary: FormSummaryResponse | None = None
+    response_stats: ResponseStatsResponse | None = None
+
+
 @router.get("/google/access", response_model=GoogleAccessResponse)
 def check_google_access(
     request: Request,
@@ -105,6 +119,28 @@ def read_forms_catalog(
     rows: list[CatalogFormRow] = []
     for form in forms:
         rows.append(_catalog_row(request, creds, form))
+    return rows
+
+
+@router.post("/forms/catalog/enrich", response_model=list[CatalogEnrichRow])
+def enrich_forms_catalog(
+    body: CatalogEnrichRequest,
+    request: Request,
+    session: Annotated[Session, Depends(require_session)],
+) -> list[CatalogEnrichRow]:
+    creds = require_google_credentials(request, session, purpose="forms")
+    form_ids = _bounded_form_ids(body.form_ids)
+    rows: list[CatalogEnrichRow] = []
+    for form_id in form_ids:
+        rows.append(
+            _catalog_enrich_row(
+                request,
+                creds,
+                form_id,
+                include_summary=body.include_summary,
+                include_stats=body.include_stats,
+            )
+        )
     return rows
 
 
@@ -242,6 +278,65 @@ def _catalog_row(request: Request, creds: Any, form: FormListItem) -> CatalogFor
             form=form,
         )
     return CatalogFormRow(status="ok", form=form, summary=summary, response_stats=stats)
+
+
+def _catalog_enrich_row(
+    request: Request,
+    creds: Any,
+    form_id: str,
+    *,
+    include_summary: bool,
+    include_stats: bool,
+) -> CatalogEnrichRow:
+    summary: FormSummaryResponse | None = None
+    stats: ResponseStatsResponse | None = None
+    row_status = "ok"
+    error_code: str | None = None
+
+    if include_summary:
+        try:
+            summary = FormSummaryResponse.model_validate(
+                _forms_client(request).get_form_summary(creds, form_id)
+            )
+        except FormsApiError as exc:
+            return CatalogEnrichRow(
+                form_id=form_id,
+                status=_catalog_status(exc),
+                error_code="google_forms_summary_error",
+            )
+
+    if include_stats:
+        try:
+            stats = ResponseStatsResponse.model_validate(
+                _forms_client(request).get_response_stats(creds, form_id)
+            )
+        except FormsApiError as exc:
+            row_status = _catalog_status(exc)
+            error_code = "google_forms_stats_error"
+
+    return CatalogEnrichRow(
+        form_id=form_id,
+        status=row_status,
+        error_code=error_code,
+        summary=summary,
+        response_stats=stats,
+    )
+
+
+def _bounded_form_ids(form_ids: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for form_id in form_ids:
+        if form_id in seen:
+            continue
+        seen.add(form_id)
+        unique.append(form_id)
+    if len(unique) > 20:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="too_many_form_ids",
+        )
+    return unique
 
 
 def _catalog_status(exc: FormsApiError) -> str:
