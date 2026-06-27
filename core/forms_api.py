@@ -20,6 +20,7 @@ from core.logger import get_logger, log_call
 log = get_logger(__name__)
 
 FORM_MIME_TYPE = "application/vnd.google-apps.form"
+RESPONSE_TIMESTAMPS_FIELDS = "responses(createTime),nextPageToken"
 DEFAULT_FORMS_PAGE_SIZE = 50
 
 QuestionType = Literal[
@@ -146,7 +147,14 @@ def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]
                 logger=log,
             ):
                 resp = (
-                    service.forms().responses().list(formId=form_id, pageToken=page_token).execute()
+                    service.forms()
+                    .responses()
+                    .list(
+                        formId=form_id,
+                        pageToken=page_token,
+                        fields=RESPONSE_TIMESTAMPS_FIELDS,
+                    )
+                    .execute()
                 )
             for r in resp.get("responses", []):
                 ct = r.get("createTime")

@@ -30,6 +30,12 @@ DRIVE_FIELDS = (
 )
 DRIVE_PAGE_SIZE = 100  # Google API ceiling per page is 1000; 100 — баланс latency/calls.
 FORM_EDIT_URL_TEMPLATE = "https://docs.google.com/forms/d/{form_id}/edit"
+CATALOG_SUMMARY_FIELDS = (
+    "info(title,description),"
+    "items(pageBreakItem,questionItem/question/questionId),"
+    "linkedSheetId,"
+    "publishSettings/publishState(isPublished,isAcceptingResponses)"
+)
 
 
 @dataclass(frozen=True)
@@ -146,7 +152,7 @@ def enrich_form(creds: Credentials, form_id: str) -> FormEnrichment:
             form_id=form_id,
             logger=log,
         ):
-            form = service.forms().get(formId=form_id).execute()
+            form = service.forms().get(formId=form_id, fields=CATALOG_SUMMARY_FIELDS).execute()
     except HttpError as exc:
         raise FormsApiError(
             f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",
