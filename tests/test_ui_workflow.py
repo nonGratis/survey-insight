@@ -111,12 +111,22 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
     assert "ActionBarStatus(note=" not in catalog
 
 
-def test_catalog_parallel_enrichment_uses_session_bound_data_client() -> None:
+def test_catalog_enrichment_uses_chunk_data_client() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "data = google_data_client()" in catalog
-    assert "data.get_form_summary(f.id)" in catalog
-    assert "data.get_response_stats" in catalog
+    assert "data.enrich_catalog_forms(" in catalog
+    assert "data.get_form_summary(f.id)" not in catalog
+    assert "data.get_response_stats" not in catalog
+    assert "parallel_map" not in catalog
     assert "session_id=data_token" not in catalog
+
+
+def test_catalog_table_exposes_activity_columns() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert '"Activity"' in catalog
+    assert '"DaysNoResponse"' in catalog
+    assert 'TextColumn("Активність")' in catalog
+    assert 'NumberColumn("Днів без відповіді"' in catalog
 
 
 def test_catalog_initial_load_uses_fast_snapshot_not_blocking_aggregate() -> None:

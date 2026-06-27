@@ -24,7 +24,6 @@ from core.forms_catalog import (
     FormEnrichment,
     ResponseStats,
 )
-from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
 from ui.components.action_bar import render_action_bar
 from ui.components.auth_widget import ensure_api_access
@@ -41,6 +40,8 @@ from ui.google_data import (
 log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
+CATALOG_ENRICH_CHUNK_SIZE = 10
+ACTIVE_RECENT_DAYS = 7
 TABLE_HEADER_HEIGHT_PX = 38
 TABLE_ROW_HEIGHT_PX = 35
 TABLE_MIN_HEIGHT_PX = 360
@@ -64,6 +65,8 @@ ALL_COLUMNS = [
     "Accepting",
     "Total",
     "LastResponse",
+    "Activity",
+    "DaysNoResponse",
     "Modified",
     "Created",
     "SheetID",
@@ -77,6 +80,8 @@ DEFAULT_VISIBLE_COLUMNS = [
     "Accepting",
     "Total",
     "LastResponse",
+    "Activity",
+    "DaysNoResponse",
     "Modified",
 ]
 
@@ -227,6 +232,23 @@ def _table_height(row_count: int) -> int:
     return max(TABLE_MIN_HEIGHT_PX, min(TABLE_MAX_HEIGHT_PX, content_height))
 
 
+def _response_activity(stat: ResponseStats | None) -> tuple[str, int | None]:
+    if stat is None:
+        return "", None
+    if stat.total <= 0 or not stat.last_response:
+        return "Без відповідей", None
+
+    last_response = pd.to_datetime(stat.last_response, errors="coerce", utc=True)
+    if pd.isna(last_response):
+        return STATUS_UNKNOWN, None
+
+    delta = pd.Timestamp.now(tz=UTC) - last_response
+    days = max(int(delta.total_seconds() // 86400), 0)
+    if days <= ACTIVE_RECENT_DAYS:
+        return "Активна", days
+    return "Затухла", days
+
+
 def _build_dataframe(
     forms: list[FormDriveMeta],
     enrichments: dict[str, FormEnrichment | None],
@@ -237,6 +259,7 @@ def _build_dataframe(
     for f in forms:
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
+        activity, days_no_response = _response_activity(stat)
         row = {
             "FormID": f.id,
             "FormName": f.name,
@@ -248,6 +271,8 @@ def _build_dataframe(
             "Accepting": enr.accepting_responses if enr else None,
             "Total": stat.total if stat else None,
             "LastResponse": stat.last_response if stat else "",
+            "Activity": activity,
+            "DaysNoResponse": days_no_response,
             "Modified": f.modified_time,
             "Created": f.created_time,
             "SheetID": (enr.linked_sheet_id or "") if enr else "",
@@ -273,30 +298,37 @@ def _render_table_with_enrichment() -> None:
 
     pending = [f for f in forms_meta if f.id not in enrichments]
     if pending:
-        chunk = pending[:DEFAULT_MAX_WORKERS]
-        enrich_results = parallel_map(
-            lambda f: data.get_form_summary(f.id),
-            chunk,
-        )
-        stat_targets: list[str] = []
-        for form, result in enrich_results:
-            if isinstance(result, Exception):
-                enrichments[form.id] = None  # failed — не пробуємо знову
-                st.toast(f"⚠️ {form.name}: {result}", icon="⚠️")
-                continue
-            enrichments[form.id] = result
-            stat_targets.append(form.id)
-
-        if stat_targets:
-            stat_results = parallel_map(
-                data.get_response_stats,
-                stat_targets,
+        chunk = pending[:CATALOG_ENRICH_CHUNK_SIZE]
+        chunk_by_id = {form.id: form for form in chunk}
+        try:
+            enrich_results = data.enrich_catalog_forms(
+                list(chunk_by_id),
+                include_summary=True,
+                include_stats=True,
             )
-            for form_id, stat_result in stat_results:
-                if isinstance(stat_result, Exception):
-                    st.toast(f"⚠️ stats fetch: {stat_result}", icon="⚠️")
-                    continue
-                stats[form_id] = stat_result
+        except Exception as exc:  # noqa: BLE001
+            for form in chunk:
+                enrichments[form.id] = None  # failed — не пробуємо знову до ручного refresh
+            st.toast(f"⚠️ Не вдалося дозавантажити каталог: {exc}", icon="⚠️")
+        else:
+            returned_ids: set[str] = set()
+            for result in enrich_results:
+                returned_ids.add(result.form_id)
+                if result.summary is not None:
+                    enrichments[result.form_id] = result.summary
+                else:
+                    enrichments[result.form_id] = None
+                if result.response_stats is not None:
+                    stats[result.form_id] = result.response_stats
+                if result.status != "ok":
+                    form_name = chunk_by_id.get(result.form_id)
+                    label = form_name.name if form_name else result.form_id
+                    st.toast(f"⚠️ {label}: {result.status}", icon="⚠️")
+
+            for missing_id, form in chunk_by_id.items():
+                if missing_id not in returned_ids:
+                    enrichments[missing_id] = None
+                    st.toast(f"⚠️ {form.name}: no enrichment result", icon="⚠️")
 
     loaded = sum(1 for f in forms_meta if f.id in enrichments)
     total = len(forms_meta)
@@ -332,6 +364,8 @@ def _render_table_with_enrichment() -> None:
             "Accepting": st.column_config.TextColumn("Приймає"),
             "Total": st.column_config.NumberColumn("Відповідей", format="%d"),
             "LastResponse": st.column_config.TextColumn("Остання відповідь"),
+            "Activity": st.column_config.TextColumn("Активність"),
+            "DaysNoResponse": st.column_config.NumberColumn("Днів без відповіді", format="%d"),
             "Modified": st.column_config.DatetimeColumn("Змінено", format="DD.MM.YYYY HH:mm"),
             "Created": st.column_config.DatetimeColumn("Створено", format="DD.MM.YYYY HH:mm"),
             "SheetID": st.column_config.TextColumn("Sheet ID", width="small"),
