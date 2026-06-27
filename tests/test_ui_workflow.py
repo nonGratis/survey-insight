@@ -123,8 +123,12 @@ def test_catalog_enrichment_uses_chunk_data_client() -> None:
 
 def test_catalog_table_exposes_activity_columns() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert '"DataStatus"' in catalog
     assert '"Activity"' in catalog
     assert '"DaysNoResponse"' in catalog
+    assert '"UpdatedAgo"' in catalog
+    assert "form_data_status" in catalog
+    assert "form_data_fetched_at" in catalog
     assert 'TextColumn("Активність")' in catalog
     assert 'NumberColumn("Днів без відповіді"' in catalog
 

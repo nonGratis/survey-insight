@@ -64,6 +64,8 @@ class CatalogEnrichmentResult:
     error_code: str | None = None
     summary: FormEnrichment | None = None
     response_stats: ResponseStats | None = None
+    fetched_at: str | None = None
+    cache_hit: bool = False
 
 
 @dataclass(frozen=True)
@@ -435,4 +437,8 @@ def _catalog_enrichment_from_payload(payload: dict[str, Any]) -> CatalogEnrichme
         ),
         summary=FormEnrichment(**summary_payload) if isinstance(summary_payload, dict) else None,
         response_stats=ResponseStats(**stats_payload) if isinstance(stats_payload, dict) else None,
+        fetched_at=str(payload.get("fetched_at"))
+        if payload.get("fetched_at") is not None
+        else None,
+        cache_hit=bool(payload.get("cache_hit")),
     )
