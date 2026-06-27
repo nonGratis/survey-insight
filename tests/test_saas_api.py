@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 from google.oauth2.credentials import Credentials
 
+import api.routes.google_forms as google_forms_routes
+from api.google_data_cache import clear_api_cache
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
 from core.saas.google_scopes import FORM_SCOPES, SHEETS_SCOPES
@@ -149,6 +152,30 @@ class _PartiallyFailingGoogleFormsClient(_FakeGoogleFormsClient):
 
             raise FormsApiError("deleted", status=404)
         return super().get_form_summary(creds, form_id)
+
+
+class _CountingGoogleFormsClient(_FakeGoogleFormsClient):
+    def __init__(self) -> None:
+        self.summary_calls = 0
+        self.stats_calls = 0
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        self.summary_calls += 1
+        return super().get_form_summary(creds, form_id)
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        self.stats_calls += 1
+        return super().get_response_stats(creds, form_id)
+
+
+class _SlowGoogleFormsClient(_FakeGoogleFormsClient):
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        if form_id == "slow_form":
+            time.sleep(0.2)
+        return super().get_form_summary(creds, "form_1")
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        return super().get_response_stats(creds, "form_1")
 
 
 def _test_container() -> SaaSContainer:
@@ -346,6 +373,7 @@ def test_forms_catalog_returns_partial_row_failures() -> None:
 
 
 def test_forms_catalog_enrich_returns_chunk_rows_with_partial_failures() -> None:
+    clear_api_cache()
     container = _test_container()
     session_id = _seed_user_session(container)
     _seed_google_grant(container)
@@ -372,6 +400,60 @@ def test_forms_catalog_enrich_returns_chunk_rows_with_partial_failures() -> None
     assert rows[1]["form_id"] == "form_deleted"
     assert rows[1]["status"] == "deleted"
     assert rows[1]["error_code"] == "google_forms_summary_error"
+
+
+def test_forms_catalog_enrich_reuses_api_side_summary_and_stats_cache() -> None:
+    clear_api_cache()
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    forms_client = _CountingGoogleFormsClient()
+    client = TestClient(create_api_app(container, google_forms_client=forms_client))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    for _ in range(2):
+        response = client.post(
+            "/v1/forms/catalog/enrich",
+            json={"form_ids": ["form_1"], "include_summary": True, "include_stats": True},
+        )
+        assert response.status_code == 200
+
+    rows = response.json()
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["cache_hit"] is True
+    assert rows[0]["fetched_at"]
+    assert forms_client.summary_calls == 1
+    assert forms_client.stats_calls == 1
+
+
+def test_forms_catalog_enrich_returns_timeout_rows_within_budget(monkeypatch) -> None:
+    clear_api_cache()
+    monkeypatch.setattr(google_forms_routes, "CATALOG_ENRICH_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(google_forms_routes, "CATALOG_ENRICH_MAX_WORKERS", 1)
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(create_api_app(container, google_forms_client=_SlowGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.post(
+        "/v1/forms/catalog/enrich",
+        json={"form_ids": ["slow_form"], "include_summary": True, "include_stats": True},
+    )
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows == [
+        {
+            "form_id": "slow_form",
+            "status": "timeout",
+            "error_code": "catalog_enrich_timeout",
+            "summary": None,
+            "response_stats": None,
+            "fetched_at": None,
+            "cache_hit": False,
+        }
+    ]
 
 
 def test_sheets_population_tables_require_incremental_sheets_scope() -> None:

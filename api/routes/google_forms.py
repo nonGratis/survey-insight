@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor, wait
+from datetime import datetime
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -9,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from api.dependencies import get_container, require_session
+from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
 from core.forms_api import FormsApiError
 from core.saas.container import SaaSContainer
 from core.saas.errors import MissingRequiredScopes
@@ -18,6 +22,12 @@ from core.saas.models import Session
 from core.saas.ports import GoogleFormsClient
 
 router = APIRouter(prefix="/v1", tags=["google-forms"])
+
+CATALOG_SUMMARY_TTL_SECONDS = int(os.getenv("SI_API_CATALOG_SUMMARY_TTL_SECONDS", "600"))
+RESPONSE_STATS_TTL_SECONDS = int(os.getenv("SI_API_RESPONSE_STATS_TTL_SECONDS", "120"))
+CATALOG_ENRICH_MAX_IDS = int(os.getenv("SI_CATALOG_ENRICH_MAX_IDS", "20"))
+CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECONDS", "8"))
+CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "5"))
 
 
 class GoogleAccessResponse(BaseModel):
@@ -76,6 +86,8 @@ class CatalogEnrichRow(BaseModel):
     error_code: str | None = None
     summary: FormSummaryResponse | None = None
     response_stats: ResponseStatsResponse | None = None
+    fetched_at: str | None = None
+    cache_hit: bool = False
 
 
 @router.get("/google/access", response_model=GoogleAccessResponse)
@@ -118,7 +130,7 @@ def read_forms_catalog(
 
     rows: list[CatalogFormRow] = []
     for form in forms:
-        rows.append(_catalog_row(request, creds, form))
+        rows.append(_catalog_row(request, creds, session.user_id, form))
     return rows
 
 
@@ -130,18 +142,14 @@ def enrich_forms_catalog(
 ) -> list[CatalogEnrichRow]:
     creds = require_google_credentials(request, session, purpose="forms")
     form_ids = _bounded_form_ids(body.form_ids)
-    rows: list[CatalogEnrichRow] = []
-    for form_id in form_ids:
-        rows.append(
-            _catalog_enrich_row(
-                request,
-                creds,
-                form_id,
-                include_summary=body.include_summary,
-                include_stats=body.include_stats,
-            )
-        )
-    return rows
+    return _catalog_enrich_rows_with_budget(
+        request,
+        creds,
+        user_id=session.user_id,
+        form_ids=form_ids,
+        include_summary=body.include_summary,
+        include_stats=body.include_stats,
+    )
 
 
 @router.get("/forms/{form_id}/summary", response_model=FormSummaryResponse)
@@ -152,9 +160,7 @@ def read_form_summary(
 ) -> FormSummaryResponse:
     creds = require_google_credentials(request, session, purpose="forms")
     try:
-        return FormSummaryResponse.model_validate(
-            _forms_client(request).get_form_summary(creds, form_id)
-        )
+        return _cached_form_summary(request, creds, session.user_id, form_id).value
     except FormsApiError as exc:
         raise google_http_exception(exc) from exc
 
@@ -167,9 +173,7 @@ def read_form_response_stats(
 ) -> ResponseStatsResponse:
     creds = require_google_credentials(request, session, purpose="forms")
     try:
-        return ResponseStatsResponse.model_validate(
-            _forms_client(request).get_response_stats(creds, form_id)
-        )
+        return _cached_response_stats(request, creds, session.user_id, form_id).value
     except FormsApiError as exc:
         raise google_http_exception(exc) from exc
 
@@ -263,14 +267,15 @@ def _forms_client(request: Request) -> GoogleFormsClient:
     return request.app.state.google_forms_client
 
 
-def _catalog_row(request: Request, creds: Any, form: FormListItem) -> CatalogFormRow:
+def _catalog_row(
+    request: Request,
+    creds: Any,
+    user_id: str,
+    form: FormListItem,
+) -> CatalogFormRow:
     try:
-        summary = FormSummaryResponse.model_validate(
-            _forms_client(request).get_form_summary(creds, form.id)
-        )
-        stats = ResponseStatsResponse.model_validate(
-            _forms_client(request).get_response_stats(creds, form.id)
-        )
+        summary = _cached_form_summary(request, creds, user_id, form.id).value
+        stats = _cached_response_stats(request, creds, user_id, form.id).value
     except FormsApiError as exc:
         return CatalogFormRow(
             status=_catalog_status(exc),
@@ -280,9 +285,62 @@ def _catalog_row(request: Request, creds: Any, form: FormListItem) -> CatalogFor
     return CatalogFormRow(status="ok", form=form, summary=summary, response_stats=stats)
 
 
+def _catalog_enrich_rows_with_budget(
+    request: Request,
+    creds: Any,
+    *,
+    user_id: str,
+    form_ids: list[str],
+    include_summary: bool,
+    include_stats: bool,
+) -> list[CatalogEnrichRow]:
+    if not form_ids:
+        return []
+
+    workers = max(1, min(CATALOG_ENRICH_MAX_WORKERS, len(form_ids)))
+    executor = ThreadPoolExecutor(max_workers=workers)
+    futures = {
+        executor.submit(
+            _catalog_enrich_row,
+            request,
+            creds,
+            user_id,
+            form_id,
+            include_summary=include_summary,
+            include_stats=include_stats,
+        ): form_id
+        for form_id in form_ids
+    }
+    done, pending = wait(futures, timeout=CATALOG_ENRICH_TIMEOUT_SECONDS)
+    executor.shutdown(wait=False, cancel_futures=True)
+
+    rows_by_id: dict[str, CatalogEnrichRow] = {}
+    for future in done:
+        form_id = futures[future]
+        try:
+            rows_by_id[form_id] = future.result()
+        except Exception as exc:  # noqa: BLE001 - keep row-level failure contract.
+            rows_by_id[form_id] = CatalogEnrichRow(
+                form_id=form_id,
+                status="api_error",
+                error_code=type(exc).__name__,
+            )
+
+    for future in pending:
+        form_id = futures[future]
+        rows_by_id[form_id] = CatalogEnrichRow(
+            form_id=form_id,
+            status="timeout",
+            error_code="catalog_enrich_timeout",
+        )
+
+    return [rows_by_id[form_id] for form_id in form_ids]
+
+
 def _catalog_enrich_row(
     request: Request,
     creds: Any,
+    user_id: str,
     form_id: str,
     *,
     include_summary: bool,
@@ -290,14 +348,17 @@ def _catalog_enrich_row(
 ) -> CatalogEnrichRow:
     summary: FormSummaryResponse | None = None
     stats: ResponseStatsResponse | None = None
+    cache_hits: list[bool] = []
+    fetched_at_values: list[datetime] = []
     row_status = "ok"
     error_code: str | None = None
 
     if include_summary:
         try:
-            summary = FormSummaryResponse.model_validate(
-                _forms_client(request).get_form_summary(creds, form_id)
-            )
+            summary_result = _cached_form_summary(request, creds, user_id, form_id)
+            summary = summary_result.value
+            cache_hits.append(summary_result.cache_hit)
+            fetched_at_values.append(summary_result.fetched_at)
         except FormsApiError as exc:
             return CatalogEnrichRow(
                 form_id=form_id,
@@ -307,9 +368,10 @@ def _catalog_enrich_row(
 
     if include_stats:
         try:
-            stats = ResponseStatsResponse.model_validate(
-                _forms_client(request).get_response_stats(creds, form_id)
-            )
+            stats_result = _cached_response_stats(request, creds, user_id, form_id)
+            stats = stats_result.value
+            cache_hits.append(stats_result.cache_hit)
+            fetched_at_values.append(stats_result.fetched_at)
         except FormsApiError as exc:
             row_status = _catalog_status(exc)
             error_code = "google_forms_stats_error"
@@ -320,6 +382,8 @@ def _catalog_enrich_row(
         error_code=error_code,
         summary=summary,
         response_stats=stats,
+        fetched_at=_oldest_fetched_at(fetched_at_values),
+        cache_hit=bool(cache_hits) and all(cache_hits),
     )
 
 
@@ -331,12 +395,48 @@ def _bounded_form_ids(form_ids: list[str]) -> list[str]:
             continue
         seen.add(form_id)
         unique.append(form_id)
-    if len(unique) > 20:
+    if len(unique) > CATALOG_ENRICH_MAX_IDS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="too_many_form_ids",
         )
     return unique
+
+
+def _cached_form_summary(
+    request: Request,
+    creds: Any,
+    user_id: str,
+    form_id: str,
+) -> ApiCacheResult[FormSummaryResponse]:
+    return get_or_load(
+        ApiCacheKey(user_id=user_id, data_kind="form_summary", resource_id=form_id),
+        ttl_seconds=CATALOG_SUMMARY_TTL_SECONDS,
+        loader=lambda: FormSummaryResponse.model_validate(
+            _forms_client(request).get_form_summary(creds, form_id)
+        ),
+    )
+
+
+def _cached_response_stats(
+    request: Request,
+    creds: Any,
+    user_id: str,
+    form_id: str,
+) -> ApiCacheResult[ResponseStatsResponse]:
+    return get_or_load(
+        ApiCacheKey(user_id=user_id, data_kind="response_stats", resource_id=form_id),
+        ttl_seconds=RESPONSE_STATS_TTL_SECONDS,
+        loader=lambda: ResponseStatsResponse.model_validate(
+            _forms_client(request).get_response_stats(creds, form_id)
+        ),
+    )
+
+
+def _oldest_fetched_at(values: list[datetime]) -> str | None:
+    if not values:
+        return None
+    return min(values).isoformat()
 
 
 def _catalog_status(exc: FormsApiError) -> str:
