@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from api.dependencies import get_container, require_session
 from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
 from api.google_errors import google_http_exception as map_google_error
+from api.urls import safe_next_url
 from core.forms_api import FormsApiError
 from core.logger import get_logger
 from core.saas.container import SaaSContainer
@@ -518,18 +519,10 @@ def _missing_scopes(container: SaaSContainer, user_id: str, purpose: str) -> tup
 def google_connect_url(request: Request, *, purpose: str, next_url: str) -> str:
     container = get_container(request)
     app_base_url = container.settings.app_base_url
-    safe_next = _safe_next_url(next_url, app_base_url)
+    safe_next = safe_next_url(next_url, app_base_url)
     if safe_next.startswith("/") and app_base_url:
         # After consent the callback redirects to next_url; a bare path would
         # resolve against the API host instead of the web app.
         safe_next = app_base_url.rstrip("/") + safe_next
     query = urlencode({"purpose": purpose, "next_url": safe_next})
     return f"{container.settings.api_base_url.rstrip('/')}/v1/auth/google/start?{query}"
-
-
-def _safe_next_url(next_url: str, app_base_url: str) -> str:
-    if next_url.startswith("/"):
-        return next_url
-    if app_base_url and next_url.startswith(app_base_url.rstrip("/") + "/"):
-        return next_url
-    return "/"

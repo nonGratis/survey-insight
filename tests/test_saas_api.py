@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -700,6 +700,70 @@ def test_google_oauth_start_rejects_open_redirect_next_url() -> None:
     assert "login_ticket" in parse_qs(redirect.query)
 
 
+# next_url values that must never steer the post-login redirect, and the one-time
+# login ticket riding on it, anywhere but back into the app.
+UNSAFE_NEXT_URLS = [
+    pytest.param("https://evil.example/callback", id="foreign-url"),
+    pytest.param("http://evil.example/", id="foreign-http-url"),
+    pytest.param("javascript:alert(1)", id="javascript-scheme"),
+    pytest.param("data:text/html,x", id="data-scheme"),
+    pytest.param("https://app.example.com@evil.example/", id="app-host-as-userinfo"),
+    pytest.param("https://app.example.com.evil.example/", id="app-host-as-subdomain"),
+]
+
+_CALLBACK_URL = "https://api.example.com/v1/auth/google/callback"
+_FIRST_PARTY_HOSTS = {"api.example.com", "app.example.com"}
+_DROPPED_BY_BROWSERS = str.maketrans("", "", "\t\r\n")
+
+
+def _callback_location(next_url: str) -> str:
+    """Where the callback sends the browser after a login that asked for ``next_url``."""
+    oauth = _FakeOAuthClient()
+    client = TestClient(create_api_app(_test_container(), oauth_client=oauth))
+    client.get("/v1/auth/google/start", params={"next_url": next_url}, follow_redirects=False)
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 307
+    return callback.headers["location"]
+
+
+def _landing_host(location: str) -> str | None:
+    """Host a browser ends up on when the callback redirects it to ``location``.
+
+    Browsers drop tab/CR/LF from a URL and read "\\" as "/", so "/<TAB>/host" and
+    "/\\host" both mean "//host" to them although they look like local paths.
+    """
+    target = location.translate(_DROPPED_BY_BROWSERS).replace("\\", "/")
+    return urlsplit(urljoin(_CALLBACK_URL, target)).hostname
+
+
+@pytest.mark.parametrize("next_url", UNSAFE_NEXT_URLS)
+def test_oauth_callback_ignores_an_unsafe_next_url(next_url: str) -> None:
+    location = _callback_location(next_url)
+
+    assert _landing_host(location) in _FIRST_PARTY_HOSTS
+    assert location.startswith("/?login_ticket=")
+
+
+@pytest.mark.parametrize(
+    ("next_url", "landing"),
+    [
+        pytest.param("/", "/", id="root"),
+        pytest.param("/catalog", "/catalog", id="local-path"),
+        pytest.param(
+            "https://app.example.com/catalog", "https://app.example.com/catalog", id="app-url"
+        ),
+    ],
+)
+def test_oauth_callback_keeps_a_first_party_next_url(next_url: str, landing: str) -> None:
+    location = _callback_location(next_url)
+
+    assert location.startswith(f"{landing}?login_ticket=")
+
+
 def test_google_oauth_callback_redirects_to_web_on_internal_failure() -> None:
     container = SaaSContainer.in_memory(
         load_saas_settings(
@@ -1155,3 +1219,38 @@ def test_sign_in_after_consent_was_withdrawn_asks_to_connect_again() -> None:
     assert (
         client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is False
     )
+
+
+def _connect_url_next_url(next_url: str) -> str:
+    """The next_url the reconnect link hands to the OAuth start endpoint."""
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    payload = client.get(
+        "/v1/google/access",
+        params={"purpose": "forms", "next_url": next_url},
+    ).json()
+
+    return _next_url_of(payload["connect_url"])
+
+
+@pytest.mark.parametrize("next_url", UNSAFE_NEXT_URLS)
+def test_connect_url_ignores_an_unsafe_next_url(next_url: str) -> None:
+    assert _connect_url_next_url(next_url) == "https://app.example.com/"
+
+
+@pytest.mark.parametrize(
+    ("next_url", "expected"),
+    [
+        pytest.param("/", "https://app.example.com/", id="root"),
+        pytest.param("/catalog", "https://app.example.com/catalog", id="local-path"),
+        pytest.param(
+            "https://app.example.com/catalog", "https://app.example.com/catalog", id="app-url"
+        ),
+    ],
+)
+def test_connect_url_keeps_a_first_party_next_url(next_url: str, expected: str) -> None:
+    assert _connect_url_next_url(next_url) == expected
