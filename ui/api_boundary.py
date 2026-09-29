@@ -4,8 +4,9 @@ st.rerun() and st.stop() raise BaseException subclasses, so they pass through
 the pages' own ``except Exception`` blocks. That is what lets one decorator on
 the data facade replace a traceback with a proper state on every page.
 
-Scope errors (MissingGoogleScopesError) are intentionally not handled here:
-pages treat Sheets access as optional and degrade in place.
+Scope errors are handled only for Forms, the data every page needs: the user is
+offered the reconnect button instead of a raw 403. Sheets access is optional, so
+pages degrade in place and its scope errors pass through untouched.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from ui.saas_api import (
     ApiServerError,
     GoogleTokenRevokedError,
     GoogleUnavailableError,
+    MissingGoogleScopesError,
     SessionExpiredError,
 )
 
@@ -35,6 +37,16 @@ GOOGLE_UNAVAILABLE_MESSAGE = "Тимчасова проблема з Google API.
 
 
 def handle_api_errors(func: Callable[P, T]) -> Callable[P, T]:
+    """Guard a data call: session, Google, server and missing-Forms-scope failures."""
+    return _guarded(func, scope_errors=True)
+
+
+def handle_access_check_errors(func: Callable[P, T]) -> Callable[P, T]:
+    """Guard the access decision call, where missing scopes are the expected answer."""
+    return _guarded(func, scope_errors=False)
+
+
+def _guarded(func: Callable[P, T], *, scope_errors: bool) -> Callable[P, T]:
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         try:
@@ -52,6 +64,12 @@ def handle_api_errors(func: Callable[P, T]) -> Callable[P, T]:
             st.warning(GOOGLE_UNAVAILABLE_MESSAGE)
             st.stop()
             raise
+        except MissingGoogleScopesError as exc:
+            if not (scope_errors and exc.purpose == "forms" and _in_script_thread()):
+                raise
+            _offer_forms_reconnect(exc)
+            st.stop()
+            raise
         except ApiServerError as exc:
             if not _in_script_thread():
                 raise
@@ -65,6 +83,15 @@ def handle_api_errors(func: Callable[P, T]) -> Callable[P, T]:
             raise
 
     return wrapper
+
+
+def _offer_forms_reconnect(exc: MissingGoogleScopesError) -> None:
+    st.warning(
+        "Цій сторінці потрібен доступ до Google Forms. "
+        "Натисни кнопку нижче, щоб надати дозвіл через захищений SaaS API."
+    )
+    if exc.connect_url:
+        st.link_button("Підключити Google Forms", exc.connect_url, type="primary")
 
 
 def _in_script_thread() -> bool:

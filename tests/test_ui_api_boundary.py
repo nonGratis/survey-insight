@@ -24,13 +24,16 @@ class _RerunError(BaseException):
 
 @pytest.fixture
 def ui_calls(monkeypatch: pytest.MonkeyPatch) -> dict:
-    calls: dict = {"logout": 0, "warning": [], "error": []}
+    calls: dict = {"logout": 0, "warning": [], "error": [], "link": []}
     monkeypatch.setattr(boundary.st, "session_state", {"saas_session_id": "raw-sid"})
     monkeypatch.setattr(
         boundary, "_sign_out", lambda: calls.__setitem__("logout", calls["logout"] + 1)
     )
     monkeypatch.setattr(boundary.st, "warning", lambda msg, *a, **k: calls["warning"].append(msg))
     monkeypatch.setattr(boundary.st, "error", lambda msg, *a, **k: calls["error"].append(msg))
+    monkeypatch.setattr(
+        boundary.st, "link_button", lambda label, url, **k: calls["link"].append((label, url))
+    )
 
     def stop() -> None:
         raise _StopError
@@ -124,3 +127,53 @@ def test_every_google_data_facade_function_goes_through_the_boundary() -> None:
     ]
 
     assert unguarded == []
+
+
+def _forms_scope_error(
+    connect_url: str = "https://api.example.com/v1/auth/google/start",
+) -> Exception:
+    return MissingGoogleScopesError(purpose="forms", missing_scopes=[], connect_url=connect_url)
+
+
+def test_forms_scope_error_offers_reconnect_instead_of_a_traceback(ui_calls: dict) -> None:
+    """A token without the Forms scope must lead the user to grant it, not to a raw 403."""
+    with pytest.raises(_StopError):
+        _raising(_forms_scope_error())()
+
+    assert len(ui_calls["warning"]) == 1
+    assert ui_calls["link"] == [
+        ("Підключити Google Forms", "https://api.example.com/v1/auth/google/start")
+    ]
+    assert ui_calls["logout"] == 0
+
+
+def test_forms_scope_error_without_a_url_still_stops_with_a_message(ui_calls: dict) -> None:
+    with pytest.raises(_StopError):
+        _raising(_forms_scope_error(connect_url=""))()
+
+    assert len(ui_calls["warning"]) == 1
+    assert ui_calls["link"] == []
+
+
+def test_access_check_leaves_scope_errors_to_its_caller(ui_calls: dict) -> None:
+    """For the decision call a scope shortfall is the normal answer, not a failure."""
+
+    @boundary.handle_access_check_errors
+    def check() -> str:
+        raise _forms_scope_error()
+
+    with pytest.raises(MissingGoogleScopesError):
+        check()
+
+    assert ui_calls["link"] == []
+
+
+def test_access_check_still_signs_out_on_an_invalid_session(ui_calls: dict) -> None:
+    @boundary.handle_access_check_errors
+    def check() -> str:
+        raise SessionExpiredError("x")
+
+    with pytest.raises(_RerunError):
+        check()
+
+    assert ui_calls["logout"] == 1
