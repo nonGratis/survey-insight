@@ -95,7 +95,13 @@ class SaaSApiClient:
             "/v1/google/access",
             params={"purpose": purpose, "next_url": next_url},
         )
-        return GoogleAccess(ok=bool(response.get("ok")), purpose=str(response.get("purpose")))
+        if not response.get("has_access", response.get("ok")):
+            raise MissingGoogleScopesError(
+                purpose=str(response.get("purpose") or purpose),
+                missing_scopes=[str(scope) for scope in response.get("missing_scopes", [])],
+                connect_url=str(response.get("connect_url") or ""),
+            )
+        return GoogleAccess(ok=True, purpose=str(response.get("purpose")))
 
     def list_forms(self, session_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", "/v1/forms"))

@@ -88,7 +88,10 @@ def test_check_google_access_sends_session_cookie() -> None:
         assert request.url.path == "/v1/google/access"
         assert request.url.params["purpose"] == "forms"
         assert request.headers["cookie"] == f"{SESSION_COOKIE_NAME}=raw-session-id"
-        return httpx.Response(200, json={"ok": True, "purpose": "forms"})
+        return httpx.Response(
+            200,
+            json={"ok": True, "has_access": True, "purpose": "forms", "connect_url": None},
+        )
 
     client = SaaSApiClient(
         "https://api.example.com",
@@ -108,14 +111,13 @@ def test_check_google_access_sends_session_cookie() -> None:
 def test_check_google_access_raises_typed_missing_scope_error() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            403,
+            200,
             json={
-                "detail": {
-                    "code": "google_insufficient_scopes",
-                    "purpose": "forms",
-                    "missing_scopes": ["https://www.googleapis.com/auth/forms.body.readonly"],
-                    "connect_url": "https://api.example.com/v1/auth/google/start?purpose=forms",
-                }
+                "ok": False,
+                "has_access": False,
+                "purpose": "forms",
+                "missing_scopes": ["https://www.googleapis.com/auth/forms.body.readonly"],
+                "connect_url": "https://api.example.com/v1/auth/google/start?purpose=forms",
             },
         )
 

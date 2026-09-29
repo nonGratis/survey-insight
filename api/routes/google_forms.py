@@ -24,6 +24,7 @@ from core.saas.google_credentials import GoogleCredentialService
 from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import Session
 from core.saas.ports import GoogleFormsClient
+from core.saas.security import log_user_ref
 
 router = APIRouter(prefix="/v1", tags=["google-forms"])
 log = get_logger(__name__)
@@ -37,7 +38,10 @@ CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "5")
 
 class GoogleAccessResponse(BaseModel):
     ok: bool
+    has_access: bool
     purpose: str
+    missing_scopes: list[str] = []
+    connect_url: str | None = None
 
 
 class FormListItem(BaseModel):
@@ -102,8 +106,20 @@ def check_google_access(
     purpose: Annotated[str, Query(pattern="^(forms|sheets)$")] = "forms",
     next_url: Annotated[str, Query(max_length=2048)] = "/",
 ) -> GoogleAccessResponse:
-    require_google_credentials(request, session, purpose=purpose, next_url=next_url)
-    return GoogleAccessResponse(ok=True, purpose=purpose)
+    missing = _missing_scopes(get_container(request), session.user_id, purpose)
+    if not missing:
+        return GoogleAccessResponse(ok=True, has_access=True, purpose=purpose)
+    log.info(
+        "api_scope_gap",
+        extra={"user_id": log_user_ref(session.user_id), "missing": list(missing)},
+    )
+    return GoogleAccessResponse(
+        ok=False,
+        has_access=False,
+        purpose=purpose,
+        missing_scopes=list(missing),
+        connect_url=_google_connect_url(request, purpose=purpose, next_url=next_url),
+    )
 
 
 @router.get("/forms", response_model=list[FormListItem])

@@ -284,9 +284,10 @@ def test_api_report_job_requires_session_and_enqueues_with_hashed_form_id() -> N
     assert report.form_id_hash != "form_raw"
 
 
-def test_google_access_returns_connect_url_when_forms_scopes_missing() -> None:
+def test_google_access_reports_no_access_with_connect_url_when_forms_scopes_missing() -> None:
     container = _test_container()
     session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
     client = TestClient(create_api_app(container))
     client.cookies.set(SESSION_COOKIE_NAME, session_id)
 
@@ -295,14 +296,58 @@ def test_google_access_returns_connect_url_when_forms_scopes_missing() -> None:
         params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
     )
 
-    assert response.status_code == 403
-    detail = response.json()["detail"]
-    assert detail["code"] == "google_insufficient_scopes"
-    assert detail["action"] == "reconnect_forms_required"
-    assert detail["purpose"] == "forms"
-    assert "https://www.googleapis.com/auth/forms.responses.readonly" in detail["missing_scopes"]
-    assert detail["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
-    assert "purpose=forms" in detail["connect_url"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_access"] is False
+    assert payload["ok"] is False
+    assert payload["purpose"] == "forms"
+    assert "https://www.googleapis.com/auth/forms.responses.readonly" in payload["missing_scopes"]
+    assert payload["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
+    assert "purpose=forms" in payload["connect_url"]
+
+
+def test_google_access_without_any_oauth_record_reports_no_access() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/google/access", params={"purpose": "forms"})
+
+    assert response.status_code == 200
+    assert response.json()["has_access"] is False
+
+
+def test_google_access_is_a_scope_decision_and_never_refreshes_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    container.tokens.save(
+        replace(
+            container.tokens.get_by_user("user_1"),
+            token_expiry=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise AssertionError("decision endpoint must not call Google")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/google/access", params={"purpose": "forms"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "has_access": True,
+        "purpose": "forms",
+        "missing_scopes": [],
+        "connect_url": None,
+    }
 
 
 def test_google_auth_start_supports_incremental_forms_purpose() -> None:
@@ -337,7 +382,7 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
     structure = client.get("/v1/forms/form_1/structure")
     responses = client.get("/v1/forms/form_1/responses")
 
-    assert access.json() == {"ok": True, "purpose": "forms"}
+    assert access.json()["has_access"] is True
     assert forms.status_code == 200
     assert forms.json()[0]["id"] == "form_1"
     assert summary.json()["questions_count"] == 5
