@@ -822,3 +822,19 @@ def test_google_404_stays_404() -> None:
     client, _ = _forms_client_raising(FormsApiError("gone", status=404))
 
     assert client.get("/v1/forms").status_code == 404
+
+
+def test_logout_clears_firestore_session() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    assert client.get("/v1/session").json()["authenticated"] is True
+
+    response = client.post("/v1/auth/logout")
+
+    assert response.status_code == 200
+    stale = TestClient(create_api_app(container))
+    stale.cookies.set(SESSION_COOKIE_NAME, session_id)
+    assert stale.get("/v1/session").json() == {"authenticated": False}
+    assert stale.get("/v1/forms").status_code == 401
