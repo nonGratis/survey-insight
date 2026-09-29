@@ -50,3 +50,54 @@ def test_every_user_data_cache_is_keyed_by_identity() -> None:
         and not any(arg.arg in IDENTITY_NAMES for arg in fn.args.args)
     ]
     assert unkeyed == []
+
+
+def _saas_state(monkeypatch, state: dict) -> None:
+    import ui.google_data as google_data
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("API_BASE_URL", "https://api.example.com")
+    monkeypatch.setattr(google_data.st, "session_state", state)
+
+
+def test_cache_key_isolation(monkeypatch) -> None:
+    from ui.google_data import cache_token
+
+    _saas_state(monkeypatch, {"saas_session_id": "sid", "user": {"id": "user_a"}})
+    token_a = cache_token()
+    _saas_state(monkeypatch, {"saas_session_id": "sid", "user": {"id": "user_b"}})
+    token_b = cache_token()
+
+    assert token_a != token_b
+
+
+def test_cache_token_is_stable_for_the_same_session_and_user(monkeypatch) -> None:
+    from ui.google_data import cache_token
+
+    state = {"saas_session_id": "sid", "user": {"id": "user_a"}}
+    _saas_state(monkeypatch, state)
+
+    assert cache_token() == cache_token()
+
+
+def test_cache_token_never_contains_raw_identifiers(monkeypatch) -> None:
+    from ui.google_data import cache_token
+
+    _saas_state(
+        monkeypatch,
+        {"saas_session_id": "raw-session", "user": {"id": "user_a", "email": "a@example.com"}},
+    )
+
+    token = cache_token()
+
+    assert "raw-session" not in token
+    assert "user_a" not in token
+    assert "a@example.com" not in token
+
+
+def test_anonymous_state_never_reuses_a_cache_entry(monkeypatch) -> None:
+    from ui.google_data import cache_token
+
+    _saas_state(monkeypatch, {"saas_session_id": "sid"})
+
+    assert cache_token() != cache_token()

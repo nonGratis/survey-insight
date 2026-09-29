@@ -7,6 +7,7 @@ credential path for developer convenience.
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -270,8 +271,20 @@ def google_data_client_for_session(session_id: str) -> GoogleDataClient:
 
 
 def cache_token() -> str:
+    """Return the per-user, per-login key that partitions Streamlit caches.
+
+    Unauthenticated state gets a fresh key on every call, so nothing is ever
+    served from cache before the user identity is known.
+    """
     if is_saas_mode():
-        return session_cache_key(_session_id_from_state())
+        session_id = st.session_state.get("saas_session_id")
+        user = st.session_state.get("user")
+        user_id = user.get("id") if isinstance(user, dict) else None
+        if not (
+            isinstance(session_id, str) and session_id and isinstance(user_id, str) and user_id
+        ):
+            return session_cache_key(f"anonymous:{uuid.uuid4().hex}")
+        return session_cache_key(f"{session_id}:{user_id}")
     creds = _local_credentials()
     return session_cache_key(creds.token or "")
 
