@@ -45,6 +45,10 @@ class MissingRequiredScopes(AuthError):
     """Stored Google grant does not contain required scopes."""
 
 
+class GoogleTokenRevoked(AuthError):
+    """Google refused to refresh the stored grant; the user must sign in again."""
+
+
 class QuotaExceeded(SaaSError):
     """User plan quota does not allow the requested action."""
 

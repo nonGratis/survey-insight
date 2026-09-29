@@ -12,6 +12,11 @@ def utcnow() -> datetime:
     return datetime.now(tz=UTC)
 
 
+def log_user_ref(user_id: str) -> str:
+    """Short stable digest of a user id, safe to put in logs."""
+    return sha256(user_id.encode("utf-8")).hexdigest()[:12]
+
+
 def generate_opaque_token(nbytes: int = 32) -> str:
     """Generate a URL-safe opaque secret with at least 256-bit entropy by default."""
     if nbytes < 32:

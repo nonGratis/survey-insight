@@ -9,16 +9,22 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-from core.saas.errors import MissingRequiredScopes
+from core.logger import get_logger
+from core.saas.errors import GoogleTokenRevoked, MissingRequiredScopes
 from core.saas.models import OAuthAccount
 from core.saas.ports import TokenCrypto, TokenRepository
-from core.saas.security import utcnow
+from core.saas.security import log_user_ref, utcnow
+
+log = get_logger(__name__)
+
+REFRESH_SKEW = timedelta(seconds=60)
 
 
 class GoogleCredentialService:
@@ -47,6 +53,10 @@ class GoogleCredentialService:
 
         missing = set(required_scopes) - set(account.scopes)
         if missing:
+            log.info(
+                "api_scope_gap",
+                extra={"user_id": log_user_ref(user_id), "missing": sorted(missing)},
+            )
             raise MissingRequiredScopes(f"Missing Google OAuth scopes: {sorted(missing)}")
 
         creds = Credentials(
@@ -67,9 +77,18 @@ class GoogleCredentialService:
         )
         creds.expiry = _naive_utc(account.token_expiry)
 
-        if (not creds.token or creds.expired) and creds.refresh_token:
-            creds.refresh(Request())
+        if creds.refresh_token and (not creds.token or _needs_refresh(creds)):
+            try:
+                creds.refresh(Request())
+            except RefreshError as exc:
+                self.tokens.delete_by_user(user_id)
+                log.warning("api_token_revoked", extra={"user_id": log_user_ref(user_id)})
+                raise GoogleTokenRevoked("Google refresh token was revoked.") from exc
             self._save_refreshed(account, creds)
+            log.info(
+                "api_token_refreshed",
+                extra={"user_id": log_user_ref(user_id), "scopes": list(account.scopes)},
+            )
 
         if not creds.token:
             raise MissingRequiredScopes("Google access token is unavailable.")
@@ -106,6 +125,12 @@ def _parse_google_client_config(client_config_json: str) -> dict[str, str]:
     if missing:
         raise ValueError(f"Google OAuth client config is missing: {', '.join(missing)}")
     return {key: str(config[key]) for key in required}
+
+
+def _needs_refresh(creds: Credentials) -> bool:
+    if creds.expiry is None:
+        return False
+    return creds.expiry <= datetime.now(UTC).replace(tzinfo=None) + REFRESH_SKEW
 
 
 def _naive_utc(value: datetime | None) -> datetime | None:
