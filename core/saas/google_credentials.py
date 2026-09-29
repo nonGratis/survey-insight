@@ -106,7 +106,8 @@ class GoogleCredentialService:
             token_uri=self.client_config["token_uri"],
             client_id=self.client_config["client_id"],
             client_secret=self.client_config["client_secret"],
-            scopes=list(account.scopes),
+            # No scopes here on purpose: they would be sent with every refresh, and
+            # Google rejects (invalid_scope) any set wider than the refresh token's.
             on_refreshed=lambda refreshed: self._save_refreshed(account, refreshed),
             on_refresh_error=lambda exc: self._refresh_failure(account, exc),
         )
@@ -147,11 +148,9 @@ class GoogleCredentialService:
         if creds.refresh_token:
             encrypted_refresh_token = self.token_crypto.encrypt(creds.refresh_token)
 
-        scopes = tuple(dict.fromkeys([*(creds.scopes or ()), *account.scopes]))
         self.tokens.save(
             replace(
                 account,
-                scopes=scopes,
                 encrypted_access_token=(
                     self.token_crypto.encrypt(creds.token) if creds.token else None
                 ),

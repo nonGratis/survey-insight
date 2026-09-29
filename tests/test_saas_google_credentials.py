@@ -9,6 +9,7 @@ import google_auth_httplib2
 import httplib2
 import pytest
 from google.auth.exceptions import RefreshError, TransportError
+from google.oauth2 import reauth
 from google.oauth2.credentials import Credentials
 
 from core.saas.errors import (
@@ -279,3 +280,41 @@ def test_grant_without_refresh_token_is_treated_as_revoked_when_google_rejects_i
         creds.refresh(None)
 
     assert tokens.get_by_user("user_1") is None
+
+
+def test_refresh_does_not_ask_google_for_a_particular_scope_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh token can only mint what it was issued for.
+
+    Sending our own idea of the scopes makes Google answer invalid_scope whenever it
+    is wider than the token's, which would surface an hour after sign-in as a
+    permanently failing refresh. Leaving scope out returns the token's own scopes.
+    """
+    service, tokens, crypto = _service()
+    _seed(tokens, crypto, expiry=datetime.now(UTC) - timedelta(minutes=5))
+    captured: dict = {}
+
+    def fake_refresh_grant(
+        request,
+        token_uri,
+        refresh_token,
+        client_id,
+        client_secret,
+        scopes=None,
+        rapt_token=None,
+        enable_reauth_refresh=False,
+    ):
+        captured["scopes"] = scopes
+        expiry = datetime.now(UTC).replace(tzinfo=None) + timedelta(hours=1)
+        return "new-access", refresh_token, expiry, {}, None
+
+    monkeypatch.setattr(reauth, "refresh_grant", fake_refresh_grant)
+
+    service.credentials_for_user("user_1", required_scopes=FORM_SCOPES)
+
+    assert captured["scopes"] is None
+    saved = tokens.get_by_user("user_1")
+    assert saved is not None
+    assert crypto.decrypt(saved.encrypted_access_token or "") == "new-access"
+    assert set(saved.scopes) == set(FORM_SCOPES)  # a refresh never changes the grant
