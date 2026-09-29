@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
+import pytest
 
 from ui.saas_api import (
     SESSION_COOKIE_NAME,
@@ -198,3 +200,45 @@ def test_forms_client_methods_send_session_cookie() -> None:
         "/v1/forms/form_1/responses",
         "/v1/sheets/sheet_1/population-tables",
     ]
+
+
+def _raising_client(error: Exception) -> SaaSApiClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    return SaaSApiClient("https://api.example.com", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("slow"), httpx.ConnectTimeout("cold")])
+def test_timeout_returns_none_not_exception(
+    error: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _raising_client(error)
+
+    with caplog.at_level(logging.WARNING):
+        session = client.read_session("raw-session-id")
+
+    assert session is None
+    assert "saas_session_timeout" in caplog.text
+    assert "raw-session-id" not in caplog.text
+
+
+def test_read_session_still_raises_on_server_errors() -> None:
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.read_session("raw-session-id")
+
+
+def test_session_and_data_calls_use_different_timeouts() -> None:
+    client = SaaSApiClient("https://api.example.com")
+
+    assert client.session_timeout == httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
+    assert client.data_timeout == httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
+    with client._client(client.session_timeout) as http:
+        assert http.timeout.read == 10.0
+    with client._client(client.data_timeout) as http:
+        assert http.timeout.read == 30.0

@@ -12,6 +12,10 @@ import httpx
 from core.logger import get_logger
 
 SESSION_COOKIE_NAME = "session_id"
+# Session checks must fail fast so a cold-starting API degrades gracefully;
+# data endpoints do heavier Google round-trips and get a longer read window.
+SESSION_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
+DATA_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
 log = get_logger(__name__)
 
 
@@ -50,11 +54,13 @@ class SaaSApiClient:
         self,
         base_url: str,
         *,
-        timeout: float = 10.0,
+        session_timeout: httpx.Timeout = SESSION_TIMEOUT,
+        data_timeout: httpx.Timeout = DATA_TIMEOUT,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        self.session_timeout = session_timeout
+        self.data_timeout = data_timeout
         self.transport = transport
 
     def google_auth_start_url(self, next_url: str, *, purpose: str = "identity") -> str:
@@ -62,21 +68,30 @@ class SaaSApiClient:
         return f"{self.base_url}/v1/auth/google/start?{query}"
 
     def exchange_login_ticket(self, ticket: str) -> SaaSSession:
-        with self._client() as client:
+        with self._client(self.session_timeout) as client:
             response = client.post("/v1/auth/session/exchange", json={"ticket": ticket})
             response.raise_for_status()
             return _session_from_payload(response.json())
 
-    def read_session(self, session_id: str | None) -> SaaSSession:
-        with self._client() as client:
-            if session_id:
-                client.cookies.set(SESSION_COOKIE_NAME, session_id)
-            response = client.get("/v1/session")
-            response.raise_for_status()
-            return _session_from_payload(response.json(), fallback_session_id=session_id)
+    def read_session(self, session_id: str | None) -> SaaSSession | None:
+        """Return the session, or None when the API could not answer in time.
+
+        None means "unknown" (e.g. cold start), which is different from an
+        unauthenticated SaaSSession: callers must not drop the session on None.
+        """
+        try:
+            with self._client(self.session_timeout) as client:
+                if session_id:
+                    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+                response = client.get("/v1/session")
+                response.raise_for_status()
+                return _session_from_payload(response.json(), fallback_session_id=session_id)
+        except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+            log.warning("saas_session_timeout", extra={"error_code": type(exc).__name__})
+            return None
 
     def logout(self, session_id: str | None) -> None:
-        with self._client() as client:
+        with self._client(self.session_timeout) as client:
             if session_id:
                 client.cookies.set(SESSION_COOKIE_NAME, session_id)
             response = client.post("/v1/auth/logout")
@@ -94,6 +109,7 @@ class SaaSApiClient:
             "GET",
             "/v1/google/access",
             params={"purpose": purpose, "next_url": next_url},
+            timeout=self.session_timeout,
         )
         if not response.get("has_access", response.get("ok")):
             raise MissingGoogleScopesError(
@@ -173,12 +189,14 @@ class SaaSApiClient:
         session_id: str,
         method: str,
         path: str,
+        *,
+        timeout: httpx.Timeout | None = None,
         **kwargs: Any,
     ) -> Any:
         start = time.perf_counter()
         status_code = 0
         error_code = ""
-        with self._client() as client:
+        with self._client(timeout or self.data_timeout) as client:
             client.cookies.set(SESSION_COOKIE_NAME, session_id)
             try:
                 response = client.request(method, path, **kwargs)
@@ -219,10 +237,10 @@ class SaaSApiClient:
                     },
                 )
 
-    def _client(self) -> httpx.Client:
+    def _client(self, timeout: httpx.Timeout) -> httpx.Client:
         return httpx.Client(
             base_url=self.base_url,
-            timeout=self.timeout,
+            timeout=timeout,
             transport=self.transport,
             follow_redirects=False,
         )

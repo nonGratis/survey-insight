@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import UTC, datetime, timedelta
 
 import extra_streamlit_components as stx
@@ -37,6 +38,9 @@ _SAAS_SESSION_DAYS = 30
 _SAAS_VALIDATE_TTL_SECONDS = 30
 _SAAS_COOKIE_PROBE_RUNS = "saas_cookie_probe_runs"
 _SAAS_AUTH_RESTORE_PENDING = "saas_auth_restore_pending"
+_SAAS_SESSION_RETRIES = "saas_session_retries"
+SESSION_RESTORE_MAX_RETRIES = 3
+SESSION_RESTORE_RETRY_DELAY_SECONDS = 2.0
 
 
 def _saas_auth_enabled() -> bool:
@@ -165,12 +169,33 @@ def _restore_saas_session() -> bool:
         _clear_saas_session(cookie_manager)
         return False
 
+    if session is None:
+        return _retry_session_check_or_give_up()
+    st.session_state.pop(_SAAS_SESSION_RETRIES, None)
+
     if not session.authenticated:
         _clear_saas_session(cookie_manager)
         return False
 
     _remember_saas_session(session, cookie_manager)
     return True
+
+
+def _retry_session_check_or_give_up() -> bool:
+    """Handle an API that did not answer the session check in time (cold start).
+
+    The stored session is kept: the API being slow says nothing about whether
+    the session is valid. After a few attempts fall back to the login UI.
+    """
+    retries = int(st.session_state.get(_SAAS_SESSION_RETRIES, 0))
+    if retries >= SESSION_RESTORE_MAX_RETRIES:
+        st.session_state.pop(_SAAS_SESSION_RETRIES, None)
+        return False
+    st.session_state[_SAAS_SESSION_RETRIES] = retries + 1
+    st.info("Перевірка з'єднання…")
+    time.sleep(SESSION_RESTORE_RETRY_DELAY_SECONDS)
+    st.rerun()
+    return False
 
 
 def _should_wait_for_cookie_probe() -> bool:
