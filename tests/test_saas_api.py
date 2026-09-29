@@ -707,3 +707,73 @@ def test_insufficient_scopes_returns_403() -> None:
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "google_insufficient_scopes"
+
+
+class _RaisingGoogleFormsClient(_FakeGoogleFormsClient):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        raise self.error
+
+
+def _forms_client_raising(error: Exception) -> tuple[TestClient, SaaSContainer]:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(
+        create_api_app(container, google_forms_client=_RaisingGoogleFormsClient(error))
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    return client, container
+
+
+@pytest.mark.parametrize("reason", ["insufficientPermissions", "accessNotConfigured"])
+def test_google_scope_reasons_map_to_insufficient_scopes(reason: str) -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("denied", status=403, reason=reason))
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "google_insufficient_scopes"
+    assert detail["action"] == "reconnect_forms_required"
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 503])
+def test_other_google_errors_map_to_502_and_log_error_code(
+    status_code: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("boom", status=status_code, reason="backend"))
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/forms")
+
+    assert response.status_code == 502
+    assert "api_google_error" in caplog.text
+    assert f"google_{status_code}" in " ".join(
+        str(getattr(record, "error_code", "")) for record in caplog.records
+    )
+
+
+def test_google_403_without_scope_reason_stays_a_plain_403() -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("no access", status=403, reason="forbidden"))
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "google_forms_error"
+
+
+def test_google_404_stays_404() -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("gone", status=404))
+
+    assert client.get("/v1/forms").status_code == 404

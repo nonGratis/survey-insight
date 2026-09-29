@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from api.dependencies import get_container, require_session
 from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
+from api.google_errors import google_http_exception as map_google_error
 from core.forms_api import FormsApiError
 from core.logger import get_logger
 from core.saas.container import SaaSContainer
@@ -268,18 +269,7 @@ def require_google_credentials(
 
 
 def google_http_exception(exc: FormsApiError) -> HTTPException:
-    if exc.status in {401, 403}:
-        code = status.HTTP_403_FORBIDDEN
-    elif exc.status == 404:
-        code = status.HTTP_404_NOT_FOUND
-    elif exc.status in {429, 500, 502, 503, 504}:
-        code = status.HTTP_503_SERVICE_UNAVAILABLE
-    else:
-        code = status.HTTP_502_BAD_GATEWAY
-    return HTTPException(
-        status_code=code,
-        detail={"code": "google_forms_error", "message": str(exc)},
-    )
+    return map_google_error(exc, purpose="forms", error_code="google_forms_error")
 
 
 def _forms_client(request: Request) -> GoogleFormsClient:

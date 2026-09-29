@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from api.dependencies import require_session
+from api.google_errors import google_http_exception as map_google_error
 from api.routes.google_forms import require_google_credentials
 from core.saas.models import Session
 from core.saas.ports import GoogleSheetsClient
@@ -41,18 +42,7 @@ def list_population_tables(
 
 
 def sheets_http_exception(exc: SheetsApiError) -> HTTPException:
-    if exc.status in {401, 403}:
-        code = status.HTTP_403_FORBIDDEN
-    elif exc.status == 404:
-        code = status.HTTP_404_NOT_FOUND
-    elif exc.status in {429, 500, 502, 503, 504}:
-        code = status.HTTP_503_SERVICE_UNAVAILABLE
-    else:
-        code = status.HTTP_502_BAD_GATEWAY
-    return HTTPException(
-        status_code=code,
-        detail={"code": "google_sheets_error", "message": str(exc)},
-    )
+    return map_google_error(exc, purpose="sheets", error_code="google_sheets_error")
 
 
 def _sheets_client(request: Request) -> GoogleSheetsClient:
