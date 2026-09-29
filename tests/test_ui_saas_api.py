@@ -8,8 +8,12 @@ import pytest
 
 from ui.saas_api import (
     SESSION_COOKIE_NAME,
+    ApiServerError,
+    GoogleTokenRevokedError,
+    GoogleUnavailableError,
     MissingGoogleScopesError,
     SaaSApiClient,
+    SessionExpiredError,
 )
 
 
@@ -242,3 +246,66 @@ def test_session_and_data_calls_use_different_timeouts() -> None:
         assert http.timeout.read == 10.0
     with client._client(client.data_timeout) as http:
         assert http.timeout.read == 30.0
+
+
+def _status_client(status: int, detail: dict | None = None) -> SaaSApiClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"detail": detail} if detail else {})
+
+    return SaaSApiClient("https://api.example.com", transport=httpx.MockTransport(handler))
+
+
+def test_401_raises_session_expired() -> None:
+    with pytest.raises(SessionExpiredError):
+        _status_client(401).list_forms("sid")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_google_token_revoked_code_raises_typed_error(status: int) -> None:
+    client = _status_client(status, {"code": "google_token_revoked", "action": "reauth_required"})
+
+    with pytest.raises(GoogleTokenRevokedError):
+        client.list_forms("sid")
+
+
+def test_403_insufficient_scopes_raises_missing_scopes() -> None:
+    client = _status_client(
+        403,
+        {
+            "code": "google_insufficient_scopes",
+            "purpose": "forms",
+            "missing_scopes": ["s"],
+            "connect_url": "https://api.example.com/v1/auth/google/start?purpose=forms",
+        },
+    )
+
+    with pytest.raises(MissingGoogleScopesError) as info:
+        client.list_forms("sid")
+    assert info.value.purpose == "forms"
+
+
+def test_502_raises_google_unavailable() -> None:
+    with pytest.raises(GoogleUnavailableError):
+        _status_client(502, {"code": "google_forms_error"}).list_forms("sid")
+
+
+@pytest.mark.parametrize("status", [500, 503, 504])
+def test_other_5xx_raises_api_server_error(status: int) -> None:
+    with pytest.raises(ApiServerError) as info:
+        _status_client(status).list_forms("sid")
+    assert info.value.status_code == status
+
+
+def test_unhandled_statuses_still_use_raise_for_status() -> None:
+    with pytest.raises(httpx.HTTPStatusError):
+        _status_client(404, {"code": "google_forms_error"}).list_forms("sid")
+
+
+def test_typed_errors_remain_httpx_errors_for_existing_handlers() -> None:
+    for exc_type in (
+        SessionExpiredError,
+        GoogleTokenRevokedError,
+        GoogleUnavailableError,
+        ApiServerError,
+    ):
+        assert issubclass(exc_type, httpx.HTTPError)

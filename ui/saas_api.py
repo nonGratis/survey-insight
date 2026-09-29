@@ -49,6 +49,35 @@ class MissingGoogleScopesError(RuntimeError):
         self.connect_url = connect_url
 
 
+class SaaSApiError(httpx.HTTPError):
+    """Base for API failures the UI knows how to present.
+
+    Subclasses httpx.HTTPError so existing ``except httpx.HTTPError`` handlers
+    (including per-row failure handling in worker threads) keep working.
+    """
+
+
+class SessionExpiredError(SaaSApiError):
+    """The API rejected our session (401)."""
+
+
+class GoogleTokenRevokedError(SaaSApiError):
+    """Google no longer honours the stored grant; the user must sign in again."""
+
+
+class GoogleUnavailableError(SaaSApiError):
+    """Google answered with an upstream failure (API returned 502)."""
+
+
+class ApiServerError(SaaSApiError):
+    """The SaaS API itself failed with a 5xx other than 502."""
+
+    def __init__(self, status_code: int, error_code: str = "") -> None:
+        super().__init__(f"SaaS API returned {status_code}.")
+        self.status_code = status_code
+        self.error_code = error_code
+
+
 class SaaSApiClient:
     def __init__(
         self,
@@ -201,17 +230,7 @@ class SaaSApiClient:
             try:
                 response = client.request(method, path, **kwargs)
                 status_code = response.status_code
-                if response.status_code == 403:
-                    detail = _detail_payload(response)
-                    if detail.get("code") == "google_insufficient_scopes":
-                        error_code = "google_insufficient_scopes"
-                        raise MissingGoogleScopesError(
-                            purpose=str(detail.get("purpose") or ""),
-                            missing_scopes=[
-                                str(scope) for scope in detail.get("missing_scopes", [])
-                            ],
-                            connect_url=str(detail.get("connect_url") or ""),
-                        )
+                error_code = _raise_typed_error(response)
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as exc:
@@ -219,8 +238,7 @@ class SaaSApiClient:
                 error_code = _error_code(exc.response) or type(exc).__name__
                 raise
             except Exception as exc:
-                if not error_code:
-                    error_code = type(exc).__name__
+                error_code = error_code or _typed_error_code(exc)
                 raise
             finally:
                 duration_ms = round((time.perf_counter() - start) * 1000, 1)
@@ -271,8 +289,43 @@ def _detail_payload(response: httpx.Response) -> dict[str, Any]:
         payload = response.json()
     except ValueError:
         return {}
+    if not isinstance(payload, dict):
+        return {}
     detail = payload.get("detail")
     return detail if isinstance(detail, dict) else {}
+
+
+def _raise_typed_error(response: httpx.Response) -> str:
+    """Raise the typed error for statuses the UI handles centrally.
+
+    Returns the error code for successful responses so callers can log it;
+    other statuses fall through to ``raise_for_status``.
+    """
+    status = response.status_code
+    if status < 400:
+        return ""
+    detail = _detail_payload(response)
+    code = str(detail.get("code") or "")
+    if status in (401, 403) and code == "google_token_revoked":
+        raise GoogleTokenRevokedError("Google grant was revoked.")
+    if status == 401:
+        raise SessionExpiredError("SaaS session is not valid.")
+    if status == 403 and code == "google_insufficient_scopes":
+        raise MissingGoogleScopesError(
+            purpose=str(detail.get("purpose") or ""),
+            missing_scopes=[str(scope) for scope in detail.get("missing_scopes", [])],
+            connect_url=str(detail.get("connect_url") or ""),
+        )
+    if status == 502:
+        raise GoogleUnavailableError("Google API is temporarily unavailable.")
+    if status >= 500:
+        raise ApiServerError(status, code)
+    return ""
+
+
+def _typed_error_code(exc: Exception) -> str:
+    code = getattr(exc, "error_code", "")
+    return str(code) if code else type(exc).__name__
 
 
 def _error_code(response: httpx.Response) -> str:
