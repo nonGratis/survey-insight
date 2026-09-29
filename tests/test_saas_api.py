@@ -29,8 +29,11 @@ class _FakeOAuthClient:
         self.last_code_verifier: str | None = None
         self.last_scopes: tuple[str, ...] = ()
         self.last_include_granted_scopes = False
-        # What Google reports as granted. None means "everything that was requested".
+        # What Google reports as granted. None means "what Google would really return":
+        # the requested scopes, plus everything the user granted earlier if (and only
+        # if) the request asked for incremental authorization.
         self.granted_scopes: tuple[str, ...] | None = None
+        self.earlier_grants: set[str] = set()
 
     def authorization_url(
         self,
@@ -50,6 +53,13 @@ class _FakeOAuthClient:
         assert code == "oauth-code"
         assert state == self.last_state
         assert code_verifier == self.last_code_verifier
+        if self.granted_scopes is not None:
+            granted = set(self.granted_scopes)
+        else:
+            granted = set(scopes)
+            if self.last_include_granted_scopes:
+                granted |= self.earlier_grants
+        self.earlier_grants |= granted
         return Credentials(
             token="access-token",
             refresh_token="refresh-token",
@@ -57,7 +67,7 @@ class _FakeOAuthClient:
             client_id="client-id",
             client_secret="client-secret",
             scopes=list(scopes),
-            granted_scopes=list(self.granted_scopes if self.granted_scopes is not None else scopes),
+            granted_scopes=sorted(granted),
         )
 
     def user_info(self, credentials: Credentials) -> dict:
@@ -1104,3 +1114,44 @@ def test_an_explicit_next_url_from_the_web_app_is_kept() -> None:
     ).json()
 
     assert _next_url_of(payload["connect_url"]) == "https://app.example.com/catalog"
+
+
+@pytest.mark.parametrize("purpose", ["identity", "forms", "sheets"])
+def test_every_sign_in_flow_asks_google_to_include_earlier_grants(purpose: str) -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+
+    _log_in(container, oauth, purpose=purpose)
+
+    assert oauth.last_include_granted_scopes is True
+
+
+def test_returning_user_keeps_forms_access_after_a_plain_sign_in() -> None:
+    """Connect once, sign out, sign back in: no second "connect Forms" step."""
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    _log_in(container, oauth, purpose="forms")  # the user connects Forms
+
+    client = _log_in(container, oauth, purpose="identity")  # a later, plain sign-in
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(FORM_SCOPES)
+    assert client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is True
+
+
+def test_sign_in_after_consent_was_withdrawn_asks_to_connect_again() -> None:
+    """If Google no longer reports the earlier grant, the record must not invent it."""
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    _log_in(container, oauth, purpose="forms")
+    oauth.earlier_grants.clear()  # the user revoked access in their Google account
+
+    client = _log_in(container, oauth, purpose="identity")
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(IDENTITY_SCOPES)
+    assert (
+        client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is False
+    )

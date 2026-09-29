@@ -146,7 +146,9 @@ def create_api_app(
             state=state_secret.state,
             code_verifier=state_secret.record.code_verifier,
             scopes=state_secret.record.scopes,
-            include_granted_scopes=purpose != "identity",
+            # Always incremental: a returning user's sign-in must carry the access they
+            # already granted (Forms, Sheets) instead of dropping it and asking again.
+            include_granted_scopes=True,
         )
         return RedirectResponse(authorization_url)
 
