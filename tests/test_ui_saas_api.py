@@ -111,7 +111,7 @@ def test_check_google_access_raises_typed_missing_scope_error() -> None:
             403,
             json={
                 "detail": {
-                    "code": "missing_required_scopes",
+                    "code": "google_insufficient_scopes",
                     "purpose": "forms",
                     "missing_scopes": ["https://www.googleapis.com/auth/forms.body.readonly"],
                     "connect_url": "https://api.example.com/v1/auth/google/start?purpose=forms",

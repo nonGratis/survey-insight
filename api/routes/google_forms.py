@@ -18,7 +18,7 @@ from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
 from core.forms_api import FormsApiError
 from core.logger import get_logger
 from core.saas.container import SaaSContainer
-from core.saas.errors import MissingRequiredScopes
+from core.saas.errors import GoogleTokenRevoked, MissingRequiredScopes
 from core.saas.google_credentials import GoogleCredentialService
 from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import Session
@@ -249,11 +249,17 @@ def require_google_credentials(
             session.user_id,
             required_scopes=scopes_for_purpose(purpose),
         )
+    except GoogleTokenRevoked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "google_token_revoked", "action": "reauth_required"},
+        ) from exc
     except MissingRequiredScopes as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
-                "code": "missing_required_scopes",
+                "code": "google_insufficient_scopes",
+                "action": f"reconnect_{purpose}_required",
                 "purpose": purpose,
                 "missing_scopes": list(_missing_scopes(container, session.user_id, purpose)),
                 "connect_url": _google_connect_url(request, purpose=purpose, next_url=next_url),

@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 
 import api.routes.google_forms as google_forms_routes
 from api.google_data_cache import ApiCacheKey, clear_api_cache, get_or_load
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
-from core.saas.google_scopes import FORM_SCOPES, SHEETS_SCOPES
+from core.saas.google_scopes import FORM_SCOPES, IDENTITY_SCOPES, SHEETS_SCOPES
 from core.saas.inmemory import InMemoryTaskQueue
 from core.saas.models import OAuthAccount, Plan, Quota, User, UserStatus
 from core.saas.settings import load_saas_settings
@@ -294,7 +297,8 @@ def test_google_access_returns_connect_url_when_forms_scopes_missing() -> None:
 
     assert response.status_code == 403
     detail = response.json()["detail"]
-    assert detail["code"] == "missing_required_scopes"
+    assert detail["code"] == "google_insufficient_scopes"
+    assert detail["action"] == "reconnect_forms_required"
     assert detail["purpose"] == "forms"
     assert "https://www.googleapis.com/auth/forms.responses.readonly" in detail["missing_scopes"]
     assert detail["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
@@ -518,7 +522,8 @@ def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
 
     assert response.status_code == 403
     detail = response.json()["detail"]
-    assert detail["code"] == "missing_required_scopes"
+    assert detail["code"] == "google_insufficient_scopes"
+    assert detail["action"] == "reconnect_sheets_required"
     assert detail["purpose"] == "sheets"
     assert "https://www.googleapis.com/auth/spreadsheets.readonly" in detail["missing_scopes"]
     assert "purpose=sheets" in detail["connect_url"]
@@ -659,3 +664,46 @@ def test_google_oauth_callback_redirects_to_web_on_internal_failure() -> None:
     assert redirect.scheme == "https"
     assert redirect.netloc == "app.example.com"
     assert parse_qs(redirect.query) == {"auth_error": ["oauth_callback_failed"]}
+
+
+def test_refresh_error_returns_401_and_drops_oauth_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    container.tokens.save(
+        replace(
+            container.tokens.get_by_user("user_1"),
+            token_expiry=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise RefreshError("invalid_grant")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == {
+        "code": "google_token_revoked",
+        "action": "reauth_required",
+    }
+    assert container.tokens.get_by_user("user_1") is None
+
+
+def test_insufficient_scopes_returns_403() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "google_insufficient_scopes"

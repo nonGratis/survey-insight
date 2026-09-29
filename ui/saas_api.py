@@ -179,8 +179,8 @@ class SaaSApiClient:
                 status_code = response.status_code
                 if response.status_code == 403:
                     detail = _detail_payload(response)
-                    if detail.get("code") == "missing_required_scopes":
-                        error_code = "missing_required_scopes"
+                    if detail.get("code") == "google_insufficient_scopes":
+                        error_code = "google_insufficient_scopes"
                         raise MissingGoogleScopesError(
                             purpose=str(detail.get("purpose") or ""),
                             missing_scopes=[
