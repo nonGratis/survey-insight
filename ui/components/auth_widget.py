@@ -232,6 +232,24 @@ def _clear_saas_session(cookie_manager: stx.CookieManager | None = None) -> None
         manager.delete(_SAAS_SESSION_COOKIE, key="delete_saas_session")
 
 
+def _logout_saas_session() -> None:
+    """Revoke the API session, then drop every trace of it from this tab.
+
+    The API call goes first so the server-side session is gone even if local
+    cleanup fails. Its failure (timeout, API down) must never keep the user
+    signed in locally.
+    """
+    session_id = st.session_state.get("saas_session_id")
+    try:
+        _saas_client(_api_base_url()).logout(session_id if isinstance(session_id, str) else None)
+    except httpx.HTTPError as exc:
+        log.warning("saas_logout_failed", extra={"error_code": type(exc).__name__})
+    if isinstance(session_id, str):
+        clear_google_data_cache(session_id=session_id)
+    _clear_saas_session()
+    st.session_state.clear()
+
+
 def _render_local_login_button(location: str = "sidebar") -> None:
     flow = build_flow(IDENTITY_SCOPES)
     auth_url, verifier = get_auth_url(flow)
@@ -271,16 +289,7 @@ def _render_logged_in(location: str = "sidebar") -> None:
     container.caption(email)
     if container.button("Вийти", use_container_width=True):
         if _saas_auth_enabled():
-            session_id = st.session_state.get("saas_session_id")
-            try:
-                _saas_client(_api_base_url()).logout(
-                    session_id if isinstance(session_id, str) else None
-                )
-            except httpx.HTTPError:
-                log.exception("saas_logout_failed")
-            if isinstance(session_id, str):
-                clear_google_data_cache(session_id=session_id)
-            _clear_saas_session()
+            _logout_saas_session()
         else:
             st.session_state.pop("credentials", None)
             st.session_state.pop("user", None)
