@@ -227,6 +227,39 @@ def test_timeout_returns_none_not_exception(
     assert "raw-session-id" not in caplog.text
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("connection refused"),
+        httpx.ReadError("connection reset"),
+        httpx.RemoteProtocolError("server disconnected"),
+        httpx.WriteTimeout("slow"),
+        httpx.PoolTimeout("busy"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+def test_unreachable_api_returns_none_instead_of_dropping_the_session(
+    error: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A dead or restarting API says nothing about whether the session is valid."""
+    with caplog.at_level(logging.WARNING):
+        session = _raising_client(error).read_session("raw-session-id")
+
+    assert session is None
+    assert "saas_session_" in caplog.text
+    assert "raw-session-id" not in caplog.text
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_gateway_and_capacity_statuses_mean_the_api_is_unavailable(status: int) -> None:
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(lambda request: httpx.Response(status)),
+    )
+
+    assert client.read_session("raw-session-id") is None
+
+
 def test_read_session_still_raises_on_server_errors() -> None:
     client = SaaSApiClient(
         "https://api.example.com",

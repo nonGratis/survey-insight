@@ -16,6 +16,9 @@ SESSION_COOKIE_NAME = "session_id"
 # data endpoints do heavier Google round-trips and get a longer read window.
 SESSION_TIMEOUT = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
 DATA_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
+# Statuses a proxy or Cloud Run itself returns while the API is starting, being
+# replaced or out of capacity. They describe the API's state, not the session's.
+_API_UNAVAILABLE_STATUSES = frozenset({429, 502, 503, 504})
 log = get_logger(__name__)
 
 
@@ -103,20 +106,27 @@ class SaaSApiClient:
             return _session_from_payload(response.json())
 
     def read_session(self, session_id: str | None) -> SaaSSession | None:
-        """Return the session, or None when the API could not answer in time.
+        """Return the session, or None when the API could not answer.
 
-        None means "unknown" (e.g. cold start), which is different from an
-        unauthenticated SaaSSession: callers must not drop the session on None.
+        None means "unknown" (cold start, restart, network trouble), which is
+        different from an unauthenticated SaaSSession: callers must not drop the
+        stored session on None.
         """
         try:
             with self._client(self.session_timeout) as client:
                 if session_id:
                     client.cookies.set(SESSION_COOKIE_NAME, session_id)
                 response = client.get("/v1/session")
+                if response.status_code in _API_UNAVAILABLE_STATUSES:
+                    log.warning("saas_session_unavailable", extra={"status": response.status_code})
+                    return None
                 response.raise_for_status()
                 return _session_from_payload(response.json(), fallback_session_id=session_id)
-        except (httpx.ReadTimeout, httpx.ConnectTimeout) as exc:
+        except httpx.TimeoutException as exc:
             log.warning("saas_session_timeout", extra={"error_code": type(exc).__name__})
+            return None
+        except (httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            log.warning("saas_session_unavailable", extra={"error_code": type(exc).__name__})
             return None
 
     def logout(self, session_id: str | None) -> None:
