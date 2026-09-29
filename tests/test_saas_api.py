@@ -1060,3 +1060,47 @@ def test_login_falls_back_to_requested_scopes_when_google_reports_none() -> None
     account = container.tokens.get_by_user("google:sub_1")
     assert account is not None
     assert set(account.scopes) == set(FORM_SCOPES)
+
+
+def _next_url_of(connect_url: str) -> str:
+    return parse_qs(urlsplit(connect_url).query)["next_url"][0]
+
+
+def test_connect_url_from_a_data_endpoint_returns_to_the_web_app_not_the_api_root() -> None:
+    """A bare "/" would send the user back to the API host after consenting."""
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(
+        FormsApiError("denied", status=403, reason="ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+    )
+
+    detail = client.get("/v1/forms").json()["detail"]
+
+    assert _next_url_of(detail["connect_url"]) == "https://app.example.com/"
+
+
+def test_connect_url_for_a_missing_grant_also_returns_to_the_web_app() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    detail = client.get("/v1/forms").json()["detail"]
+
+    assert _next_url_of(detail["connect_url"]) == "https://app.example.com/"
+
+
+def test_an_explicit_next_url_from_the_web_app_is_kept() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    payload = client.get(
+        "/v1/google/access",
+        params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
+    ).json()
+
+    assert _next_url_of(payload["connect_url"]) == "https://app.example.com/catalog"
