@@ -17,7 +17,7 @@ from core.saas.inmemory import InMemoryTaskQueue
 from core.saas.models import OAuthAccount, Plan, Quota, User, UserStatus
 from core.saas.settings import load_saas_settings
 
-NOW = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+NOW = datetime.now(UTC).replace(microsecond=0)
 
 
 class _FakeOAuthClient:
