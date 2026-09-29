@@ -61,6 +61,14 @@ class GoogleApiTemporaryError(SaaSError):
     """Temporary Google API problem; safe to retry."""
 
 
+class GoogleTokenRefreshFailed(GoogleApiTemporaryError):
+    """Google's token endpoint failed for a reason other than revocation.
+
+    Outage, network failure or a server-side client misconfiguration. The stored
+    grant is still good, so it must be kept.
+    """
+
+
 class GoogleApiPermissionError(SaaSError):
     """Google API permission or scope problem; user action is required."""
 
