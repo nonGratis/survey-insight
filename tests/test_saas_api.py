@@ -785,11 +785,21 @@ def _forms_client_raising(error: Exception) -> tuple[TestClient, SaaSContainer]:
     return client, container
 
 
-@pytest.mark.parametrize("reason", ["insufficientPermissions", "accessNotConfigured"])
-def test_google_scope_reasons_map_to_insufficient_scopes(reason: str) -> None:
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        ("insufficientPermissions", "denied"),
+        ("accessNotConfigured", "denied"),
+        ("ACCESS_TOKEN_SCOPE_INSUFFICIENT", "denied"),
+        (None, "Failed to list forms: Request had insufficient authentication scopes."),
+    ],
+)
+def test_google_scope_errors_map_to_insufficient_scopes_with_a_way_to_fix_it(
+    reason: str | None, message: str
+) -> None:
     from core.forms_api import FormsApiError
 
-    client, _ = _forms_client_raising(FormsApiError("denied", status=403, reason=reason))
+    client, _ = _forms_client_raising(FormsApiError(message, status=403, reason=reason))
 
     response = client.get("/v1/forms")
 
@@ -797,6 +807,9 @@ def test_google_scope_reasons_map_to_insufficient_scopes(reason: str) -> None:
     detail = response.json()["detail"]
     assert detail["code"] == "google_insufficient_scopes"
     assert detail["action"] == "reconnect_forms_required"
+    assert detail["purpose"] == "forms"
+    assert detail["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
+    assert "purpose=forms" in detail["connect_url"]
 
 
 @pytest.mark.parametrize("status_code", [429, 500, 503])
@@ -817,23 +830,34 @@ def test_other_google_errors_map_to_502_and_log_error_code(
     )
 
 
-def test_google_403_without_scope_reason_stays_a_plain_403() -> None:
+def test_google_403_without_scope_reason_stays_a_plain_403_and_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     from core.forms_api import FormsApiError
 
     client, _ = _forms_client_raising(FormsApiError("no access", status=403, reason="forbidden"))
 
-    response = client.get("/v1/forms")
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/forms")
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "google_forms_error"
+    logged = [r for r in caplog.records if r.getMessage() == "api_google_error"]
+    assert logged, "a Google failure must leave a log line with its reason"
+    assert logged[0].error_code == "google_403"
+    assert logged[0].reason == "forbidden"
 
 
-def test_google_404_stays_404() -> None:
+def test_google_404_stays_404_without_a_warning(caplog: pytest.LogCaptureFixture) -> None:
     from core.forms_api import FormsApiError
 
     client, _ = _forms_client_raising(FormsApiError("gone", status=404))
 
-    assert client.get("/v1/forms").status_code == 404
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/forms")
+
+    assert response.status_code == 404
+    assert "api_google_error" not in caplog.text
 
 
 def test_logout_clears_firestore_session() -> None:

@@ -118,7 +118,7 @@ def check_google_access(
         has_access=False,
         purpose=purpose,
         missing_scopes=list(missing),
-        connect_url=_google_connect_url(request, purpose=purpose, next_url=next_url),
+        connect_url=google_connect_url(request, purpose=purpose, next_url=next_url),
     )
 
 
@@ -133,7 +133,7 @@ def list_forms(
             FormListItem.model_validate(item) for item in _forms_client(request).list_forms(creds)
         ]
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
 
 @router.get("/forms/catalog", response_model=list[CatalogFormRow])
@@ -147,7 +147,7 @@ def read_forms_catalog(
             FormListItem.model_validate(item) for item in _forms_client(request).list_forms(creds)
         ]
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
     rows: list[CatalogFormRow] = []
     for form in forms:
@@ -192,7 +192,7 @@ def read_form_summary(
     try:
         return _cached_form_summary(request, creds, session.user_id, form_id).value
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
 
 @router.get("/forms/{form_id}/response-stats", response_model=ResponseStatsResponse)
@@ -205,7 +205,7 @@ def read_form_response_stats(
     try:
         return _cached_response_stats(request, creds, session.user_id, form_id).value
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
 
 @router.get("/forms/{form_id}/response-timestamps", response_model=ResponseTimestampsResponse)
@@ -220,7 +220,7 @@ def read_form_response_timestamps(
             timestamps=list(_forms_client(request).list_response_timestamps(creds, form_id))
         )
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
 
 @router.get("/forms/{form_id}/structure", response_model=dict[str, Any])
@@ -233,7 +233,7 @@ def read_form_structure(
     try:
         return dict(_forms_client(request).get_form_structure(creds, form_id))
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
 
 @router.get("/forms/{form_id}/responses", response_model=list[dict[str, Any]])
@@ -246,7 +246,7 @@ def read_form_responses(
     try:
         return [dict(item) for item in _forms_client(request).list_responses(creds, form_id)]
     except FormsApiError as exc:
-        raise google_http_exception(exc) from exc
+        raise google_http_exception(exc, request) from exc
 
 
 def require_google_credentials(
@@ -274,13 +274,18 @@ def require_google_credentials(
                 "action": f"reconnect_{purpose}_required",
                 "purpose": purpose,
                 "missing_scopes": list(_missing_scopes(container, session.user_id, purpose)),
-                "connect_url": _google_connect_url(request, purpose=purpose, next_url=next_url),
+                "connect_url": google_connect_url(request, purpose=purpose, next_url=next_url),
             },
         ) from exc
 
 
-def google_http_exception(exc: FormsApiError) -> HTTPException:
-    return map_google_error(exc, purpose="forms", error_code="google_forms_error")
+def google_http_exception(exc: FormsApiError, request: Request) -> HTTPException:
+    return map_google_error(
+        exc,
+        purpose="forms",
+        error_code="google_forms_error",
+        connect_url=google_connect_url(request, purpose="forms", next_url="/"),
+    )
 
 
 def _forms_client(request: Request) -> GoogleFormsClient:
@@ -510,7 +515,7 @@ def _missing_scopes(container: SaaSContainer, user_id: str, purpose: str) -> tup
     return tuple(scope for scope in scopes_for_purpose(purpose) if scope not in granted)
 
 
-def _google_connect_url(request: Request, *, purpose: str, next_url: str) -> str:
+def google_connect_url(request: Request, *, purpose: str, next_url: str) -> str:
     container = get_container(request)
     safe_next = _safe_next_url(next_url, container.settings.app_base_url)
     query = urlencode({"purpose": purpose, "next_url": safe_next})

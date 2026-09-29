@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from api.dependencies import require_session
 from api.google_errors import google_http_exception as map_google_error
-from api.routes.google_forms import require_google_credentials
+from api.routes.google_forms import google_connect_url, require_google_credentials
 from core.saas.models import Session
 from core.saas.ports import GoogleSheetsClient
 from core.sheets_api import SheetsApiError
@@ -38,11 +38,16 @@ def list_population_tables(
             for item in _sheets_client(request).scan_population_tables(creds, sheet_id)
         ]
     except SheetsApiError as exc:
-        raise sheets_http_exception(exc) from exc
+        raise sheets_http_exception(exc, request, next_url) from exc
 
 
-def sheets_http_exception(exc: SheetsApiError) -> HTTPException:
-    return map_google_error(exc, purpose="sheets", error_code="google_sheets_error")
+def sheets_http_exception(exc: SheetsApiError, request: Request, next_url: str) -> HTTPException:
+    return map_google_error(
+        exc,
+        purpose="sheets",
+        error_code="google_sheets_error",
+        connect_url=google_connect_url(request, purpose="sheets", next_url=next_url),
+    )
 
 
 def _sheets_client(request: Request) -> GoogleSheetsClient:
