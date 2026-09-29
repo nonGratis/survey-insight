@@ -157,6 +157,9 @@ class FirestoreTokenRepository:
         data = _get_doc(self.client.collection(OAUTH_ACCOUNTS).document(user_id))
         return _oauth_account_from_doc(data) if data else None
 
+    def delete_by_user(self, user_id: str) -> None:
+        self.client.collection(OAUTH_ACCOUNTS).document(user_id).delete()
+
 
 class FirestoreReportRepository:
     def __init__(self, client: firestore.Client) -> None:

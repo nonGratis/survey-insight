@@ -120,3 +120,40 @@ def test_firestore_job_round_trip_preserves_state_machine_status() -> None:
 
     assert doc["status"] == "retrying"
     assert _job_from_doc(doc) == job
+
+
+class _FakeDocRef:
+    def __init__(self, store: dict[str, dict]) -> None:
+        self.store = store
+        self.key = ""
+
+    def delete(self) -> None:
+        self.store.pop(self.key, None)
+
+
+class _FakeCollection:
+    def __init__(self, store: dict[str, dict]) -> None:
+        self.store = store
+
+    def document(self, key: str) -> _FakeDocRef:
+        ref = _FakeDocRef(self.store)
+        ref.key = key
+        return ref
+
+
+class _FakeFirestoreClient:
+    def __init__(self) -> None:
+        self.store: dict[str, dict] = {"user_1": {"x": 1}, "user_2": {"x": 2}}
+
+    def collection(self, name: str) -> _FakeCollection:
+        assert name == "oauth_accounts"
+        return _FakeCollection(self.store)
+
+
+def test_firestore_token_repository_delete_by_user_removes_only_that_record() -> None:
+    from core.saas.adapters.firestore import FirestoreTokenRepository
+
+    client = _FakeFirestoreClient()
+    FirestoreTokenRepository(client).delete_by_user("user_1")  # type: ignore[arg-type]
+
+    assert list(client.store) == ["user_2"]

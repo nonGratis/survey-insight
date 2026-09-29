@@ -127,6 +127,9 @@ class InMemoryTokenRepository:
     def get_by_user(self, user_id: str) -> OAuthAccount | None:
         return self.by_user.get(user_id)
 
+    def delete_by_user(self, user_id: str) -> None:
+        self.by_user.pop(user_id, None)
+
 
 class InMemoryReportRepository:
     def __init__(self) -> None:
