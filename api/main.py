@@ -326,9 +326,10 @@ def _save_google_tokens(
     credentials: Any,
 ) -> None:
     existing = container.tokens.get_by_user(user.id)
-    scopes = tuple(
-        dict.fromkeys([*(existing.scopes if existing else ()), *(credentials.scopes or ())])
-    )
+    # Record what Google actually granted to this token, not what we asked for and
+    # not what an earlier login held: the stored tokens are replaced wholesale on
+    # every login, so anything else makes the record claim access the token lacks.
+    scopes = tuple(dict.fromkeys(credentials.granted_scopes or credentials.scopes or ()))
     encrypted_refresh_token = existing.encrypted_refresh_token if existing else None
     if credentials.refresh_token:
         encrypted_refresh_token = container.token_crypto.encrypt(credentials.refresh_token)

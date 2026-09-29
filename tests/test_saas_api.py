@@ -29,6 +29,8 @@ class _FakeOAuthClient:
         self.last_code_verifier: str | None = None
         self.last_scopes: tuple[str, ...] = ()
         self.last_include_granted_scopes = False
+        # What Google reports as granted. None means "everything that was requested".
+        self.granted_scopes: tuple[str, ...] | None = None
 
     def authorization_url(
         self,
@@ -55,6 +57,7 @@ class _FakeOAuthClient:
             client_id="client-id",
             client_secret="client-secret",
             scopes=list(scopes),
+            granted_scopes=list(self.granted_scopes if self.granted_scopes is not None else scopes),
         )
 
     def user_info(self, credentials: Credentials) -> dict:
@@ -936,3 +939,100 @@ def test_token_endpoint_failure_returns_502_and_keeps_the_grant(
     assert response.status_code == 502
     assert response.json()["detail"]["code"] == "google_token_refresh_failed"
     assert container.tokens.get_by_user("user_1") is not None
+
+
+def _log_in(
+    container: SaaSContainer,
+    oauth: _FakeOAuthClient,
+    *,
+    purpose: str,
+    granted: tuple[str, ...] | None = None,
+) -> TestClient:
+    """Run start -> callback -> ticket exchange the way the web app does."""
+    oauth.granted_scopes = granted
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+    client.get(
+        "/v1/auth/google/start",
+        params={"purpose": purpose, "next_url": "/"},
+        follow_redirects=False,
+    )
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+    ticket = parse_qs(urlsplit(callback.headers["location"]).query)["login_ticket"][0]
+    client.post("/v1/auth/session/exchange", json={"ticket": ticket})
+    return client
+
+
+def test_identity_login_does_not_inherit_scopes_from_an_earlier_grant() -> None:
+    """The token is replaced on every login, so the record must describe the new token.
+
+    Regression: scopes were merged with the previous record, so after a plain sign-in
+    the API claimed Forms/Drive access the fresh token did not have, /v1/google/access
+    said yes and /v1/forms then failed with 403 for every returning user.
+    """
+    container = _test_container()
+    container.tokens.save(
+        OAuthAccount(
+            user_id="google:sub_1",
+            provider="google",
+            google_sub="sub_1",
+            email="owner@example.com",
+            scopes=FORM_SCOPES,  # granted in an earlier session
+            encrypted_access_token=container.token_crypto.encrypt("old-access"),
+            encrypted_refresh_token=container.token_crypto.encrypt("old-refresh"),
+            token_expiry=datetime.now(UTC) + timedelta(hours=1),
+            updated_at=NOW,
+        )
+    )
+    oauth = _FakeOAuthClient()
+
+    client = _log_in(container, oauth, purpose="identity")
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(IDENTITY_SCOPES)
+    access = client.get("/v1/google/access", params={"purpose": "forms"}).json()
+    assert access["has_access"] is False
+    assert access["connect_url"]
+
+
+def test_login_records_the_scopes_google_granted_not_the_ones_requested() -> None:
+    """Granular consent lets the user untick individual scopes."""
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+
+    client = _log_in(container, oauth, purpose="forms", granted=IDENTITY_SCOPES)
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(IDENTITY_SCOPES)
+    assert (
+        client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is False
+    )
+
+
+def test_connecting_forms_records_the_full_grant() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+
+    client = _log_in(container, oauth, purpose="forms")
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(FORM_SCOPES)
+    assert client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is True
+
+
+def test_login_falls_back_to_requested_scopes_when_google_reports_none() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    oauth.granted_scopes = ()
+
+    _log_in(container, oauth, purpose="forms", granted=())
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(FORM_SCOPES)
