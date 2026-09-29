@@ -31,7 +31,7 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+def _cached_structure(form_id_: str, session_token: str) -> dict:
     return get_form_structure(form_id_)
 
 

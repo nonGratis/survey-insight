@@ -58,7 +58,7 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+def _cached_structure(form_id_: str, session_token: str) -> dict:
     return get_form_structure(form_id_)
 
 
@@ -85,7 +85,7 @@ if not sheet_id:
 
 
 @st.cache_data(ttl=60, show_spinner="Завантажую відповіді…")
-def _cached_timestamps(form_id_: str, _cache_token: str) -> list[datetime]:
+def _cached_timestamps(form_id_: str, session_token: str) -> list[datetime]:
     """Forms API timestamps, кешовано на 60s за access_token+form_id."""
     return list_response_timestamps(form_id_)
 

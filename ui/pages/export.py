@@ -79,7 +79,7 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=300, show_spinner="Завантажую дані форми…")
-def _load(form_id_: str, _cache_token: str) -> tuple[dict, list[dict]]:
+def _load(form_id_: str, session_token: str) -> tuple[dict, list[dict]]:
     return get_form_structure(form_id_), list_form_responses(form_id_)
 
 

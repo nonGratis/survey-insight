@@ -96,7 +96,7 @@ if not ensure_api_access():
 
 @st.cache_data(ttl=900, show_spinner="Завантажую каталог форм…")
 def _cached_catalog_snapshot(
-    _cache_token: str,
+    session_token: str,
 ) -> tuple[list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]]:
     """Catalog snapshot; SaaS uses aggregate API, local mode keeps Drive list fallback."""
     return list_catalog_snapshot()

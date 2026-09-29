@@ -218,17 +218,17 @@ form_id = action.selected_form["id"]
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую структуру форми…")
-def _cached_structure(form_id_: str, _cache_token: str) -> dict:
+def _cached_structure(form_id_: str, session_token: str) -> dict:
     return get_form_structure(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Завантажую відповіді для аналізу…")
-def _cached_responses(form_id_: str, _cache_token: str) -> list[dict]:
+def _cached_responses(form_id_: str, session_token: str) -> list[dict]:
     return list_form_responses(form_id_)
 
 
 @st.cache_data(ttl=300, show_spinner="Шукаю таблиці популяції у Sheet…")
-def _cached_population_tables(sheet_id_: str, _cache_token: str):
+def _cached_population_tables(sheet_id_: str, session_token: str):
     return scan_population_tables(sheet_id_)
 
 

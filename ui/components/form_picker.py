@@ -13,15 +13,15 @@ FORM_WIDGET_PREFIX = "global_form_select"
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую список форм...")
-def _fetch_forms(_creds: Credentials, _token: str) -> list[dict]:
+def _fetch_forms(_creds: Credentials, token: str) -> list[dict]:
     """Return user's forms; cache key includes the access token."""
     return list_user_forms(_creds)
 
 
 @st.cache_data(ttl=120, show_spinner="Завантажую список форм...")
-def _fetch_forms_saas(_session_id: str) -> list[dict]:
+def _fetch_forms_saas(session_id: str) -> list[dict]:
     """Return user's forms through the SaaS API."""
-    return google_data_client_for_session(_session_id).list_forms_for_picker()
+    return google_data_client_for_session(session_id).list_forms_for_picker()
 
 
 def fetch_forms(creds: Credentials | None = None) -> list[dict]:
