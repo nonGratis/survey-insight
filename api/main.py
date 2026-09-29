@@ -24,6 +24,7 @@ from api.dependencies import (
 from api.dependencies import (
     require_user as _require_user,
 )
+from api.google_errors import register_google_error_handlers
 from api.middleware import request_timing_middleware
 from api.routes.google_forms import router as google_forms_router
 from api.routes.google_sheets import router as google_sheets_router
@@ -94,6 +95,7 @@ def create_api_app(
     )
     app.state.google_forms_client = google_forms_client or GoogleFormsApiClient()
     app.state.google_sheets_client = google_sheets_client or GoogleSheetsApiClient()
+    register_google_error_handlers(app)
     app.include_router(google_forms_router)
     app.include_router(google_sheets_router)
 

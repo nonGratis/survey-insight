@@ -19,7 +19,7 @@ from api.google_errors import google_http_exception as map_google_error
 from core.forms_api import FormsApiError
 from core.logger import get_logger
 from core.saas.container import SaaSContainer
-from core.saas.errors import GoogleTokenRevoked, MissingRequiredScopes
+from core.saas.errors import GoogleTokenRefreshFailed, GoogleTokenRevoked, MissingRequiredScopes
 from core.saas.google_credentials import GoogleCredentialService
 from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import Session
@@ -266,11 +266,6 @@ def require_google_credentials(
             session.user_id,
             required_scopes=scopes_for_purpose(purpose),
         )
-    except GoogleTokenRevoked as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "google_token_revoked", "action": "reauth_required"},
-        ) from exc
     except MissingRequiredScopes as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -344,6 +339,10 @@ def _catalog_enrich_rows_with_budget(
         form_id = futures[future]
         try:
             rows_by_id[form_id] = future.result()
+        except (GoogleTokenRevoked, GoogleTokenRefreshFailed):
+            # Account-level failure: every row would fail the same way, and the
+            # user has to act (re-authenticate), so do not hide it as row errors.
+            raise
         except Exception as exc:  # noqa: BLE001 - keep row-level failure contract.
             rows_by_id[form_id] = CatalogEnrichRow(
                 form_id=form_id,

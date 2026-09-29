@@ -182,6 +182,15 @@ class _SlowGoogleFormsClient(_FakeGoogleFormsClient):
         return super().get_response_stats(creds, "form_1")
 
 
+def _refresh_error(error: str, *, retryable: bool = False) -> RefreshError:
+    """Shape of the error google-auth raises for a failed token-endpoint call."""
+    return RefreshError(
+        f"{error}: description",
+        {"error": error, "error_description": "description"},
+        retryable=retryable,
+    )
+
+
 def _test_container() -> SaaSContainer:
     return SaaSContainer.in_memory(
         load_saas_settings(
@@ -725,7 +734,7 @@ def test_refresh_error_returns_401_and_drops_oauth_record(
     )
 
     def refresh(self: Credentials, request: object) -> None:
-        raise RefreshError("invalid_grant")
+        raise _refresh_error("invalid_grant")
 
     monkeypatch.setattr(Credentials, "refresh", refresh)
     client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
@@ -838,3 +847,92 @@ def test_logout_clears_firestore_session() -> None:
     stale.cookies.set(SESSION_COOKIE_NAME, session_id)
     assert stale.get("/v1/session").json() == {"authenticated": False}
     assert stale.get("/v1/forms").status_code == 401
+
+
+class _MidCallRefreshGoogleFormsClient(_FakeGoogleFormsClient):
+    """google-auth refreshes on a 401 in the middle of a Google client call."""
+
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        creds.refresh(None)
+        return super().list_forms(creds)
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        creds.refresh(None)
+        return super().get_form_summary(creds, form_id)
+
+
+def _client_with_valid_grant(
+    google_forms_client: _FakeGoogleFormsClient,
+) -> tuple[TestClient, SaaSContainer]:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(create_api_app(container, google_forms_client=google_forms_client))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    return client, container
+
+
+def test_grant_revoked_during_a_google_call_returns_401_and_drops_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consent revoked while the stored access token has not expired yet."""
+    client, container = _client_with_valid_grant(_MidCallRefreshGoogleFormsClient())
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise _refresh_error("invalid_grant")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == {
+        "code": "google_token_revoked",
+        "action": "reauth_required",
+    }
+    assert container.tokens.get_by_user("user_1") is None
+
+
+def test_catalog_enrich_reports_revoked_grant_instead_of_row_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, container = _client_with_valid_grant(_MidCallRefreshGoogleFormsClient())
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise _refresh_error("invalid_grant")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+
+    response = client.post("/v1/forms/catalog/enrich", json={"form_ids": ["form_1"]})
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "google_token_revoked"
+    assert container.tokens.get_by_user("user_1") is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [_refresh_error("temporarily_unavailable", retryable=True), _refresh_error("invalid_client")],
+    ids=["outage", "bad_client"],
+)
+def test_token_endpoint_failure_returns_502_and_keeps_the_grant(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    client, container = _client_with_valid_grant(_FakeGoogleFormsClient())
+    container.tokens.save(
+        replace(
+            container.tokens.get_by_user("user_1"),
+            token_expiry=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise error
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "google_token_refresh_failed"
+    assert container.tokens.get_by_user("user_1") is not None
