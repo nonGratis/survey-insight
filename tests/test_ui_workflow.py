@@ -133,6 +133,15 @@ def test_catalog_table_exposes_activity_columns() -> None:
     assert 'NumberColumn("Днів без відповіді"' in catalog
 
 
+def test_catalog_can_retry_retryable_enrichment_rows() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert 'RETRYABLE_DATA_STATUSES = {"timeout", "api_error", "rate_limited"}' in catalog
+    assert "def _retryable_enrichment_ids(" in catalog
+    assert "def _clear_enrichment_state_for(" in catalog
+    assert 'key="catalog_retry_failed_rows"' in catalog
+    assert "_clear_enrichment_state_for(retryable_ids)" in catalog
+
+
 def test_catalog_initial_load_uses_fast_snapshot_not_blocking_aggregate() -> None:
     google_data = (ROOT / "ui/google_data.py").read_text(encoding="utf-8")
     assert "Catalog initial render must stay fast" in google_data

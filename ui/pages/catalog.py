@@ -42,6 +42,7 @@ log = get_logger(__name__)
 ENRICHMENT_TICK_SECONDS = 2
 CATALOG_ENRICH_CHUNK_SIZE = 10
 ACTIVE_RECENT_DAYS = 7
+RETRYABLE_DATA_STATUSES = {"timeout", "api_error", "rate_limited"}
 TABLE_HEADER_HEIGHT_PX = 38
 TABLE_ROW_HEIGHT_PX = 35
 TABLE_MIN_HEIGHT_PX = 360
@@ -282,6 +283,21 @@ def _data_status_label(
     return "Помилка" if enrichments.get(form_id) is None else "Ок"
 
 
+def _retryable_enrichment_ids(
+    forms: list[FormDriveMeta],
+    statuses: dict[str, str],
+) -> list[str]:
+    return [form.id for form in forms if statuses.get(form.id) in RETRYABLE_DATA_STATUSES]
+
+
+def _clear_enrichment_state_for(form_ids: list[str]) -> None:
+    for form_id in form_ids:
+        st.session_state["form_enrichments"].pop(form_id, None)
+        st.session_state["form_response_stats"].pop(form_id, None)
+        st.session_state["form_data_status"].pop(form_id, None)
+        st.session_state["form_data_fetched_at"].pop(form_id, None)
+
+
 def _updated_ago_label(value: str | None) -> str:
     if not value:
         return ""
@@ -397,6 +413,14 @@ def _render_table_with_enrichment() -> None:
             loaded / total,
             text=f"Підвантажую деталі: {loaded}/{total}",
         )
+    retryable_ids = _retryable_enrichment_ids(forms_meta, statuses)
+    if retryable_ids and st.button(
+        f"Повторити проблемні рядки ({len(retryable_ids)})",
+        key="catalog_retry_failed_rows",
+        help="Повторно завантажити рядки зі статусами timeout, api_error або rate_limited.",
+    ):
+        _clear_enrichment_state_for(retryable_ids)
+        st.rerun()
 
     df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at)
     _render_catalog_metrics(df)
