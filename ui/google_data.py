@@ -40,6 +40,7 @@ from core.forms_catalog import (
     list_forms_with_drive_meta as local_list_catalog_forms,
 )
 from core.sheets_api import fetch_all_grids as local_fetch_all_grids
+from ui.api_boundary import handle_api_errors
 from ui.data_access_cache import (
     CATALOG_TTL_SECONDS,
     FORM_STRUCTURE_TTL_SECONDS,
@@ -289,28 +290,34 @@ def cache_token() -> str:
     return session_cache_key(creds.token or "")
 
 
+@handle_api_errors
 def list_forms_for_picker() -> list[dict[str, Any]]:
     return google_data_client().list_forms_for_picker()
 
 
+@handle_api_errors
 def list_catalog_forms() -> list[FormDriveMeta]:
     return google_data_client().list_catalog_forms()
 
 
+@handle_api_errors
 def list_catalog_snapshot() -> tuple[
     list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]
 ]:
     return google_data_client().list_catalog_snapshot()
 
 
+@handle_api_errors
 def get_form_summary(form_id: str) -> FormEnrichment:
     return google_data_client().get_form_summary(form_id)
 
 
+@handle_api_errors
 def get_response_stats(form_id: str) -> ResponseStats:
     return google_data_client().get_response_stats(form_id)
 
 
+@handle_api_errors
 def enrich_catalog_forms(
     form_ids: list[str],
     *,
@@ -324,18 +331,22 @@ def enrich_catalog_forms(
     )
 
 
+@handle_api_errors
 def get_form_structure(form_id: str) -> dict[str, Any]:
     return google_data_client().get_form_structure(form_id)
 
 
+@handle_api_errors
 def list_form_responses(form_id: str) -> list[dict[str, Any]]:
     return google_data_client().list_form_responses(form_id)
 
 
+@handle_api_errors
 def list_response_timestamps(form_id: str) -> list[datetime]:
     return google_data_client().list_response_timestamps(form_id)
 
 
+@handle_api_errors
 def scan_population_tables(sheet_id: str) -> list[ContextTable]:
     return google_data_client().scan_population_tables(sheet_id)
 

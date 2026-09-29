@@ -27,6 +27,7 @@ from core.auth import (
     save_verifier,
 )
 from core.logger import get_logger, hash_email
+from ui.api_boundary import handle_api_errors
 from ui.data_access_cache import ACCESS_TTL_SECONDS, CacheKey, get_or_load, session_cache_key
 from ui.google_data import clear_google_data_cache
 from ui.saas_api import MissingGoogleScopesError, SaaSApiClient, SaaSSession
@@ -386,10 +387,12 @@ def ensure_api_access(purpose: str = "forms") -> bool:
                     purpose=purpose,
                 ),
                 ttl_seconds=ACCESS_TTL_SECONDS,
-                loader=lambda: _saas_client(_api_base_url()).check_google_access(
-                    session_id,
-                    purpose=purpose,
-                    next_url=f"{_app_base_url()}/",
+                loader=handle_api_errors(
+                    lambda: _saas_client(_api_base_url()).check_google_access(
+                        session_id,
+                        purpose=purpose,
+                        next_url=f"{_app_base_url()}/",
+                    )
                 ),
             )
         except MissingGoogleScopesError as exc:
