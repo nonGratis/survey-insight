@@ -709,6 +709,16 @@ UNSAFE_NEXT_URLS = [
     pytest.param("data:text/html,x", id="data-scheme"),
     pytest.param("https://app.example.com@evil.example/", id="app-host-as-userinfo"),
     pytest.param("https://app.example.com.evil.example/", id="app-host-as-subdomain"),
+    # Scheme-relative: a browser reads "//host/path" as https://host/path.
+    pytest.param("//evil.example/x", id="scheme-relative"),
+    pytest.param("///evil.example/x", id="three-slashes"),
+    pytest.param("////evil.example/x", id="four-slashes"),
+    # "\" means "/" to a browser, and it drops tab/CR/LF, so these read as "//evil.example".
+    pytest.param("/\\evil.example", id="backslash-after-slash"),
+    pytest.param("/\t/evil.example", id="tab-between-slashes"),
+    pytest.param("/\n/evil.example", id="newline-between-slashes"),
+    pytest.param("/\r\n/evil.example", id="crlf-between-slashes"),
+    pytest.param("https://app.example.com/\\evil.example", id="backslash-in-app-url"),
 ]
 
 _CALLBACK_URL = "https://api.example.com/v1/auth/google/callback"
@@ -762,6 +772,26 @@ def test_oauth_callback_keeps_a_first_party_next_url(next_url: str, landing: str
     location = _callback_location(next_url)
 
     assert location.startswith(f"{landing}?login_ticket=")
+
+
+@pytest.mark.parametrize(
+    "next_url",
+    [
+        pytest.param("/%2F/evil.example", id="encoded-slash"),
+        pytest.param("/%2f/evil.example", id="encoded-slash-lowercase"),
+        pytest.param("/%5Cevil.example", id="encoded-backslash"),
+        pytest.param("/%09/evil.example", id="encoded-tab"),
+    ],
+)
+def test_oauth_callback_stays_on_site_for_percent_encoded_slashes(next_url: str) -> None:
+    """Escapes are not decoded on the way to the browser, so they stay path characters.
+
+    Pinned so that decoding a validated value later (e.g. unquoting before redirecting)
+    would surface here instead of turning "/%2F/host" into "//host".
+    """
+    location = _callback_location(next_url)
+
+    assert _landing_host(location) in _FIRST_PARTY_HOSTS
 
 
 def test_google_oauth_callback_redirects_to_web_on_internal_failure() -> None:
