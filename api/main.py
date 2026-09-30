@@ -28,6 +28,7 @@ from api.google_errors import register_google_error_handlers
 from api.middleware import request_timing_middleware
 from api.routes.google_forms import router as google_forms_router
 from api.routes.google_sheets import router as google_sheets_router
+from api.urls import safe_next_url
 from core.logger import get_logger
 from core.saas.adapters.google_forms import GoogleFormsApiClient
 from core.saas.adapters.google_oauth import GoogleOAuthClient, GoogleOAuthWebClient
@@ -139,7 +140,7 @@ def create_api_app(
         scopes = scopes_for_purpose(purpose)
         state_secret = container.oauth_state_service.create(
             scopes=scopes,
-            next_url=_safe_next_url(next_url, container.settings.app_base_url),
+            next_url=safe_next_url(next_url, container.settings.app_base_url),
             ttl=timedelta(minutes=10),
         )
         authorization_url = _oauth_client(request).authorization_url(
@@ -350,14 +351,6 @@ def _save_google_tokens(
         updated_at=utcnow(),
     )
     container.tokens.save(account)
-
-
-def _safe_next_url(next_url: str, app_base_url: str) -> str:
-    if next_url.startswith("/"):
-        return next_url
-    if app_base_url and next_url.startswith(app_base_url.rstrip("/") + "/"):
-        return next_url
-    return "/"
 
 
 def _with_login_ticket(next_url: str, ticket: str) -> str:
