@@ -8,6 +8,7 @@ where the "every account gets 403 on the catalog" bug lived.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -31,6 +32,9 @@ from tests.test_saas_api import (
 from ui.saas_api import SaaSApiClient
 
 APP_TIMEOUT_SECONDS = 60
+# Absolute on purpose: newer Streamlit resolves a relative script path against the calling
+# file's directory (tests/), older versions against the working directory.
+APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 RECONNECT_TEXT = "Цій сторінці потрібен доступ до Google Forms"
 
 
@@ -72,7 +76,7 @@ def _web_talking_to(api_app) -> mock._patch:
 
 
 def _signed_in_web(session_id: str) -> AppTest:
-    at = AppTest.from_file("app.py", default_timeout=APP_TIMEOUT_SECONDS)
+    at = AppTest.from_file(str(APP_PATH), default_timeout=APP_TIMEOUT_SECONDS)
     at.session_state["saas_session_id"] = session_id
     at.session_state["saas_session_checked_at"] = datetime.now(UTC)
     at.session_state["user"] = {
