@@ -11,13 +11,15 @@ permissions:
   contents: read
 
 jobs:
+  # Runner pinned on purpose: GitHub moves `ubuntu-latest` to Ubuntu 26 on 2026-10-19.
+  # The image should change when we decide, not when the label does.
   lint-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
@@ -41,10 +43,10 @@ jobs:
         run: pytest tests/ -v
 
   docker-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-and-test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build Docker image
         run: docker build -t survey-insight:ci .
