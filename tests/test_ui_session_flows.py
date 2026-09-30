@@ -8,6 +8,7 @@ These run the actual ``app.py`` with the network layer replaced.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -21,6 +22,9 @@ from ui.saas_api import (
 )
 
 APP_TIMEOUT_SECONDS = 60
+# Absolute on purpose: newer Streamlit resolves a relative script path against the calling
+# file's directory (tests/), older versions against the working directory.
+APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +35,7 @@ def saas_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _app_with_validated_session() -> AppTest:
-    at = AppTest.from_file("app.py", default_timeout=APP_TIMEOUT_SECONDS)
+    at = AppTest.from_file(str(APP_PATH), default_timeout=APP_TIMEOUT_SECONDS)
     at.session_state["saas_session_id"] = "sid-1"
     at.session_state["saas_session_checked_at"] = datetime.now(UTC)
     at.session_state["user"] = {"id": "user_a", "email": "a@x.com", "name": "A", "plan": "pilot"}
@@ -72,7 +76,7 @@ def test_api_cold_start_keeps_the_session_and_falls_back_to_login_after_retries(
         # would also hit Streamlit's internal polling loops.
         mock.patch("ui.components.auth_widget.time") as fake_time,
     ):
-        at = AppTest.from_file("app.py", default_timeout=APP_TIMEOUT_SECONDS)
+        at = AppTest.from_file(str(APP_PATH), default_timeout=APP_TIMEOUT_SECONDS)
         at.session_state["saas_session_id"] = "sid-1"
         at.run()
 
