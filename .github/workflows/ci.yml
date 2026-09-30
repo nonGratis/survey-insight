@@ -6,6 +6,10 @@ on:
   # Any base branch: stacked PRs (feature -> feature) must be checked too.
   pull_request:
 
+# Least privilege: the jobs only check out and build, so the token needs no write scopes.
+permissions:
+  contents: read
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
