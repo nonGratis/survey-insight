@@ -10,7 +10,35 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # Dependabot raises one pin at a time and does not look at what the other pinned
+    # packages require, so these updates could only ever produce red PRs.
+    ignore:
+      # numpy 2.5 and scipy 1.18 need Python >= 3.12; we run 3.11 (see .python-version).
+      # .python-version should already keep them out; this is the safety net.
+      # Remove both entries together with the move to Python 3.12.
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "scipy"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # Streamlit requires websockets<17. Remove when Streamlit raises that cap.
+      - dependency-name: "websockets"
+        update-types: ["version-update:semver-major"]
     groups:
+      # ruff and mypy add rules in minor releases, so a bump can fail lint or type checks.
+      # Keeping the dev tools apart means a red tools PR does not hold back the libraries.
+      # A dependency goes to the first group that matches it, so this one must stay first.
+      dev-tools:
+        patterns:
+          - "ruff"
+          - "mypy"
+          - "mypy-extensions"
+          - "pytest"
+          - "pluggy"
+          - "iniconfig"
+          - "pathspec"
+          - "librt"
+          - "ast-serialize"
+        update-types: ["minor", "patch"]
       python-minor-and-patch:
         update-types: ["minor", "patch"]
     commit-message:
