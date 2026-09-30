@@ -10,6 +10,7 @@ UI шар рендерить Tier 1 одразу і прогресивно до�
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,13 +24,29 @@ from core.sheets_api import SheetsApiError, find_response_sheet_name
 
 log = get_logger(__name__)
 
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return min(max(value, minimum), maximum)
+
+
 DRIVE_FIELDS = (
     "nextPageToken,"
     "files(id,name,createdTime,modifiedTime,owners(emailAddress,displayName),"
     "webViewLink)"
 )
-DRIVE_PAGE_SIZE = 100  # Google API ceiling per page is 1000; 100 — баланс latency/calls.
+DRIVE_PAGE_SIZE = _env_int("SI_DRIVE_FORMS_PAGE_SIZE", 100, minimum=1, maximum=1000)
+DRIVE_MAX_FORMS = _env_int("SI_DRIVE_FORMS_MAX", 300, minimum=1, maximum=5000)
 FORM_EDIT_URL_TEMPLATE = "https://docs.google.com/forms/d/{form_id}/edit"
+CATALOG_SUMMARY_FIELDS = (
+    "info(title,description),"
+    "items(pageBreakItem,questionItem/question/questionId),"
+    "linkedSheetId,"
+    "publishSettings/publishState(isPublished,isAcceptingResponses)"
+)
 
 
 @dataclass(frozen=True)
@@ -82,8 +99,9 @@ def list_forms_with_drive_meta(creds: Credentials) -> list[FormDriveMeta]:
     page_token: str | None = None
     page_idx = 0
     try:
-        while True:
+        while len(items) < DRIVE_MAX_FORMS:
             page_idx += 1
+            page_size = min(DRIVE_PAGE_SIZE, DRIVE_MAX_FORMS - len(items))
             with log_call(
                 "api_call_ok",
                 target="drive.files.list",
@@ -96,7 +114,7 @@ def list_forms_with_drive_meta(creds: Credentials) -> list[FormDriveMeta]:
                     .list(
                         q=f"mimeType='{FORM_MIME_TYPE}' and trashed=false",
                         fields=DRIVE_FIELDS,
-                        pageSize=DRIVE_PAGE_SIZE,
+                        pageSize=page_size,
                         pageToken=page_token,
                         orderBy="modifiedTime desc",
                     )
@@ -107,6 +125,11 @@ def list_forms_with_drive_meta(creds: Credentials) -> list[FormDriveMeta]:
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
+        if page_token:
+            log.warning(
+                "forms_catalog_drive_limit_reached",
+                extra={"max_forms": DRIVE_MAX_FORMS, "page_size": DRIVE_PAGE_SIZE},
+            )
     except HttpError as exc:
         raise FormsApiError(
             f"Не вдалося отримати каталог форм з Drive: {exc.reason or exc}",
@@ -146,7 +169,7 @@ def enrich_form(creds: Credentials, form_id: str) -> FormEnrichment:
             form_id=form_id,
             logger=log,
         ):
-            form = service.forms().get(formId=form_id).execute()
+            form = service.forms().get(formId=form_id, fields=CATALOG_SUMMARY_FIELDS).execute()
     except HttpError as exc:
         raise FormsApiError(
             f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",

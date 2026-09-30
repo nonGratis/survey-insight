@@ -15,11 +15,13 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from core.google_errors import google_error_reason
 from core.logger import get_logger, log_call
 
 log = get_logger(__name__)
 
 FORM_MIME_TYPE = "application/vnd.google-apps.form"
+RESPONSE_TIMESTAMPS_FIELDS = "responses(createTime),nextPageToken"
 DEFAULT_FORMS_PAGE_SIZE = 50
 
 QuestionType = Literal[
@@ -42,9 +44,16 @@ class FormsApiError(RuntimeError):
     (403 shared form без access, 404 видалена форма) від справжніх збоїв.
     """
 
-    def __init__(self, message: str, *, status: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        reason: str | None = None,
+    ):
         super().__init__(message)
         self.status = status
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,7 @@ def list_user_forms(
         raise FormsApiError(
             f"Не вдалося отримати список форм з Drive: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
     return resp.get("files", [])
 
@@ -116,6 +126,7 @@ def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
         raise FormsApiError(
             f"Не вдалося завантажити форму {form_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
 
 
@@ -146,7 +157,14 @@ def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]
                 logger=log,
             ):
                 resp = (
-                    service.forms().responses().list(formId=form_id, pageToken=page_token).execute()
+                    service.forms()
+                    .responses()
+                    .list(
+                        formId=form_id,
+                        pageToken=page_token,
+                        fields=RESPONSE_TIMESTAMPS_FIELDS,
+                    )
+                    .execute()
                 )
             for r in resp.get("responses", []):
                 ct = r.get("createTime")
@@ -168,6 +186,7 @@ def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]
         raise FormsApiError(
             f"Не вдалося отримати відповіді форми {form_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
     timestamps.sort()
     return timestamps
@@ -205,6 +224,7 @@ def list_form_responses(creds: Credentials, form_id: str) -> list[dict[str, Any]
         raise FormsApiError(
             f"Не вдалося отримати відповіді форми {form_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
     return responses
 

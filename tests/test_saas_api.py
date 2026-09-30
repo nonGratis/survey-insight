@@ -1,0 +1,1286 @@
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urljoin, urlsplit
+
+import pytest
+from fastapi.testclient import TestClient
+from google.auth.exceptions import RefreshError
+from google.oauth2.credentials import Credentials
+
+import api.routes.google_forms as google_forms_routes
+from api.google_data_cache import ApiCacheKey, clear_api_cache, get_or_load
+from api.main import SESSION_COOKIE_NAME, create_api_app
+from core.saas.container import SaaSContainer
+from core.saas.google_scopes import FORM_SCOPES, IDENTITY_SCOPES, SHEETS_SCOPES
+from core.saas.inmemory import InMemoryTaskQueue
+from core.saas.models import OAuthAccount, Plan, Quota, User, UserStatus
+from core.saas.settings import load_saas_settings
+
+NOW = datetime.now(UTC).replace(microsecond=0)
+
+
+class _FakeOAuthClient:
+    def __init__(self) -> None:
+        self.last_state: str | None = None
+        self.last_code_verifier: str | None = None
+        self.last_scopes: tuple[str, ...] = ()
+        self.last_include_granted_scopes = False
+        # What Google reports as granted. None means "what Google would really return":
+        # the requested scopes, plus everything the user granted earlier if (and only
+        # if) the request asked for incremental authorization.
+        self.granted_scopes: tuple[str, ...] | None = None
+        self.earlier_grants: set[str] = set()
+
+    def authorization_url(
+        self,
+        *,
+        state: str,
+        code_verifier: str,
+        scopes,
+        include_granted_scopes: bool = False,
+    ) -> str:
+        self.last_state = state
+        self.last_code_verifier = code_verifier
+        self.last_scopes = tuple(scopes)
+        self.last_include_granted_scopes = include_granted_scopes
+        return f"https://accounts.example/auth?state={state}"
+
+    def exchange_code(self, *, code: str, state: str, code_verifier: str, scopes) -> Credentials:
+        assert code == "oauth-code"
+        assert state == self.last_state
+        assert code_verifier == self.last_code_verifier
+        if self.granted_scopes is not None:
+            granted = set(self.granted_scopes)
+        else:
+            granted = set(scopes)
+            if self.last_include_granted_scopes:
+                granted |= self.earlier_grants
+        self.earlier_grants |= granted
+        return Credentials(
+            token="access-token",
+            refresh_token="refresh-token",
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id="client-id",
+            client_secret="client-secret",
+            scopes=list(scopes),
+            granted_scopes=sorted(granted),
+        )
+
+    def user_info(self, credentials: Credentials) -> dict:
+        assert credentials.token == "access-token"
+        return {
+            "id": "sub_1",
+            "email": "owner@example.com",
+            "name": "Owner",
+            "picture": "https://example.com/avatar.png",
+        }
+
+
+class _FailingUserInfoOAuthClient(_FakeOAuthClient):
+    def user_info(self, credentials: Credentials) -> dict:
+        raise RuntimeError("userinfo failed")
+
+
+class _FakeGoogleFormsClient:
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        assert creds.token == "access-token"
+        return [
+            {
+                "id": "form_1",
+                "name": "Admissions poll",
+                "owner_email": "owner@example.com",
+                "owner_name": "Owner",
+                "created_time": "2026-06-01T10:00:00Z",
+                "modified_time": "2026-06-02T10:00:00Z",
+                "edit_url": "https://docs.google.com/forms/d/form_1/edit",
+            }
+        ]
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        assert form_id == "form_1"
+        return {
+            "title": "Admissions poll",
+            "description": "desc",
+            "sections_count": 2,
+            "questions_count": 5,
+            "linked_sheet_id": None,
+            "is_published": True,
+            "accepting_responses": True,
+        }
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        assert form_id == "form_1"
+        return {
+            "total": 2,
+            "first_response": "2026-06-01T10:00:00",
+            "second_response": "2026-06-01T10:05:00",
+            "last_response": "2026-06-01T10:05:00",
+        }
+
+    def list_response_timestamps(self, creds: Credentials, form_id: str) -> list[str]:
+        assert form_id == "form_1"
+        return ["2026-06-01T10:00:00", "2026-06-01T10:05:00"]
+
+    def get_form_structure(self, creds: Credentials, form_id: str) -> dict:
+        assert form_id == "form_1"
+        return {"formId": form_id, "info": {"title": "Admissions poll"}, "items": []}
+
+    def list_responses(self, creds: Credentials, form_id: str) -> list[dict]:
+        assert form_id == "form_1"
+        return [{"responseId": "r1", "answers": {"q1": {"textAnswers": {"answers": []}}}}]
+
+
+class _FakeGoogleSheetsClient:
+    def scan_population_tables(self, creds: Credentials, sheet_id: str) -> list[dict]:
+        assert creds.token == "access-token"
+        assert sheet_id == "sheet_1"
+        return [
+            {
+                "source": "Population",
+                "label_header": "Faculty",
+                "count_header": "N",
+                "population": {"FICT": 120, "IPSA": 80},
+            }
+        ]
+
+
+class _PartiallyFailingGoogleFormsClient(_FakeGoogleFormsClient):
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        return [
+            {
+                "id": "form_1",
+                "name": "Admissions poll",
+                "owner_email": "owner@example.com",
+            },
+            {
+                "id": "form_deleted",
+                "name": "Deleted poll",
+                "owner_email": "owner@example.com",
+            },
+        ]
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        if form_id == "form_deleted":
+            from core.forms_api import FormsApiError
+
+            raise FormsApiError("deleted", status=404)
+        return super().get_form_summary(creds, form_id)
+
+
+class _CountingGoogleFormsClient(_FakeGoogleFormsClient):
+    def __init__(self) -> None:
+        self.summary_calls = 0
+        self.stats_calls = 0
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        self.summary_calls += 1
+        return super().get_form_summary(creds, form_id)
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        self.stats_calls += 1
+        return super().get_response_stats(creds, form_id)
+
+
+class _SlowGoogleFormsClient(_FakeGoogleFormsClient):
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        if form_id == "slow_form":
+            time.sleep(0.2)
+        return super().get_form_summary(creds, "form_1")
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        return super().get_response_stats(creds, "form_1")
+
+
+def _refresh_error(error: str, *, retryable: bool = False) -> RefreshError:
+    """Shape of the error google-auth raises for a failed token-endpoint call."""
+    return RefreshError(
+        f"{error}: description",
+        {"error": error, "error_description": "description"},
+        retryable=retryable,
+    )
+
+
+def _test_container() -> SaaSContainer:
+    return SaaSContainer.in_memory(
+        load_saas_settings(
+            {
+                "APP_ENV": "test",
+                "API_BASE_URL": "https://api.example.com",
+                "APP_BASE_URL": "https://app.example.com",
+                "GOOGLE_OAUTH_CLIENT_CONFIG_JSON": (
+                    '{"web":{"token_uri":"https://oauth2.googleapis.com/token",'
+                    '"client_id":"client-id","client_secret":"client-secret"}}'
+                ),
+                "SESSION_PEPPER": "test-pepper",
+            }
+        )
+    )
+
+
+def _seed_user_session(container: SaaSContainer) -> str:
+    user = User(
+        id="user_1",
+        google_sub="google-sub-1",
+        email="owner@example.com",
+        name="Owner",
+        picture=None,
+        plan=Plan.PILOT,
+        status=UserStatus.ACTIVE,
+        created_at=NOW,
+    )
+    container.users.save(user)
+    container.quotas.save(user.id, Quota(monthly_report_limit=3, reports_used_this_month=0))
+    return container.session_service.create(user_id=user.id, now=NOW).session_id
+
+
+def _seed_google_grant(
+    container: SaaSContainer,
+    user_id: str = "user_1",
+    *,
+    scopes: tuple[str, ...] = FORM_SCOPES,
+) -> None:
+    container.tokens.save(
+        OAuthAccount(
+            user_id=user_id,
+            provider="google",
+            google_sub="google-sub-1",
+            email="owner@example.com",
+            scopes=scopes,
+            encrypted_access_token=container.token_crypto.encrypt("access-token"),
+            encrypted_refresh_token=container.token_crypto.encrypt("refresh-token"),
+            token_expiry=datetime.now(UTC) + timedelta(hours=1),
+            updated_at=NOW,
+        )
+    )
+
+
+def test_api_session_restores_from_cookie_and_never_requires_streamlit_state() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+
+    assert client.get("/v1/session").json() == {"authenticated": False}
+
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    response = client.get("/v1/session")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "authenticated": True,
+        "user_id": "user_1",
+        "email": "owner@example.com",
+        "name": "Owner",
+        "plan": "pilot",
+    }
+
+
+def test_api_report_job_requires_session_and_enqueues_with_hashed_form_id() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+
+    unauthorized = client.post("/v1/reports/jobs", json={"form_id": "form_raw"})
+    assert unauthorized.status_code == 401
+
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    response = client.post(
+        "/v1/reports/jobs",
+        json={
+            "form_id": "form_raw",
+            "form_title": "Admissions poll",
+            "config_snapshot": {"sections": ["overview"]},
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert isinstance(container.tasks, InMemoryTaskQueue)
+    assert container.tasks.report_job_ids == [payload["job_id"]]
+    report = container.reports.get(payload["report_id"])
+    assert report is not None
+    assert report.form_id_hash != "form_raw"
+
+
+def test_google_access_reports_no_access_with_connect_url_when_forms_scopes_missing() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get(
+        "/v1/google/access",
+        params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["has_access"] is False
+    assert payload["ok"] is False
+    assert payload["purpose"] == "forms"
+    assert "https://www.googleapis.com/auth/forms.responses.readonly" in payload["missing_scopes"]
+    assert payload["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
+    assert "purpose=forms" in payload["connect_url"]
+
+
+def test_google_access_without_any_oauth_record_reports_no_access() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/google/access", params={"purpose": "forms"})
+
+    assert response.status_code == 200
+    assert response.json()["has_access"] is False
+
+
+def test_google_access_is_a_scope_decision_and_never_refreshes_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    container.tokens.save(
+        replace(
+            container.tokens.get_by_user("user_1"),
+            token_expiry=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise AssertionError("decision endpoint must not call Google")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/google/access", params={"purpose": "forms"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": True,
+        "has_access": True,
+        "purpose": "forms",
+        "missing_scopes": [],
+        "connect_url": None,
+    }
+
+
+def test_google_auth_start_supports_incremental_forms_purpose() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+
+    response = client.get(
+        "/v1/auth/google/start",
+        params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 307
+    assert oauth.last_include_granted_scopes is True
+    assert "https://www.googleapis.com/auth/forms.body.readonly" in oauth.last_scopes
+    assert "https://www.googleapis.com/auth/drive.metadata.readonly" in oauth.last_scopes
+
+
+def test_forms_api_routes_use_server_side_google_credentials_without_exposing_tokens() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    access = client.get("/v1/google/access", params={"purpose": "forms"})
+    forms = client.get("/v1/forms")
+    summary = client.get("/v1/forms/form_1/summary")
+    stats = client.get("/v1/forms/form_1/response-stats")
+    timestamps = client.get("/v1/forms/form_1/response-timestamps")
+    structure = client.get("/v1/forms/form_1/structure")
+    responses = client.get("/v1/forms/form_1/responses")
+
+    assert access.json()["has_access"] is True
+    assert forms.status_code == 200
+    assert forms.json()[0]["id"] == "form_1"
+    assert summary.json()["questions_count"] == 5
+    assert stats.json()["total"] == 2
+    assert timestamps.json() == {"timestamps": ["2026-06-01T10:00:00", "2026-06-01T10:05:00"]}
+    assert "answers" not in str(timestamps.json())
+    assert structure.json()["formId"] == "form_1"
+    assert responses.json()[0]["responseId"] == "r1"
+
+    combined_payload = str(
+        [forms.json(), summary.json(), stats.json(), structure.json(), responses.json()]
+    )
+    assert "access-token" not in combined_payload
+    assert "refresh-token" not in combined_payload
+    assert getattr(container.artifacts, "pdfs", {}) == {}
+
+
+def test_forms_catalog_returns_partial_row_failures() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(
+        create_api_app(container, google_forms_client=_PartiallyFailingGoogleFormsClient())
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/forms/catalog")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["summary"]["questions_count"] == 5
+    assert rows[0]["response_stats"]["total"] == 2
+    assert rows[1]["form"]["id"] == "form_deleted"
+    assert rows[1]["status"] == "deleted"
+    assert rows[1]["summary"] is None
+    assert rows[1]["response_stats"] is None
+
+
+def test_forms_catalog_enrich_returns_chunk_rows_with_partial_failures() -> None:
+    clear_api_cache()
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(
+        create_api_app(container, google_forms_client=_PartiallyFailingGoogleFormsClient())
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.post(
+        "/v1/forms/catalog/enrich",
+        json={
+            "form_ids": ["form_1", "form_deleted"],
+            "include_summary": True,
+            "include_stats": True,
+        },
+    )
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows[0]["form_id"] == "form_1"
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["summary"]["questions_count"] == 5
+    assert rows[0]["response_stats"]["total"] == 2
+    assert rows[1]["form_id"] == "form_deleted"
+    assert rows[1]["status"] == "deleted"
+    assert rows[1]["error_code"] == "google_forms_summary_error"
+
+
+def test_forms_catalog_enrich_reuses_api_side_summary_and_stats_cache() -> None:
+    clear_api_cache()
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    forms_client = _CountingGoogleFormsClient()
+    client = TestClient(create_api_app(container, google_forms_client=forms_client))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    for _ in range(2):
+        response = client.post(
+            "/v1/forms/catalog/enrich",
+            json={"form_ids": ["form_1"], "include_summary": True, "include_stats": True},
+        )
+        assert response.status_code == 200
+
+    rows = response.json()
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["cache_hit"] is True
+    assert rows[0]["fetched_at"]
+    assert forms_client.summary_calls == 1
+    assert forms_client.stats_calls == 1
+
+
+def test_forms_catalog_enrich_logs_aggregate_safe_telemetry(caplog) -> None:
+    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
+
+    google_forms_routes._log_catalog_enrich_telemetry(
+        [
+            google_forms_routes.CatalogEnrichRow(
+                form_id="raw-form-id-1",
+                status="ok",
+                cache_hit=True,
+            ),
+            google_forms_routes.CatalogEnrichRow(
+                form_id="raw-form-id-2",
+                status="timeout",
+                error_code="catalog_enrich_timeout",
+            ),
+        ],
+        chunk_size=2,
+        include_summary=True,
+        include_stats=True,
+        duration_ms=12.5,
+    )
+
+    record = next(r for r in caplog.records if r.message == "forms_catalog_enrich_completed")
+    assert record.chunk_size == 2
+    assert record.cache_hit_count == 1
+    assert record.timeout_count == 1
+    assert record.ok_count == 1
+    assert "raw-form-id" not in str(record.__dict__)
+
+
+def test_api_google_data_cache_logs_hashed_resource_id(caplog) -> None:
+    clear_api_cache()
+    caplog.set_level(logging.INFO, logger="api.google_data_cache")
+
+    result = get_or_load(
+        ApiCacheKey(user_id="user_1", data_kind="form_summary", resource_id="raw-form-id"),
+        ttl_seconds=60,
+        loader=lambda: "loaded",
+    )
+
+    assert result.value == "loaded"
+    record = next(r for r in caplog.records if r.message == "api_google_data_cache_access")
+    assert record.resource_hash
+    assert record.resource_hash != "raw-form-id"
+    assert "raw-form-id" not in str(record.__dict__)
+
+
+def test_forms_catalog_enrich_returns_timeout_rows_within_budget(monkeypatch) -> None:
+    clear_api_cache()
+    monkeypatch.setattr(google_forms_routes, "CATALOG_ENRICH_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(google_forms_routes, "CATALOG_ENRICH_MAX_WORKERS", 1)
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(create_api_app(container, google_forms_client=_SlowGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.post(
+        "/v1/forms/catalog/enrich",
+        json={"form_ids": ["slow_form"], "include_summary": True, "include_stats": True},
+    )
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows == [
+        {
+            "form_id": "slow_form",
+            "status": "timeout",
+            "error_code": "catalog_enrich_timeout",
+            "summary": None,
+            "response_stats": None,
+            "fetched_at": None,
+            "cache_hit": False,
+        }
+    ]
+
+
+def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=FORM_SCOPES)
+    client = TestClient(create_api_app(container, google_sheets_client=_FakeGoogleSheetsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get(
+        "/v1/sheets/sheet_1/population-tables",
+        params={"next_url": "https://app.example.com/weighting"},
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "google_insufficient_scopes"
+    assert detail["action"] == "reconnect_sheets_required"
+    assert detail["purpose"] == "sheets"
+    assert "https://www.googleapis.com/auth/spreadsheets.readonly" in detail["missing_scopes"]
+    assert "purpose=sheets" in detail["connect_url"]
+
+
+def test_sheets_population_tables_return_only_detected_tables_without_tokens() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=SHEETS_SCOPES)
+    client = TestClient(create_api_app(container, google_sheets_client=_FakeGoogleSheetsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/sheets/sheet_1/population-tables")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "source": "Population",
+            "label_header": "Faculty",
+            "count_header": "N",
+            "population": {"FICT": 120, "IPSA": 80},
+        }
+    ]
+    combined_payload = str(response.json())
+    assert "access-token" not in combined_payload
+    assert "refresh-token" not in combined_payload
+
+
+def test_google_oauth_callback_creates_cookie_session_and_encrypted_tokens() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+
+    start = client.get(
+        "/v1/auth/google/start",
+        params={"next_url": "/catalog"},
+        follow_redirects=False,
+    )
+
+    assert start.status_code == 307
+    assert start.headers["location"].startswith("https://accounts.example/auth")
+    assert oauth.last_state is not None
+
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 307
+    redirect = urlsplit(callback.headers["location"])
+    assert redirect.path == "/catalog"
+    ticket = parse_qs(redirect.query)["login_ticket"][0]
+    assert client.cookies.get(SESSION_COOKIE_NAME) is None
+
+    exchanged = client.post("/v1/auth/session/exchange", json={"ticket": ticket})
+
+    assert exchanged.status_code == 200
+    assert exchanged.json()["authenticated"] is True
+    session_id = client.cookies.get(SESSION_COOKIE_NAME)
+    assert session_id is not None
+    assert exchanged.json()["session_id"] == session_id
+    session = container.session_service.validate(session_id)
+    assert session.user_id == "google:sub_1"
+
+    user = container.users.get("google:sub_1")
+    assert user is not None
+    assert user.email == "owner@example.com"
+    assert container.quotas.get_for_user(user.id) is not None
+
+    account = container.tokens.get_by_user(user.id)
+    assert account is not None
+    assert account.encrypted_refresh_token is not None
+    assert "refresh-token" not in account.encrypted_refresh_token
+
+    replay = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+    assert replay.status_code == 401
+
+    replay_ticket = client.post("/v1/auth/session/exchange", json={"ticket": ticket})
+    assert replay_ticket.status_code == 401
+
+
+def test_google_oauth_start_rejects_open_redirect_next_url() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+
+    client.get(
+        "/v1/auth/google/start",
+        params={"next_url": "https://evil.example/callback"},
+        follow_redirects=False,
+    )
+
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 307
+    redirect = urlsplit(callback.headers["location"])
+    assert redirect.path == "/"
+    assert "login_ticket" in parse_qs(redirect.query)
+
+
+# next_url values that must never steer the post-login redirect, and the one-time
+# login ticket riding on it, anywhere but back into the app.
+UNSAFE_NEXT_URLS = [
+    pytest.param("https://evil.example/callback", id="foreign-url"),
+    pytest.param("http://evil.example/", id="foreign-http-url"),
+    pytest.param("javascript:alert(1)", id="javascript-scheme"),
+    pytest.param("data:text/html,x", id="data-scheme"),
+    pytest.param("https://app.example.com@evil.example/", id="app-host-as-userinfo"),
+    pytest.param("https://app.example.com.evil.example/", id="app-host-as-subdomain"),
+    # Scheme-relative: a browser reads "//host/path" as https://host/path.
+    pytest.param("//evil.example/x", id="scheme-relative"),
+    pytest.param("///evil.example/x", id="three-slashes"),
+    pytest.param("////evil.example/x", id="four-slashes"),
+    # "\" means "/" to a browser, and it drops tab/CR/LF, so these read as "//evil.example".
+    pytest.param("/\\evil.example", id="backslash-after-slash"),
+    pytest.param("/\t/evil.example", id="tab-between-slashes"),
+    pytest.param("/\n/evil.example", id="newline-between-slashes"),
+    pytest.param("/\r\n/evil.example", id="crlf-between-slashes"),
+    pytest.param("https://app.example.com/\\evil.example", id="backslash-in-app-url"),
+]
+
+_CALLBACK_URL = "https://api.example.com/v1/auth/google/callback"
+_FIRST_PARTY_HOSTS = {"api.example.com", "app.example.com"}
+_DROPPED_BY_BROWSERS = str.maketrans("", "", "\t\r\n")
+
+
+def _callback_location(next_url: str) -> str:
+    """Where the callback sends the browser after a login that asked for ``next_url``."""
+    oauth = _FakeOAuthClient()
+    client = TestClient(create_api_app(_test_container(), oauth_client=oauth))
+    client.get("/v1/auth/google/start", params={"next_url": next_url}, follow_redirects=False)
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 307
+    return callback.headers["location"]
+
+
+def _landing_host(location: str) -> str | None:
+    """Host a browser ends up on when the callback redirects it to ``location``.
+
+    Browsers drop tab/CR/LF from a URL and read "\\" as "/", so "/<TAB>/host" and
+    "/\\host" both mean "//host" to them although they look like local paths.
+    """
+    target = location.translate(_DROPPED_BY_BROWSERS).replace("\\", "/")
+    return urlsplit(urljoin(_CALLBACK_URL, target)).hostname
+
+
+@pytest.mark.parametrize("next_url", UNSAFE_NEXT_URLS)
+def test_oauth_callback_ignores_an_unsafe_next_url(next_url: str) -> None:
+    location = _callback_location(next_url)
+
+    assert _landing_host(location) in _FIRST_PARTY_HOSTS
+    assert location.startswith("/?login_ticket=")
+
+
+@pytest.mark.parametrize(
+    ("next_url", "landing"),
+    [
+        pytest.param("/", "/", id="root"),
+        pytest.param("/catalog", "/catalog", id="local-path"),
+        pytest.param(
+            "https://app.example.com/catalog", "https://app.example.com/catalog", id="app-url"
+        ),
+    ],
+)
+def test_oauth_callback_keeps_a_first_party_next_url(next_url: str, landing: str) -> None:
+    location = _callback_location(next_url)
+
+    assert location.startswith(f"{landing}?login_ticket=")
+
+
+@pytest.mark.parametrize(
+    "next_url",
+    [
+        pytest.param("/%2F/evil.example", id="encoded-slash"),
+        pytest.param("/%2f/evil.example", id="encoded-slash-lowercase"),
+        pytest.param("/%5Cevil.example", id="encoded-backslash"),
+        pytest.param("/%09/evil.example", id="encoded-tab"),
+    ],
+)
+def test_oauth_callback_stays_on_site_for_percent_encoded_slashes(next_url: str) -> None:
+    """Escapes are not decoded on the way to the browser, so they stay path characters.
+
+    Pinned so that decoding a validated value later (e.g. unquoting before redirecting)
+    would surface here instead of turning "/%2F/host" into "//host".
+    """
+    location = _callback_location(next_url)
+
+    assert _landing_host(location) in _FIRST_PARTY_HOSTS
+
+
+def test_google_oauth_callback_redirects_to_web_on_internal_failure() -> None:
+    container = SaaSContainer.in_memory(
+        load_saas_settings(
+            {
+                "APP_ENV": "test",
+                "APP_BASE_URL": "https://app.example.com",
+                "API_BASE_URL": "https://api.example.com",
+                "SESSION_PEPPER": "test-pepper",
+            }
+        )
+    )
+    oauth = _FailingUserInfoOAuthClient()
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+
+    client.get(
+        "/v1/auth/google/start",
+        params={"next_url": "https://app.example.com/"},
+        follow_redirects=False,
+    )
+
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+
+    assert callback.status_code == 307
+    redirect = urlsplit(callback.headers["location"])
+    assert redirect.scheme == "https"
+    assert redirect.netloc == "app.example.com"
+    assert parse_qs(redirect.query) == {"auth_error": ["oauth_callback_failed"]}
+
+
+def test_refresh_error_returns_401_and_drops_oauth_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    container.tokens.save(
+        replace(
+            container.tokens.get_by_user("user_1"),
+            token_expiry=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise _refresh_error("invalid_grant")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == {
+        "code": "google_token_revoked",
+        "action": "reauth_required",
+    }
+    assert container.tokens.get_by_user("user_1") is None
+
+
+def test_insufficient_scopes_returns_403() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "google_insufficient_scopes"
+
+
+class _RaisingGoogleFormsClient(_FakeGoogleFormsClient):
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        raise self.error
+
+
+def _forms_client_raising(error: Exception) -> tuple[TestClient, SaaSContainer]:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(
+        create_api_app(container, google_forms_client=_RaisingGoogleFormsClient(error))
+    )
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    return client, container
+
+
+@pytest.mark.parametrize(
+    ("reason", "message"),
+    [
+        ("insufficientPermissions", "denied"),
+        ("accessNotConfigured", "denied"),
+        ("ACCESS_TOKEN_SCOPE_INSUFFICIENT", "denied"),
+        (None, "Failed to list forms: Request had insufficient authentication scopes."),
+    ],
+)
+def test_google_scope_errors_map_to_insufficient_scopes_with_a_way_to_fix_it(
+    reason: str | None, message: str
+) -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError(message, status=403, reason=reason))
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "google_insufficient_scopes"
+    assert detail["action"] == "reconnect_forms_required"
+    assert detail["purpose"] == "forms"
+    assert detail["connect_url"].startswith("https://api.example.com/v1/auth/google/start?")
+    assert "purpose=forms" in detail["connect_url"]
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 503])
+def test_other_google_errors_map_to_502_and_log_error_code(
+    status_code: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("boom", status=status_code, reason="backend"))
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/forms")
+
+    assert response.status_code == 502
+    assert "api_google_error" in caplog.text
+    assert f"google_{status_code}" in " ".join(
+        str(getattr(record, "error_code", "")) for record in caplog.records
+    )
+
+
+def test_google_403_without_scope_reason_stays_a_plain_403_and_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("no access", status=403, reason="forbidden"))
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/forms")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "google_forms_error"
+    logged = [r for r in caplog.records if r.getMessage() == "api_google_error"]
+    assert logged, "a Google failure must leave a log line with its reason"
+    assert logged[0].error_code == "google_403"
+    assert logged[0].reason == "forbidden"
+
+
+def test_google_404_stays_404_without_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(FormsApiError("gone", status=404))
+
+    with caplog.at_level(logging.WARNING):
+        response = client.get("/v1/forms")
+
+    assert response.status_code == 404
+    assert "api_google_error" not in caplog.text
+
+
+def test_logout_clears_firestore_session() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    assert client.get("/v1/session").json()["authenticated"] is True
+
+    response = client.post("/v1/auth/logout")
+
+    assert response.status_code == 200
+    stale = TestClient(create_api_app(container))
+    stale.cookies.set(SESSION_COOKIE_NAME, session_id)
+    assert stale.get("/v1/session").json() == {"authenticated": False}
+    assert stale.get("/v1/forms").status_code == 401
+
+
+class _MidCallRefreshGoogleFormsClient(_FakeGoogleFormsClient):
+    """google-auth refreshes on a 401 in the middle of a Google client call."""
+
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        creds.refresh(None)
+        return super().list_forms(creds)
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        creds.refresh(None)
+        return super().get_form_summary(creds, form_id)
+
+
+def _client_with_valid_grant(
+    google_forms_client: _FakeGoogleFormsClient,
+) -> tuple[TestClient, SaaSContainer]:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    client = TestClient(create_api_app(container, google_forms_client=google_forms_client))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+    return client, container
+
+
+def test_grant_revoked_during_a_google_call_returns_401_and_drops_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consent revoked while the stored access token has not expired yet."""
+    client, container = _client_with_valid_grant(_MidCallRefreshGoogleFormsClient())
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise _refresh_error("invalid_grant")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == {
+        "code": "google_token_revoked",
+        "action": "reauth_required",
+    }
+    assert container.tokens.get_by_user("user_1") is None
+
+
+def test_catalog_enrich_reports_revoked_grant_instead_of_row_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, container = _client_with_valid_grant(_MidCallRefreshGoogleFormsClient())
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise _refresh_error("invalid_grant")
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+
+    response = client.post("/v1/forms/catalog/enrich", json={"form_ids": ["form_1"]})
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "google_token_revoked"
+    assert container.tokens.get_by_user("user_1") is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [_refresh_error("temporarily_unavailable", retryable=True), _refresh_error("invalid_client")],
+    ids=["outage", "bad_client"],
+)
+def test_token_endpoint_failure_returns_502_and_keeps_the_grant(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    client, container = _client_with_valid_grant(_FakeGoogleFormsClient())
+    container.tokens.save(
+        replace(
+            container.tokens.get_by_user("user_1"),
+            token_expiry=datetime.now(UTC) - timedelta(minutes=5),
+        )
+    )
+
+    def refresh(self: Credentials, request: object) -> None:
+        raise error
+
+    monkeypatch.setattr(Credentials, "refresh", refresh)
+
+    response = client.get("/v1/forms")
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "google_token_refresh_failed"
+    assert container.tokens.get_by_user("user_1") is not None
+
+
+def _log_in(
+    container: SaaSContainer,
+    oauth: _FakeOAuthClient,
+    *,
+    purpose: str,
+    granted: tuple[str, ...] | None = None,
+) -> TestClient:
+    """Run start -> callback -> ticket exchange the way the web app does."""
+    oauth.granted_scopes = granted
+    client = TestClient(create_api_app(container, oauth_client=oauth))
+    client.get(
+        "/v1/auth/google/start",
+        params={"purpose": purpose, "next_url": "/"},
+        follow_redirects=False,
+    )
+    callback = client.get(
+        "/v1/auth/google/callback",
+        params={"state": oauth.last_state, "code": "oauth-code"},
+        follow_redirects=False,
+    )
+    ticket = parse_qs(urlsplit(callback.headers["location"]).query)["login_ticket"][0]
+    client.post("/v1/auth/session/exchange", json={"ticket": ticket})
+    return client
+
+
+def test_identity_login_does_not_inherit_scopes_from_an_earlier_grant() -> None:
+    """The token is replaced on every login, so the record must describe the new token.
+
+    Regression: scopes were merged with the previous record, so after a plain sign-in
+    the API claimed Forms/Drive access the fresh token did not have, /v1/google/access
+    said yes and /v1/forms then failed with 403 for every returning user.
+    """
+    container = _test_container()
+    container.tokens.save(
+        OAuthAccount(
+            user_id="google:sub_1",
+            provider="google",
+            google_sub="sub_1",
+            email="owner@example.com",
+            scopes=FORM_SCOPES,  # granted in an earlier session
+            encrypted_access_token=container.token_crypto.encrypt("old-access"),
+            encrypted_refresh_token=container.token_crypto.encrypt("old-refresh"),
+            token_expiry=datetime.now(UTC) + timedelta(hours=1),
+            updated_at=NOW,
+        )
+    )
+    oauth = _FakeOAuthClient()
+
+    client = _log_in(container, oauth, purpose="identity")
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(IDENTITY_SCOPES)
+    access = client.get("/v1/google/access", params={"purpose": "forms"}).json()
+    assert access["has_access"] is False
+    assert access["connect_url"]
+
+
+def test_login_records_the_scopes_google_granted_not_the_ones_requested() -> None:
+    """Granular consent lets the user untick individual scopes."""
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+
+    client = _log_in(container, oauth, purpose="forms", granted=IDENTITY_SCOPES)
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(IDENTITY_SCOPES)
+    assert (
+        client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is False
+    )
+
+
+def test_connecting_forms_records_the_full_grant() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+
+    client = _log_in(container, oauth, purpose="forms")
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(FORM_SCOPES)
+    assert client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is True
+
+
+def test_login_falls_back_to_requested_scopes_when_google_reports_none() -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    oauth.granted_scopes = ()
+
+    _log_in(container, oauth, purpose="forms", granted=())
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(FORM_SCOPES)
+
+
+def _next_url_of(connect_url: str) -> str:
+    return parse_qs(urlsplit(connect_url).query)["next_url"][0]
+
+
+def test_connect_url_from_a_data_endpoint_returns_to_the_web_app_not_the_api_root() -> None:
+    """A bare "/" would send the user back to the API host after consenting."""
+    from core.forms_api import FormsApiError
+
+    client, _ = _forms_client_raising(
+        FormsApiError("denied", status=403, reason="ACCESS_TOKEN_SCOPE_INSUFFICIENT")
+    )
+
+    detail = client.get("/v1/forms").json()["detail"]
+
+    assert _next_url_of(detail["connect_url"]) == "https://app.example.com/"
+
+
+def test_connect_url_for_a_missing_grant_also_returns_to_the_web_app() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container, google_forms_client=_FakeGoogleFormsClient()))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    detail = client.get("/v1/forms").json()["detail"]
+
+    assert _next_url_of(detail["connect_url"]) == "https://app.example.com/"
+
+
+def test_an_explicit_next_url_from_the_web_app_is_kept() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    payload = client.get(
+        "/v1/google/access",
+        params={"purpose": "forms", "next_url": "https://app.example.com/catalog"},
+    ).json()
+
+    assert _next_url_of(payload["connect_url"]) == "https://app.example.com/catalog"
+
+
+@pytest.mark.parametrize("purpose", ["identity", "forms", "sheets"])
+def test_every_sign_in_flow_asks_google_to_include_earlier_grants(purpose: str) -> None:
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+
+    _log_in(container, oauth, purpose=purpose)
+
+    assert oauth.last_include_granted_scopes is True
+
+
+def test_returning_user_keeps_forms_access_after_a_plain_sign_in() -> None:
+    """Connect once, sign out, sign back in: no second "connect Forms" step."""
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    _log_in(container, oauth, purpose="forms")  # the user connects Forms
+
+    client = _log_in(container, oauth, purpose="identity")  # a later, plain sign-in
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(FORM_SCOPES)
+    assert client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is True
+
+
+def test_sign_in_after_consent_was_withdrawn_asks_to_connect_again() -> None:
+    """If Google no longer reports the earlier grant, the record must not invent it."""
+    container = _test_container()
+    oauth = _FakeOAuthClient()
+    _log_in(container, oauth, purpose="forms")
+    oauth.earlier_grants.clear()  # the user revoked access in their Google account
+
+    client = _log_in(container, oauth, purpose="identity")
+
+    account = container.tokens.get_by_user("google:sub_1")
+    assert account is not None
+    assert set(account.scopes) == set(IDENTITY_SCOPES)
+    assert (
+        client.get("/v1/google/access", params={"purpose": "forms"}).json()["has_access"] is False
+    )
+
+
+def _connect_url_next_url(next_url: str) -> str:
+    """The next_url the reconnect link hands to the OAuth start endpoint."""
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container, scopes=IDENTITY_SCOPES)
+    client = TestClient(create_api_app(container))
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    payload = client.get(
+        "/v1/google/access",
+        params={"purpose": "forms", "next_url": next_url},
+    ).json()
+
+    return _next_url_of(payload["connect_url"])
+
+
+@pytest.mark.parametrize("next_url", UNSAFE_NEXT_URLS)
+def test_connect_url_ignores_an_unsafe_next_url(next_url: str) -> None:
+    assert _connect_url_next_url(next_url) == "https://app.example.com/"
+
+
+@pytest.mark.parametrize(
+    ("next_url", "expected"),
+    [
+        pytest.param("/", "https://app.example.com/", id="root"),
+        pytest.param("/catalog", "https://app.example.com/catalog", id="local-path"),
+        pytest.param(
+            "https://app.example.com/catalog", "https://app.example.com/catalog", id="app-url"
+        ),
+    ],
+)
+def test_connect_url_keeps_a_first_party_next_url(next_url: str, expected: str) -> None:
+    assert _connect_url_next_url(next_url) == expected

@@ -19,27 +19,30 @@ from datetime import UTC, date, datetime
 import pandas as pd
 import streamlit as st
 
-from core.auth import credentials_from_dict
-from core.forms_api import FormsApiError
 from core.forms_catalog import (
     FormDriveMeta,
     FormEnrichment,
     ResponseStats,
-    enrich_form,
-    fetch_response_stats,
-    list_forms_with_drive_meta,
 )
-from core.google_throttle import DEFAULT_MAX_WORKERS, parallel_map
 from core.logger import get_logger
 from ui.components.action_bar import render_action_bar
 from ui.components.auth_widget import ensure_api_access
 from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
+from ui.google_data import (
+    cache_token,
+    clear_catalog_cache,
+    google_data_client,
+    list_catalog_snapshot,
+)
 
 log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
+CATALOG_ENRICH_CHUNK_SIZE = 10
+ACTIVE_RECENT_DAYS = 7
+RETRYABLE_DATA_STATUSES = {"timeout", "api_error", "rate_limited"}
 TABLE_HEADER_HEIGHT_PX = 38
 TABLE_ROW_HEIGHT_PX = 35
 TABLE_MIN_HEIGHT_PX = 360
@@ -56,6 +59,7 @@ STATUS_OPTIONS = [STATUS_ALL, STATUS_OPEN, STATUS_CLOSED, STATUS_UNPUBLISHED, ST
 ALL_COLUMNS = [
     "FormName",
     "PublicationStatus",
+    "DataStatus",
     "Title",
     "Owner",
     "Questions",
@@ -63,6 +67,9 @@ ALL_COLUMNS = [
     "Accepting",
     "Total",
     "LastResponse",
+    "Activity",
+    "DaysNoResponse",
+    "UpdatedAgo",
     "Modified",
     "Created",
     "SheetID",
@@ -71,43 +78,49 @@ ALL_COLUMNS = [
 DEFAULT_VISIBLE_COLUMNS = [
     "FormName",
     "PublicationStatus",
+    "DataStatus",
     "Owner",
     "Questions",
     "Accepting",
     "Total",
     "LastResponse",
+    "Activity",
+    "DaysNoResponse",
+    "UpdatedAgo",
     "Modified",
 ]
 
 if not ensure_api_access():
     st.stop()
 
-creds = credentials_from_dict(st.session_state["credentials"])
-
 
 @st.cache_data(ttl=900, show_spinner="Завантажую каталог форм…")
-def _cached_drive_list(_creds_token: str) -> list[FormDriveMeta]:
-    """Drive list форм, кешується на 15 хв за access_token."""
-    return list_forms_with_drive_meta(creds)
+def _cached_catalog_snapshot(
+    session_token: str,
+) -> tuple[list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]]:
+    """Catalog snapshot; SaaS uses aggregate API, local mode keeps Drive list fallback."""
+    return list_catalog_snapshot()
 
 
 try:
-    forms_meta = _cached_drive_list(creds.token or "")
-except FormsApiError as exc:
-    log.exception("ui_catalog_drive_list_failed", extra={"status": exc.status})
+    forms_meta, initial_enrichments, initial_stats = _cached_catalog_snapshot(cache_token())
+except Exception as exc:  # noqa: BLE001
+    log.exception("ui_catalog_drive_list_failed", extra={"error_code": type(exc).__name__})
     render_error_state("Не вдалося завантажити каталог.", details=str(exc))
     st.stop()
 
 render_page_header("Каталог")
 action = render_action_bar(
-    creds,
     refresh_scope="catalog",
 )
 if action.refresh_clicked:
     clear_forms_cache()
-    _cached_drive_list.clear()
+    clear_catalog_cache()
+    _cached_catalog_snapshot.clear()
     st.session_state["form_enrichments"] = {}
     st.session_state["form_response_stats"] = {}
+    st.session_state["form_data_status"] = {}
+    st.session_state["form_data_fetched_at"] = {}
     st.rerun()
 
 if not forms_meta:
@@ -122,6 +135,10 @@ if not forms_meta:
 # Це різнить "ще не пробували" (ключ відсутній) від "пробували — failed" (None).
 st.session_state.setdefault("form_enrichments", {})
 st.session_state.setdefault("form_response_stats", {})
+st.session_state.setdefault("form_data_status", {})
+st.session_state.setdefault("form_data_fetched_at", {})
+st.session_state["form_enrichments"].update(initial_enrichments)
+st.session_state["form_response_stats"].update(initial_stats)
 
 
 def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
@@ -224,20 +241,97 @@ def _table_height(row_count: int) -> int:
     return max(TABLE_MIN_HEIGHT_PX, min(TABLE_MAX_HEIGHT_PX, content_height))
 
 
+def _response_activity(stat: ResponseStats | None) -> tuple[str, int | None]:
+    if stat is None:
+        return "", None
+    if stat.total <= 0 or not stat.last_response:
+        return "Без відповідей", None
+
+    last_response = pd.to_datetime(stat.last_response, errors="coerce", utc=True)
+    if pd.isna(last_response):
+        return STATUS_UNKNOWN, None
+
+    delta = pd.Timestamp.now(tz=UTC) - last_response
+    days = max(int(delta.total_seconds() // 86400), 0)
+    if days <= ACTIVE_RECENT_DAYS:
+        return "Активна", days
+    return "Затухла", days
+
+
+def _data_status_label(
+    form_id: str,
+    enrichments: dict[str, FormEnrichment | None],
+    statuses: dict[str, str],
+) -> str:
+    if form_id not in enrichments:
+        return "Завантажується"
+    status = statuses.get(form_id)
+    if status == "ok":
+        return "Ок"
+    if status == "timeout":
+        return "Таймаут"
+    if status == "rate_limited":
+        return "Rate limit"
+    if status == "no_access":
+        return "Немає доступу"
+    if status == "deleted":
+        return "Видалена"
+    if status == "unsupported":
+        return "Не підтримується"
+    if status == "api_error":
+        return "Помилка API"
+    return "Помилка" if enrichments.get(form_id) is None else "Ок"
+
+
+def _retryable_enrichment_ids(
+    forms: list[FormDriveMeta],
+    statuses: dict[str, str],
+) -> list[str]:
+    return [form.id for form in forms if statuses.get(form.id) in RETRYABLE_DATA_STATUSES]
+
+
+def _clear_enrichment_state_for(form_ids: list[str]) -> None:
+    for form_id in form_ids:
+        st.session_state["form_enrichments"].pop(form_id, None)
+        st.session_state["form_response_stats"].pop(form_id, None)
+        st.session_state["form_data_status"].pop(form_id, None)
+        st.session_state["form_data_fetched_at"].pop(form_id, None)
+
+
+def _updated_ago_label(value: str | None) -> str:
+    if not value:
+        return ""
+    fetched_at = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(fetched_at):
+        return ""
+    delta_seconds = max((pd.Timestamp.now(tz=UTC) - fetched_at).total_seconds(), 0)
+    if delta_seconds < 60:
+        return "щойно"
+    if delta_seconds < 3600:
+        return f"{int(delta_seconds // 60)} хв тому"
+    if delta_seconds < 86400:
+        return f"{int(delta_seconds // 3600)} год тому"
+    return f"{int(delta_seconds // 86400)} дн тому"
+
+
 def _build_dataframe(
     forms: list[FormDriveMeta],
     enrichments: dict[str, FormEnrichment | None],
     stats: dict[str, ResponseStats],
+    statuses: dict[str, str],
+    fetched_at: dict[str, str],
 ) -> pd.DataFrame:
     """Зібрати DataFrame, підставляючи placeholders для ще-не-enriched рядків."""
     rows = []
     for f in forms:
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
+        activity, days_no_response = _response_activity(stat)
         row = {
             "FormID": f.id,
             "FormName": f.name,
             "PublicationStatus": _publication_status(enr),
+            "DataStatus": _data_status_label(f.id, enrichments, statuses),
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
             "Questions": enr.questions_count if enr else None,
@@ -245,6 +339,9 @@ def _build_dataframe(
             "Accepting": enr.accepting_responses if enr else None,
             "Total": stat.total if stat else None,
             "LastResponse": stat.last_response if stat else "",
+            "Activity": activity,
+            "DaysNoResponse": days_no_response,
+            "UpdatedAgo": _updated_ago_label(fetched_at.get(f.id)),
             "Modified": f.modified_time,
             "Created": f.created_time,
             "SheetID": (enr.linked_sheet_id or "") if enr else "",
@@ -262,36 +359,52 @@ def _build_dataframe(
 filter_values = _render_table_filters(forms_meta)
 
 
-@st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
-def _table_with_enrichment() -> None:
-    """Один chunk enrichment'у + рендер таблиці. Тікає кожні 2с."""
+def _render_table_with_enrichment() -> None:
+    """One enrichment chunk plus table render."""
     enrichments = st.session_state["form_enrichments"]
     stats = st.session_state["form_response_stats"]
+    statuses = st.session_state["form_data_status"]
+    fetched_at = st.session_state["form_data_fetched_at"]
+    data = google_data_client()
 
     pending = [f for f in forms_meta if f.id not in enrichments]
     if pending:
-        chunk = pending[:DEFAULT_MAX_WORKERS]
-        enrich_results = parallel_map(lambda f: enrich_form(creds, f.id), chunk)
-        sheet_targets: list[tuple[str, str]] = []
-        for form, result in enrich_results:
-            if isinstance(result, Exception):
-                enrichments[form.id] = None  # failed — не пробуємо знову
-                st.toast(f"⚠️ {form.name}: {result}", icon="⚠️")
-                continue
-            enrichments[form.id] = result
-            if result.linked_sheet_id:
-                sheet_targets.append((form.id, result.linked_sheet_id))
-
-        if sheet_targets:
-            stat_results = parallel_map(
-                lambda pair: fetch_response_stats(creds, pair[1]),
-                sheet_targets,
+        chunk = pending[:CATALOG_ENRICH_CHUNK_SIZE]
+        chunk_by_id = {form.id: form for form in chunk}
+        try:
+            enrich_results = data.enrich_catalog_forms(
+                list(chunk_by_id),
+                include_summary=True,
+                include_stats=True,
             )
-            for (form_id, _sheet_id), stat_result in stat_results:
-                if isinstance(stat_result, Exception):
-                    st.toast(f"⚠️ stats fetch: {stat_result}", icon="⚠️")
-                    continue
-                stats[form_id] = stat_result
+        except Exception as exc:  # noqa: BLE001
+            for form in chunk:
+                enrichments[form.id] = None  # failed — не пробуємо знову до ручного refresh
+                statuses[form.id] = "api_error"
+            st.toast(f"⚠️ Не вдалося дозавантажити каталог: {exc}", icon="⚠️")
+        else:
+            returned_ids: set[str] = set()
+            for result in enrich_results:
+                returned_ids.add(result.form_id)
+                statuses[result.form_id] = result.status
+                if result.fetched_at:
+                    fetched_at[result.form_id] = result.fetched_at
+                if result.summary is not None:
+                    enrichments[result.form_id] = result.summary
+                else:
+                    enrichments[result.form_id] = None
+                if result.response_stats is not None:
+                    stats[result.form_id] = result.response_stats
+                if result.status != "ok":
+                    form_name = chunk_by_id.get(result.form_id)
+                    label = form_name.name if form_name else result.form_id
+                    st.toast(f"⚠️ {label}: {result.status}", icon="⚠️")
+
+            for missing_id, form in chunk_by_id.items():
+                if missing_id not in returned_ids:
+                    enrichments[missing_id] = None
+                    statuses[missing_id] = "api_error"
+                    st.toast(f"⚠️ {form.name}: no enrichment result", icon="⚠️")
 
     loaded = sum(1 for f in forms_meta if f.id in enrichments)
     total = len(forms_meta)
@@ -300,8 +413,16 @@ def _table_with_enrichment() -> None:
             loaded / total,
             text=f"Підвантажую деталі: {loaded}/{total}",
         )
+    retryable_ids = _retryable_enrichment_ids(forms_meta, statuses)
+    if retryable_ids and st.button(
+        f"Повторити проблемні рядки ({len(retryable_ids)})",
+        key="catalog_retry_failed_rows",
+        help="Повторно завантажити рядки зі статусами timeout, api_error або rate_limited.",
+    ):
+        _clear_enrichment_state_for(retryable_ids)
+        st.rerun()
 
-    df = _build_dataframe(forms_meta, enrichments, stats)
+    df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at)
     _render_catalog_metrics(df)
     filtered = _apply_filters(df, filter_values)
     selection_source = filtered.reset_index(drop=True)
@@ -320,6 +441,7 @@ def _table_with_enrichment() -> None:
         column_config={
             "FormName": st.column_config.TextColumn("Назва"),
             "PublicationStatus": st.column_config.TextColumn("Статус"),
+            "DataStatus": st.column_config.TextColumn("Стан даних"),
             "Title": st.column_config.TextColumn("Внутрішня назва"),
             "Owner": st.column_config.TextColumn("Власник"),
             "Questions": st.column_config.NumberColumn("Питань", format="%d"),
@@ -327,6 +449,9 @@ def _table_with_enrichment() -> None:
             "Accepting": st.column_config.TextColumn("Приймає"),
             "Total": st.column_config.NumberColumn("Відповідей", format="%d"),
             "LastResponse": st.column_config.TextColumn("Остання відповідь"),
+            "Activity": st.column_config.TextColumn("Активність"),
+            "DaysNoResponse": st.column_config.NumberColumn("Днів без відповіді", format="%d"),
+            "UpdatedAgo": st.column_config.TextColumn("Оновлено"),
             "Modified": st.column_config.DatetimeColumn("Змінено", format="DD.MM.YYYY HH:mm"),
             "Created": st.column_config.DatetimeColumn("Створено", format="DD.MM.YYYY HH:mm"),
             "SheetID": st.column_config.TextColumn("Sheet ID", width="small"),
@@ -341,4 +466,12 @@ def _table_with_enrichment() -> None:
             st.rerun()
 
 
-_table_with_enrichment()
+@st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
+def _table_with_enrichment_fragment() -> None:
+    _render_table_with_enrichment()
+
+
+if any(f.id not in st.session_state["form_enrichments"] for f in forms_meta):
+    _table_with_enrichment_fragment()
+else:
+    _render_table_with_enrichment()

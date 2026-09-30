@@ -14,6 +14,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from core.google_errors import google_error_reason
 from core.logger import get_logger, log_call
 
 log = get_logger(__name__)
@@ -31,9 +32,16 @@ class SheetsApiError(RuntimeError):
     від справжніх збоїв і знижувати log-level відповідно.
     """
 
-    def __init__(self, message: str, *, status: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        reason: str | None = None,
+    ):
         super().__init__(message)
         self.status = status
+        self.reason = reason
 
 
 def find_response_sheet_name(service, sheet_id: str) -> str:
@@ -66,6 +74,7 @@ def find_response_sheet_name(service, sheet_id: str) -> str:
         raise SheetsApiError(
             f"Не вдалося прочитати metadata Sheet {sheet_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
     for sheet in meta.get("sheets", []):
         props = sheet.get("properties", {})
@@ -86,6 +95,7 @@ def _grid_sheet_titles(service, sheet_id: str) -> list[str]:
         raise SheetsApiError(
             f"Не вдалося прочитати metadata Sheet {sheet_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
     return [
         s["properties"]["title"]
@@ -131,6 +141,7 @@ def fetch_all_grids(creds: Credentials, sheet_id: str) -> dict[str, list[list[st
         raise SheetsApiError(
             f"Не вдалося прочитати аркуші Sheet {sheet_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
     out: dict[str, list[list[str]]] = {}
     for title, value_range in zip(titles, resp.get("valueRanges", []), strict=False):
@@ -174,6 +185,7 @@ def fetch_responses(creds: Credentials, sheet_id: str) -> pd.DataFrame:
         raise SheetsApiError(
             f"Не вдалося прочитати Sheet {sheet_id}: {exc.reason or exc}",
             status=exc.resp.status,
+            reason=google_error_reason(exc),
         ) from exc
 
     values = resp.get("values", [])

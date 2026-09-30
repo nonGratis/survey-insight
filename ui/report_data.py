@@ -13,17 +13,17 @@ from collections.abc import Sequence
 from datetime import datetime
 
 import pandas as pd
-from google.oauth2.credentials import Credentials
 
-from core.context_tables import ContextTable, assign_tables_to_questions, scan_sheets_for_tables
+from core.context_tables import ContextTable, assign_tables_to_questions
 from core.crosstab import PairAssociation, association_scan, crosstab
 from core.crosstab_frame import answer_values
 from core.forecast import ForecastError, classify_form_type, forecast_current_wave
-from core.forms_api import get_linked_sheet_id, list_response_timestamps, parse_question_types
+from core.forms_api import get_linked_sheet_id, parse_question_types
 from core.report import Metric
-from core.sheets_api import SheetsApiError, fetch_all_grids
+from core.sheets_api import SheetsApiError
 from core.timeline import build_timeline_from_timestamps
 from core.weighting import Dimension, WeightingResult, compute_weighting
+from ui.google_data import list_response_timestamps, scan_population_tables
 
 _SHORT = 40  # обрізання довгих формулювань у таблиці зв'язків
 
@@ -42,9 +42,7 @@ def _single_choice(structure: dict) -> dict[str, str]:
     return {q.id: q.title for q in parse_question_types(structure) if q.type == "MULTIPLE_CHOICE"}
 
 
-def auto_weighting(
-    creds: Credentials, structure: dict, responses: list[dict]
-) -> WeightingResult | None:
+def auto_weighting(structure: dict, responses: list[dict]) -> WeightingResult | None:
     """Порахувати репрезентативність авто-детектом таблиць популяції у Sheet.
 
     Повертає None, якщо немає привʼязаного Sheet або придатних таблиць —
@@ -54,8 +52,8 @@ def auto_weighting(
     if not sheet_id:
         return None
     try:
-        tables = scan_sheets_for_tables(fetch_all_grids(creds, sheet_id))
-    except SheetsApiError:
+        tables = scan_population_tables(sheet_id)
+    except (RuntimeError, SheetsApiError):
         return None
     return weighting_from_tables(structure, responses, tables)
 
@@ -137,14 +135,14 @@ def top_association_rows(
     return rows
 
 
-def dynamics_metrics(creds: Credentials, form_id: str, form_title: str) -> tuple[list[Metric], str]:
+def dynamics_metrics(form_id: str, form_title: str) -> tuple[list[Metric], str]:
     """Показники динаміки надходження: «Зараз» + прогноз посадки поточної хвилі.
 
     Прогноз — числами (без графіка). За будь-якого збою повертає лише поточний
     лічильник, не валячи звіт.
     """
     try:
-        timestamps = list_response_timestamps(creds, form_id)
+        timestamps = list_response_timestamps(form_id)
     except Exception:  # noqa: BLE001 — звіт не має падати через прогноз
         return [], ""
 

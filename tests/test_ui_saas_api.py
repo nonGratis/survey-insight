@@ -1,0 +1,344 @@
+from __future__ import annotations
+
+import logging
+from urllib.parse import parse_qs, urlsplit
+
+import httpx
+import pytest
+
+from ui.saas_api import (
+    SESSION_COOKIE_NAME,
+    ApiServerError,
+    GoogleTokenRevokedError,
+    GoogleUnavailableError,
+    MissingGoogleScopesError,
+    SaaSApiClient,
+    SessionExpiredError,
+)
+
+
+def test_google_auth_start_url_preserves_next_url() -> None:
+    client = SaaSApiClient("https://api.example.com/")
+
+    url = client.google_auth_start_url("https://app.example.com/catalog?form_id=abc")
+
+    parsed = urlsplit(url)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "api.example.com"
+    assert parsed.path == "/v1/auth/google/start"
+    assert parse_qs(parsed.query) == {
+        "next_url": ["https://app.example.com/catalog?form_id=abc"],
+        "purpose": ["identity"],
+    }
+
+
+def test_exchange_login_ticket_returns_session_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/v1/auth/session/exchange"
+        assert request.read() == b'{"ticket":"ticket-1"}'
+        return httpx.Response(
+            200,
+            json={
+                "authenticated": True,
+                "user_id": "user_1",
+                "email": "owner@example.com",
+                "name": "Owner",
+                "plan": "pilot",
+                "session_id": "raw-session-id",
+            },
+        )
+
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+    session = client.exchange_login_ticket("ticket-1")
+
+    assert session.authenticated is True
+    assert session.user_id == "user_1"
+    assert session.session_id == "raw-session-id"
+
+
+def test_read_session_sends_cookie_and_keeps_fallback_session_id() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/session"
+        assert request.headers["cookie"] == f"{SESSION_COOKIE_NAME}=raw-session-id"
+        return httpx.Response(
+            200,
+            json={
+                "authenticated": True,
+                "user_id": "user_1",
+                "email": "owner@example.com",
+                "name": "Owner",
+                "plan": "pilot",
+            },
+        )
+
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+    session = client.read_session("raw-session-id")
+
+    assert session.authenticated is True
+    assert session.session_id == "raw-session-id"
+
+
+def test_check_google_access_sends_session_cookie() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/google/access"
+        assert request.url.params["purpose"] == "forms"
+        assert request.headers["cookie"] == f"{SESSION_COOKIE_NAME}=raw-session-id"
+        return httpx.Response(
+            200,
+            json={"ok": True, "has_access": True, "purpose": "forms", "connect_url": None},
+        )
+
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+    access = client.check_google_access(
+        "raw-session-id",
+        purpose="forms",
+        next_url="https://app.example.com/",
+    )
+
+    assert access.ok is True
+    assert access.purpose == "forms"
+
+
+def test_check_google_access_raises_typed_missing_scope_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "ok": False,
+                "has_access": False,
+                "purpose": "forms",
+                "missing_scopes": ["https://www.googleapis.com/auth/forms.body.readonly"],
+                "connect_url": "https://api.example.com/v1/auth/google/start?purpose=forms",
+            },
+        )
+
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        client.check_google_access("raw-session-id", purpose="forms")
+    except MissingGoogleScopesError as exc:
+        assert exc.purpose == "forms"
+        assert exc.missing_scopes == ["https://www.googleapis.com/auth/forms.body.readonly"]
+        assert exc.connect_url.endswith("purpose=forms")
+    else:  # pragma: no cover - assertion branch
+        raise AssertionError("MissingGoogleScopesError was not raised")
+
+
+def test_forms_client_methods_send_session_cookie() -> None:
+    seen_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["cookie"] == f"{SESSION_COOKIE_NAME}=raw-session-id"
+        seen_paths.append(request.url.path)
+        payloads = {
+            "/v1/forms": [{"id": "form_1", "name": "Survey"}],
+            "/v1/forms/catalog": [{"status": "ok", "form": {"id": "form_1", "name": "Survey"}}],
+            "/v1/forms/catalog/enrich": [
+                {
+                    "form_id": "form_1",
+                    "status": "ok",
+                    "summary": {"title": "Survey", "questions_count": 1},
+                    "response_stats": {"total": 2},
+                }
+            ],
+            "/v1/forms/form_1/summary": {"title": "Survey", "questions_count": 1},
+            "/v1/forms/form_1/response-stats": {"total": 2},
+            "/v1/forms/form_1/response-timestamps": {"timestamps": ["2026-06-01T10:00:00"]},
+            "/v1/forms/form_1/structure": {"formId": "form_1"},
+            "/v1/forms/form_1/responses": [{"responseId": "r1"}],
+            "/v1/sheets/sheet_1/population-tables": [
+                {
+                    "source": "Population",
+                    "label_header": "Faculty",
+                    "count_header": "N",
+                    "population": {"FICT": 120},
+                }
+            ],
+        }
+        return httpx.Response(200, json=payloads[request.url.path])
+
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert client.list_forms("raw-session-id")[0]["id"] == "form_1"
+    assert client.list_forms_catalog("raw-session-id")[0]["status"] == "ok"
+    assert client.enrich_forms_catalog("raw-session-id", ["form_1"])[0]["form_id"] == "form_1"
+    assert client.get_form_summary("raw-session-id", "form_1")["title"] == "Survey"
+    assert client.get_response_stats("raw-session-id", "form_1")["total"] == 2
+    assert client.list_response_timestamps("raw-session-id", "form_1") == ["2026-06-01T10:00:00"]
+    assert client.get_form_structure("raw-session-id", "form_1")["formId"] == "form_1"
+    assert client.list_form_responses("raw-session-id", "form_1")[0]["responseId"] == "r1"
+    assert client.list_population_tables(
+        "raw-session-id",
+        "sheet_1",
+        next_url="https://app.example.com/weighting",
+    )[0]["population"] == {"FICT": 120}
+    assert seen_paths == [
+        "/v1/forms",
+        "/v1/forms/catalog",
+        "/v1/forms/catalog/enrich",
+        "/v1/forms/form_1/summary",
+        "/v1/forms/form_1/response-stats",
+        "/v1/forms/form_1/response-timestamps",
+        "/v1/forms/form_1/structure",
+        "/v1/forms/form_1/responses",
+        "/v1/sheets/sheet_1/population-tables",
+    ]
+
+
+def _raising_client(error: Exception) -> SaaSApiClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error
+
+    return SaaSApiClient("https://api.example.com", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("slow"), httpx.ConnectTimeout("cold")])
+def test_timeout_returns_none_not_exception(
+    error: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _raising_client(error)
+
+    with caplog.at_level(logging.WARNING):
+        session = client.read_session("raw-session-id")
+
+    assert session is None
+    assert "saas_session_timeout" in caplog.text
+    assert "raw-session-id" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        httpx.ConnectError("connection refused"),
+        httpx.ReadError("connection reset"),
+        httpx.RemoteProtocolError("server disconnected"),
+        httpx.WriteTimeout("slow"),
+        httpx.PoolTimeout("busy"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+def test_unreachable_api_returns_none_instead_of_dropping_the_session(
+    error: Exception, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A dead or restarting API says nothing about whether the session is valid."""
+    with caplog.at_level(logging.WARNING):
+        session = _raising_client(error).read_session("raw-session-id")
+
+    assert session is None
+    assert "saas_session_" in caplog.text
+    assert "raw-session-id" not in caplog.text
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_gateway_and_capacity_statuses_mean_the_api_is_unavailable(status: int) -> None:
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(lambda request: httpx.Response(status)),
+    )
+
+    assert client.read_session("raw-session-id") is None
+
+
+def test_read_session_still_raises_on_server_errors() -> None:
+    client = SaaSApiClient(
+        "https://api.example.com",
+        transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.read_session("raw-session-id")
+
+
+def test_session_and_data_calls_use_different_timeouts() -> None:
+    client = SaaSApiClient("https://api.example.com")
+
+    assert client.session_timeout == httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=2.0)
+    assert client.data_timeout == httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0)
+    with client._client(client.session_timeout) as http:
+        assert http.timeout.read == 10.0
+    with client._client(client.data_timeout) as http:
+        assert http.timeout.read == 30.0
+
+
+def _status_client(status: int, detail: dict | None = None) -> SaaSApiClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"detail": detail} if detail else {})
+
+    return SaaSApiClient("https://api.example.com", transport=httpx.MockTransport(handler))
+
+
+def test_401_raises_session_expired() -> None:
+    with pytest.raises(SessionExpiredError):
+        _status_client(401).list_forms("sid")
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_google_token_revoked_code_raises_typed_error(status: int) -> None:
+    client = _status_client(status, {"code": "google_token_revoked", "action": "reauth_required"})
+
+    with pytest.raises(GoogleTokenRevokedError):
+        client.list_forms("sid")
+
+
+def test_403_insufficient_scopes_raises_missing_scopes() -> None:
+    client = _status_client(
+        403,
+        {
+            "code": "google_insufficient_scopes",
+            "purpose": "forms",
+            "missing_scopes": ["s"],
+            "connect_url": "https://api.example.com/v1/auth/google/start?purpose=forms",
+        },
+    )
+
+    with pytest.raises(MissingGoogleScopesError) as info:
+        client.list_forms("sid")
+    assert info.value.purpose == "forms"
+
+
+def test_502_raises_google_unavailable() -> None:
+    with pytest.raises(GoogleUnavailableError):
+        _status_client(502, {"code": "google_forms_error"}).list_forms("sid")
+
+
+@pytest.mark.parametrize("status", [500, 503, 504])
+def test_other_5xx_raises_api_server_error(status: int) -> None:
+    with pytest.raises(ApiServerError) as info:
+        _status_client(status).list_forms("sid")
+    assert info.value.status_code == status
+
+
+def test_unhandled_statuses_still_use_raise_for_status() -> None:
+    with pytest.raises(httpx.HTTPStatusError):
+        _status_client(404, {"code": "google_forms_error"}).list_forms("sid")
+
+
+def test_typed_errors_remain_httpx_errors_for_existing_handlers() -> None:
+    for exc_type in (
+        SessionExpiredError,
+        GoogleTokenRevokedError,
+        GoogleUnavailableError,
+        ApiServerError,
+    ):
+        assert issubclass(exc_type, httpx.HTTPError)

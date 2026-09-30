@@ -111,6 +111,44 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
     assert "ActionBarStatus(note=" not in catalog
 
 
+def test_catalog_enrichment_uses_chunk_data_client() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert "data = google_data_client()" in catalog
+    assert "data.enrich_catalog_forms(" in catalog
+    assert "data.get_form_summary(f.id)" not in catalog
+    assert "data.get_response_stats" not in catalog
+    assert "parallel_map" not in catalog
+    assert "session_id=data_token" not in catalog
+
+
+def test_catalog_table_exposes_activity_columns() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert '"DataStatus"' in catalog
+    assert '"Activity"' in catalog
+    assert '"DaysNoResponse"' in catalog
+    assert '"UpdatedAgo"' in catalog
+    assert "form_data_status" in catalog
+    assert "form_data_fetched_at" in catalog
+    assert 'TextColumn("Активність")' in catalog
+    assert 'NumberColumn("Днів без відповіді"' in catalog
+
+
+def test_catalog_can_retry_retryable_enrichment_rows() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
+    assert 'RETRYABLE_DATA_STATUSES = {"timeout", "api_error", "rate_limited"}' in catalog
+    assert "def _retryable_enrichment_ids(" in catalog
+    assert "def _clear_enrichment_state_for(" in catalog
+    assert 'key="catalog_retry_failed_rows"' in catalog
+    assert "_clear_enrichment_state_for(retryable_ids)" in catalog
+
+
+def test_catalog_initial_load_uses_fast_snapshot_not_blocking_aggregate() -> None:
+    google_data = (ROOT / "ui/google_data.py").read_text(encoding="utf-8")
+    assert "Catalog initial render must stay fast" in google_data
+    assert "return self.list_catalog_forms(), {}, {}" in google_data
+    assert "list_forms_catalog(session_id)" not in google_data
+
+
 def test_catalog_table_uses_dynamic_min_max_height() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "TABLE_MIN_HEIGHT_PX = 360" in catalog
@@ -146,6 +184,27 @@ def test_form_picker_keeps_global_selection_separate_from_widget_key() -> None:
     assert "on_change=sync_form_widget" in action_bar
     assert "key=widget_key" in action_bar
     assert "key=FORM_KEY" not in action_bar
+
+
+def test_form_pages_do_not_read_streamlit_google_credentials_directly() -> None:
+    pages = [
+        "catalog.py",
+        "form_design.py",
+        "dynamics.py",
+        "questions.py",
+        "weighting.py",
+        "export.py",
+    ]
+    forbidden = [
+        "credentials_from_dict",
+        'st.session_state["credentials"]',
+        "FormsApiError",
+        "fetch_all_grids",
+    ]
+    for page in pages:
+        source = (ROOT / f"ui/pages/{page}").read_text(encoding="utf-8")
+        for needle in forbidden:
+            assert needle not in source, f"{page} still contains {needle}"
 
 
 def test_questions_association_overview_has_priority_filters() -> None:
