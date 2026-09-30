@@ -264,6 +264,8 @@ def _num(s: str) -> float:
 
 
 def test_real_data_weighted_crosstab_sane():
+    if not (DATA / "responses.csv").exists():
+        pytest.skip("local survey data (gitignored data/) is not present")
     with open(DATA / "responses.csv", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     dept = [r["Твій підрозділ"].strip() for r in rows]

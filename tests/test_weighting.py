@@ -110,6 +110,8 @@ def test_stratum_weight_zero_sample_is_nan():
 
 @pytest.fixture
 def reference_result():
+    if not (DATA / "responses.csv").exists():
+        pytest.skip("local survey data (gitignored data/) is not present")
     dept_pop = _load_population("DEPARTMENT.csv")
     course_pop = _load_population("COURSE.csv")
     rows = _load_responses()
