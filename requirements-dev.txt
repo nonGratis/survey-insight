@@ -1,0 +1,7 @@
+# Tools for development and CI, on top of the runtime requirements.
+# Exact versions are pinned in constraints.txt (applied through requirements.txt).
+-r requirements.txt
+
+pytest>=8.0,<9.0
+ruff>=0.15,<1.0
+mypy>=2.1,<3.0

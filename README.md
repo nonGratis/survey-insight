@@ -31,11 +31,13 @@ Python 3.11 · Streamlit · pandas · NumPy · SciPy · statsmodels · ruptures 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 streamlit run app.py
 ```
 
 Відкриється на `http://localhost:8501`.
+
+Точні версії всіх залежностей зафіксовано в `constraints.txt`: pip застосовує його автоматично (рядок `-c constraints.txt` у `requirements.txt`), тож CI, Docker і локальне середовище збирають однаковий набір. `requirements.txt` — лише те, що потрібно для роботи застосунку; `requirements-dev.txt` додає pytest, ruff і mypy.
 
 ### Налаштування доступу (Google OAuth)
 
