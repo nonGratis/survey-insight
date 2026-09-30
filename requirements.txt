@@ -1,10 +1,12 @@
+# Ranges say what the code supports; constraints.txt pins the exact versions CI validated.
+-c constraints.txt
+
 streamlit>=1.36,<2.0
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 httpx>=0.27,<1.0
 pandas>=2.2,<3.0
 plotly>=5.20,<6.0
-pytest>=8.0,<9.0
 google-auth>=2.32,<3.0
 google-auth-oauthlib>=1.2,<2.0
 google-api-python-client>=2.130,<3.0
@@ -17,3 +19,8 @@ ruptures>=1.1,<2.0
 statsmodels>=0.14,<1.0
 reportlab>=4.0,<5.0
 extra-streamlit-components>=0.1,<1.0
+
+# Imported directly by our code; they used to arrive only as dependencies of the packages above.
+numpy>=2.0,<3.0
+pydantic>=2.0,<3.0
+altair>=6.0,<7.0

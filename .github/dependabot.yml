@@ -1,0 +1,27 @@
+# Weekly dependency updates. Every update is a PR that has to pass CI before it is merged.
+version: 2
+updates:
+  # constraints.txt, requirements.txt and requirements-dev.txt
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Releases younger than a week are the ones that get yanked or turn out broken.
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: "build(deps)"
+
+  # actions/checkout, actions/setup-python, ...
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci(deps)"
