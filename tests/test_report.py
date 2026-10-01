@@ -10,6 +10,7 @@ from core.report import (
     FlowChartEdge,
     FlowChartNode,
     Heading,
+    Markup,
     Metric,
     Metrics,
     PageBreak,
@@ -19,8 +20,12 @@ from core.report import (
     TableBlock,
     _barchart_flowables,
     _collect_heading_entries,
+    _ensure_fonts,
     _flowchart_flowable,
+    _paragraph,
+    _styles,
     _wrap_lines,
+    markup,
     render_pdf,
 )
 
@@ -44,12 +49,77 @@ def test_render_all_block_types_cyrillic():
             Metrics(
                 [Metric("DEFF", "1,31"), Metric("n_eff", "380"), Metric("MoE", "4,4%")], columns=3
             ),
-            Para("Зважування коригує перекоси за <b>підрозділом</b> і курсом (їєґ)."),
+            Para(markup("Зважування коригує перекоси за <b>{}</b> і курсом (їєґ).", "підрозділом")),
             TableBlock(headers=["Страта", "Вага"], rows=[["ФІОТ", "0,499"], ["ФБМІ", "3,552"]]),
         ],
     )
     pdf = render_pdf(report)
     assert _is_pdf(pdf)
+
+
+# --- текст із форми друкується буквально, а не як розмітка ReportLab ---------
+
+# Відповідь респондента чи назва питання може містити будь-які символи. Раніше
+# незакритий тег або «<» перед літерою валили весь експорт, а <img> змушував
+# сервер відкривати вказаний ресурс.
+_MARKUP_LIKE_TEXTS = [
+    "<b>жирний",
+    "18<x<25",
+    "Tom & Jerry <i>курсив</i>",
+    '<img src="file:///no/such/image.png" width="10" height="10"/>',
+]
+
+_TEXT_SLOTS = {
+    "title": lambda text: Report(title=text),
+    "subtitle": lambda text: Report(title="T", subtitle=text),
+    "heading-1": lambda text: Report(title="T", blocks=[Heading(text, level=1)]),
+    "heading-2": lambda text: Report(title="T", blocks=[Heading(text, level=2)]),
+    "paragraph": lambda text: Report(title="T", blocks=[Para(text)]),
+    "metric-label": lambda text: Report(title="T", blocks=[Metrics([Metric(text, "1")])]),
+    "metric-value": lambda text: Report(title="T", blocks=[Metrics([Metric("n", text)])]),
+    "table-header": lambda text: Report(
+        title="T", blocks=[TableBlock(headers=[text, "N"], rows=[["a", "1"]])]
+    ),
+    "table-cell": lambda text: Report(
+        title="T", blocks=[TableBlock(headers=["Відповідь", "N"], rows=[[text, "1"]])]
+    ),
+    "barchart-label": lambda text: Report(
+        title="T", blocks=[BarChart(labels=[text], values=[1], value_labels=[text])]
+    ),
+    "flowchart-label": lambda text: Report(
+        title="T",
+        blocks=[
+            FlowChart(
+                nodes=[FlowChartNode("a", text), FlowChartNode("b", "B")],
+                edges=[FlowChartEdge("a", "b", text)],
+            )
+        ],
+    ),
+}
+
+
+@pytest.mark.parametrize("slot", sorted(_TEXT_SLOTS))
+@pytest.mark.parametrize("text", _MARKUP_LIKE_TEXTS)
+def test_markup_like_text_renders_in_every_text_slot(slot: str, text: str):
+    assert _is_pdf(render_pdf(_TEXT_SLOTS[slot](text)))
+
+
+@pytest.mark.parametrize("text", _MARKUP_LIKE_TEXTS)
+def test_plain_text_is_printed_literally(text: str):
+    _ensure_fonts()
+    paragraph = _paragraph(text, _styles()["body"])
+
+    assert paragraph.getPlainText() == text
+
+
+def test_markup_keeps_our_tags_and_escapes_the_values():
+    _ensure_fonts()
+    text = markup("Бракує <b>{}</b> у {name}", "<5", name="A&B")
+
+    assert isinstance(text, Markup)
+    assert text == "Бракує <b>&lt;5</b> у A&amp;B"
+    # Теги шаблону спрацювали як розмітка, значення надруковані буквально.
+    assert _paragraph(text, _styles()["body"]).getPlainText() == "Бракує <5 у A&B"
 
 
 def test_report_theme_can_be_customized():

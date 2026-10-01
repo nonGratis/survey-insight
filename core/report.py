@@ -93,6 +93,36 @@ def _ensure_fonts() -> None:
     )
 
 
+# --- текст і розмітка --------------------------------------------------------
+class Markup(str):
+    """Рядок із довіреною розміткою ReportLab (напр. ``<b>…</b>``).
+
+    Будь-який звичайний ``str`` рендер друкує буквально: у ньому можуть бути
+    відповіді респондентів чи назви з форми, а ReportLab трактує ``<…>`` як теги
+    (незакритий тег валить увесь PDF, ``<img>`` змушує відкрити вказаний ресурс).
+    ``Markup`` рендер пропускає як є. Створюй його через ``markup()``, а не з
+    f-рядка: так підставлені значення гарантовано екрановані.
+    """
+
+    __slots__ = ()
+
+
+def markup(template: str, /, *args: object, **kwargs: object) -> Markup:
+    """Зібрати довірену розмітку: шаблон пише наш код, значення екрануються."""
+    return Markup(
+        template.format(
+            *(escape(str(arg)) for arg in args),
+            **{key: escape(str(value)) for key, value in kwargs.items()},
+        )
+    )
+
+
+def _paragraph(text: object, style: ParagraphStyle) -> Paragraph:
+    """Єдине місце створення ``Paragraph``: звичайний текст — буквально."""
+    content = text if isinstance(text, Markup) else escape(str(text))
+    return Paragraph(content, style)
+
+
 # --- модель контенту (доменно-нейтральна) -----------------------------------
 @dataclass(frozen=True)
 class Heading:
@@ -104,7 +134,7 @@ class Heading:
 
 @dataclass(frozen=True)
 class Para:
-    """Абзац тексту (підтримує <b>…</b>)."""
+    """Абзац тексту; жирний чи інша розмітка — лише через ``markup()``."""
 
     text: str
 
@@ -364,7 +394,7 @@ def _metrics_flowable(
     cols = max(1, block.columns)
     width = _content_width(theme) / cols
     cells = [
-        [Paragraph(m.label, styles["metric_label"]), Paragraph(m.value, styles["metric_value"])]
+        [_paragraph(m.label, styles["metric_label"]), _paragraph(m.value, styles["metric_value"])]
         for m in block.items
     ]
     # Пакуємо вертикальні (label/value) міні-таблиці в сітку cols×rows.
@@ -410,8 +440,8 @@ def _metrics_flowable(
 def _table_flowable(
     block: TableBlock, styles: dict, theme: ReportTheme = DEFAULT_REPORT_THEME
 ) -> Flowable:
-    header = [Paragraph(str(h), styles["cell_h"]) for h in block.headers]
-    body = [[Paragraph(str(c), styles["cell"]) for c in row] for row in block.rows]
+    header = [_paragraph(h, styles["cell_h"]) for h in block.headers]
+    body = [[_paragraph(c, styles["cell"]) for c in row] for row in block.rows]
     ncols = len(block.headers)
     if block.col_widths:
         widths = [w * _content_width(theme) for w in block.col_widths]
@@ -966,9 +996,9 @@ def _toc_flowable(styles: dict, theme: ReportTheme) -> TableOfContents:
 
 
 def _title_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flowable]:
-    rows: list[list[Flowable]] = [[Paragraph(report.title, styles["title"])]]
+    rows: list[list[Flowable]] = [[_paragraph(report.title, styles["title"])]]
     if report.subtitle:
-        rows.append([Paragraph(report.subtitle, styles["subtitle"])])
+        rows.append([_paragraph(report.subtitle, styles["subtitle"])])
     title = Table(rows, colWidths=[_content_width(theme)])
     title.setStyle(
         TableStyle(
@@ -990,7 +1020,7 @@ def _heading_flowable(
     block: Heading, styles: dict, theme: ReportTheme, entry: _HeadingEntry | None
 ) -> Flowable:
     level = min(max(block.level, 1), 3)
-    paragraph = Paragraph(block.text, styles[f"h{level}"])
+    paragraph = _paragraph(block.text, styles[f"h{level}"])
     if level != 2:
         return _attach_heading_entry(paragraph, entry)
     table = Table([[paragraph]], colWidths=[_content_width(theme)])
@@ -1018,7 +1048,7 @@ def _to_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flow
         flow.extend(
             [
                 _RLPageBreak(),
-                Paragraph("Зміст", styles["toc_title"]),
+                _paragraph("Зміст", styles["toc_title"]),
                 Spacer(1, 10),
                 _toc_flowable(styles, theme),
                 _RLPageBreak(),
@@ -1029,7 +1059,7 @@ def _to_flowables(report: Report, styles: dict, theme: ReportTheme) -> list[Flow
             flow.append(_heading_flowable(block, styles, theme, next(heading_iter, None)))
             flow.append(Spacer(1, 5))
         elif isinstance(block, Para):
-            flow.append(Paragraph(block.text, styles["body"]))
+            flow.append(_paragraph(block.text, styles["body"]))
             flow.append(Spacer(1, 4))
         elif isinstance(block, Metrics):
             flow.append(_metrics_flowable(block, styles, theme))
