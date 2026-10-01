@@ -168,6 +168,43 @@ def test_benjamini_hochberg_orders_and_adjusts():
     assert p_adj[1] >= 0.001  # велике p тільки зростає
 
 
+def test_benjamini_hochberg_matches_reference_values():
+    # Еталон порахований вручну: p·m/ранг із наростаючим мінімумом від найбільшого p
+    # (m = 9). Ті самі числа давав statsmodels.multipletests(method="fdr_bh").
+    # Вхід навмисно не відсортований і зі зв'язкою (0.041 двічі).
+    p_values = [0.205, 0.001, 0.041, 0.9, 0.008, 0.074, 0.039, 0.06, 0.041]
+    expected = [0.230625, 0.009, 0.0738, 0.9, 0.036, 0.666 / 7, 0.0738, 0.09, 0.0738]
+
+    p_adj, rejected = benjamini_hochberg(p_values)
+
+    assert p_adj == pytest.approx(expected, abs=1e-12)
+    assert rejected == [False, True, False, False, True, False, False, False, False]
+
+
+def test_benjamini_hochberg_rejects_at_the_alpha_boundary():
+    # Одна гіпотеза: скориговане p дорівнює сирому, межа α входить у «значуще».
+    assert benjamini_hochberg([0.05]) == ([0.05], [True])
+    assert benjamini_hochberg([0.050001]) == ([0.050001], [False])
+
+
+def test_benjamini_hochberg_leaves_untestable_pairs_out_of_the_family():
+    p_adj, rejected = benjamini_hochberg([0.01, float("nan"), 0.04])
+
+    # NaN не псує решту: 0.01 і 0.04 коригуються як сім'я з двох гіпотез.
+    assert p_adj[0] == pytest.approx(0.02)
+    assert np.isnan(p_adj[1])
+    assert p_adj[2] == pytest.approx(0.04)
+    assert rejected == [True, False, True]
+
+
+def test_benjamini_hochberg_handles_empty_and_all_untestable_input():
+    assert benjamini_hochberg([]) == ([], [])
+
+    p_adj, rejected = benjamini_hochberg([float("nan"), float("inf")])
+    assert all(np.isnan(p) for p in p_adj)
+    assert rejected == [False, False]
+
+
 def test_association_scan_sorts_by_effect_and_applies_fdr():
     pairs = [
         PairAssociation("q1", "q2", "cramers_v", effect=0.15, direction=0, n=100, p_raw=0.04),
