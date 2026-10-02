@@ -40,7 +40,7 @@ class FormsApiError(RuntimeError):
 
     Перехоплює googleapiclient.errors.HttpError і дає UI-шару змістовне
     повідомлення замість сирого traceback. Зберігає HTTP-статус, щоб
-    caller (наприклад parallel_map) міг розрізняти "очікувані" коди
+    caller міг розрізняти "очікувані" коди
     (403 shared form без access, 404 видалена форма) від справжніх збоїв.
     """
 

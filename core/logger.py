@@ -4,11 +4,10 @@ JSON-формат — для prod (Cloud Run / GCP Cloud Logging автомат�
 Human-формат — для local dev.
 
 Контекст (session_id, user_hash, page) додається через StreamlitContextFilter
-тільки у main thread'і — у worker-thread'ах parallel_map контексту немає
+тільки у main thread'і — у worker-thread'ах контексту немає
 і це ОЧІКУВАНО (логи з API workers просто матимуть менше полів).
 
 Event-name convention:
-- api_op_{ok,retry,failed}  — high-level через call_with_backoff
 - api_call_ok               — low-level через log_call() на .execute() сайтах
 - auth_login_ok / auth_callback_failed / oauth_userinfo_failed
 - ui_<page>_load_failed

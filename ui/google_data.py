@@ -76,7 +76,7 @@ class GoogleDataClient:
 
     The factory captures Streamlit session state once in the main script run.
     Methods can then be safely used inside worker threads, for example catalog
-    enrichment via `parallel_map`, without reading `st.session_state` there.
+    enrichment, without reading `st.session_state` there.
     """
 
     session_id: str | None = None
