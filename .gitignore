@@ -228,8 +228,6 @@ data/
 .vscode/
 .idea/
 
-# research/ — сирі дані з PII (form_id чужих форм) у git не комітимо
-research/data/
-research/reports/figures/
-research/reports/*.html
+# research/ — дослідницькі скрипти, звіти й дані тримаємо лише локально; у git не комітимо
+research/
 *.ipynb_checkpoints/
