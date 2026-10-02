@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 from scipy import stats
-from statsmodels.stats.multitest import multipletests
 
 from core.weighting import design_effect
 
@@ -321,11 +320,20 @@ class PairAssociation:
 
 
 def benjamini_hochberg(p_values: Sequence[float]) -> tuple[list[float], list[bool]]:
-    """BH-FDR поправка: повертає (скориговані p, чи відхилено H0) при α=0.05."""
-    if not p_values:
-        return [], []
-    rejected, p_adj, _, _ = multipletests(list(p_values), alpha=FDR_ALPHA, method="fdr_bh")
-    return [float(x) for x in p_adj], [bool(x) for x in rejected]
+    """BH-FDR поправка: повертає (скориговані p, чи відхилено H0) при α=0.05.
+
+    H0 відхиляється, коли скориговане p ≤ α. Нескінченне або NaN p у сім'ю
+    гіпотез не входить: для нього скориговане p = NaN і H0 не відхиляється, а
+    решта коригується між собою.
+    """
+    p = np.asarray(p_values, dtype=float)
+    p_adj = np.full(p.shape, math.nan)
+    tested = np.isfinite(p)
+    if tested.any():
+        # scipy відхиляє значення поза [0, 1] помилкою; похибка округлення на
+        # межі не має валити сторінку.
+        p_adj[tested] = stats.false_discovery_control(np.clip(p[tested], 0.0, 1.0), method="bh")
+    return [float(x) for x in p_adj], [bool(x <= FDR_ALPHA) for x in p_adj]
 
 
 def association_scan(pairs: Sequence[PairAssociation]) -> list[PairAssociation]:
