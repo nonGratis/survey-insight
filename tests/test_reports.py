@@ -15,9 +15,11 @@ from core.report import (
     BarChart,
     FlowChart,
     Heading,
+    Markup,
     Metric,
     Metrics,
     PageBreak,
+    Para,
     Report,
     TableBlock,
     render_pdf,
@@ -32,6 +34,7 @@ from core.reports import (
     overview_section,
     questions_report,
     representativeness_report,
+    representativeness_section,
 )
 from core.weighting import Dimension, compute_weighting
 
@@ -91,6 +94,16 @@ def test_report_renders_to_pdf():
     assert len(pdf) > 800
 
 
+def test_representativeness_verdict_is_the_only_trusted_markup():
+    blocks = representativeness_section(_sample_result())
+    paragraphs = [block for block in blocks if isinstance(block, Para)]
+    verdict = next(block for block in paragraphs if block.text.startswith("Бракує"))
+
+    assert isinstance(verdict.text, Markup)
+    assert "<b>" in verdict.text
+    assert [block for block in paragraphs if isinstance(block.text, Markup)] == [verdict]
+
+
 def test_questions_report_page_per_question():
     rep = questions_report(_STRUCTURE, _RESPONSES, form_title="Анкета")
     assert rep.title == "Звіт за результатами опитування"
@@ -146,6 +159,22 @@ def test_descriptive_table_mode_emits_table():
     blocks = descriptive_section(_STRUCTURE, _RESPONSES, DescriptiveConfig(render_mode="table"))
     assert any(isinstance(b, TableBlock) for b in blocks)
     assert not any(isinstance(b, BarChart) for b in blocks)
+
+
+def test_questions_report_renders_answers_that_look_like_markup():
+    # Власний варіант респондента («Інше») потрапляє в таблицю як є.
+    responses = [
+        {"answers": {"q1": {"textAnswers": {"answers": [{"value": value}]}}}}
+        for value in ["Сайт", "<b>жирний", "18<x<25"]
+    ]
+    report = questions_report(
+        _OPEN_STRUCTURE,
+        responses,
+        form_title="Анкета <2026> & друзі",
+        config=DescriptiveConfig(render_mode="both"),
+    )
+
+    assert render_pdf(report)[:5] == b"%PDF-"
 
 
 def test_descriptive_anonymize_collapses_open_values():

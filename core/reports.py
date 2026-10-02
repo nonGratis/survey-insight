@@ -49,6 +49,7 @@ from core.report import (
     Para,
     Report,
     TableBlock,
+    markup,
 )
 from core.response_weights import (
     compute_configured_response_weights,
@@ -377,10 +378,13 @@ def representativeness_section(res: WeightingResult) -> list[object]:
         ],
     )
     lack = max(res.sample_need - res.n, 0.0)
+    verdict: str
     if lack > 0:
-        verdict = (
-            f"Бракує ще ~<b>{_uk(lack, '.0f')}</b> відповідей до цілі з урахуванням "
-            f"дизайну вибірки (потрібно n_target·DEFF = {_uk(res.sample_need, '.0f')})."
+        verdict = markup(
+            "Бракує ще ~<b>{}</b> відповідей до цілі з урахуванням "
+            "дизайну вибірки (потрібно n_target·DEFF = {}).",
+            _uk(lack, ".0f"),
+            _uk(res.sample_need, ".0f"),
         )
     else:
         verdict = (
