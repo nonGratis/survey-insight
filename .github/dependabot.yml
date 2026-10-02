@@ -10,6 +10,9 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    # requirements*.txt hold ranges that say what the code supports. Leave a range alone
+    # while the new version still fits it; only the exact pin in constraints.txt moves.
+    versioning-strategy: increase-if-necessary
     # Dependabot raises one pin at a time and does not look at what the other pinned
     # packages require, so these updates could only ever produce red PRs.
     ignore:
