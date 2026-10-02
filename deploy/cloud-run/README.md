@@ -121,4 +121,4 @@ gcloud run deploy survey-insight-web `
   --set-env-vars SERVICE=web,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>
 ```
 
-The current Streamlit UI still uses the older local OAuth widget. Full SaaS web auth requires the next step: Streamlit session bridge against the FastAPI session endpoint.
+With `APP_ENV=production` and `API_BASE_URL` set, the web service signs users in through the API (Google OAuth on the API, then a login ticket exchanged for a session) and reads all Google data through it. Without them it falls back to the local demo mode, which talks to Google directly and must not be used for a deployed service.
