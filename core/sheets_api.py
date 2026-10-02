@@ -29,7 +29,7 @@ DEFAULT_COLUMN_RANGE = "A:ZZ"
 class SheetsApiError(RuntimeError):
     """Доменна помилка Sheets API — для змістовного UI-повідомлення.
 
-    Зберігає HTTP-статус. Це дозволяє caller'у (parallel_map) розрізняти
+    Зберігає HTTP-статус. Це дозволяє caller'у розрізняти
     очікувані коди (403 shared form без read-access до Sheet, 404 видалений)
     від справжніх збоїв і знижувати log-level відповідно.
     """
