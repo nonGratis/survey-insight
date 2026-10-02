@@ -78,7 +78,7 @@ python-multipart==0.0.32
 pytz==2026.4
 pyyaml==6.0.3
 referencing==0.37.0
-reportlab==4.5.1
+reportlab==5.0.1
 requests==2.34.2
 requests-oauthlib==2.0.0
 rpds-py==2026.6.3
