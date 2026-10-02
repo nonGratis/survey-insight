@@ -1,9 +1,7 @@
 """Plotly-чарт для timeline + forecast.
 
-Окремий модуль (а не доповнення до `core/charts.py`), бо це composite
-figure з кількома trace'ами і вертикальними/горизонтальними markerами,
-з власною семантикою — не вписується у "fabricate one chart per question
-type" сцена `charts.py`.
+Composite figure з кількома trace'ами і вертикальними/горизонтальними
+markerами: факт, прогноз із довірчим інтервалом і позначки хвиль.
 """
 
 from __future__ import annotations
