@@ -59,10 +59,12 @@ tasks:
 ## Image Build
 
 ```powershell
-gcloud builds submit --tag europe-central2-docker.pkg.dev/survey-insight/survey-insight/app:latest
+$tag = git rev-parse --short HEAD
+gcloud builds submit --config deploy/cloud-run/cloudbuild.yaml `
+  --substitutions "_IMAGE=europe-central2-docker.pkg.dev/survey-insight/survey-insight/app:latest,_APP_VERSION=$tag,_APP_BUILD_DATE=$(Get-Date -Format yyyy-MM-dd)"
 ```
 
-The Artifact Registry repository must exist before this command.
+The Artifact Registry repository must exist before this command. Run it from the repository root of a clean checkout: the commit SHA and the build date are baked into the image, the web sidebar shows them, and `/health` of the API and the worker returns the SHA as `version`. An image built with plain `docker build` or `gcloud builds submit --tag` reports `dev`.
 
 ## Deploy API
 

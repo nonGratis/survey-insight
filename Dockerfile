@@ -13,6 +13,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Which build this is (core/version.py). deploy/cloud-run/cloudbuild.yaml passes the short commit
+# SHA and the build date; a plain `docker build` keeps "dev". Declared after the slow layers so a
+# new version does not invalidate their cache.
+ARG APP_VERSION=dev
+ARG APP_BUILD_DATE=
+ENV APP_VERSION=${APP_VERSION} \
+    APP_BUILD_DATE=${APP_BUILD_DATE}
+
 EXPOSE 8080
 
 # Only local Docker reads HEALTHCHECK; Cloud Run runs its own probes. Python is already in the
