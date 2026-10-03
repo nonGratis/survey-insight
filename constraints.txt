@@ -38,9 +38,11 @@ grpcio==1.84.0
 grpcio-status==1.84.0
 h11==0.16.0
 httpcore==1.0.9
+httpcore2==2.13.1
 httplib2==0.32.0
 httptools==0.8.0
 httpx==0.28.1
+httpx2==2.13.1
 idna==3.20
 iniconfig==2.3.0
 itsdangerous==2.2.0
@@ -89,6 +91,7 @@ six==1.17.0
 starlette==1.7.0
 streamlit==1.64.0
 toml==0.10.2
+truststore==0.10.4
 typing-extensions==4.16.0
 typing-inspection==0.4.4
 tzdata==2026.4
