@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from core.saas.settings import load_web_settings
+from ui import startup
 
 PRODUCTION = {
     "APP_ENV": "production",
@@ -67,3 +70,27 @@ def test_the_data_facade_no_longer_falls_back_in_production(
     # before: False, i.e. Streamlit itself signed in to Google and held the tokens
     with pytest.raises(ValueError, match="API_BASE_URL"):
         is_saas_mode()
+
+
+def test_startup_check_refuses_a_misconfigured_production_web(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.delenv("API_BASE_URL", raising=False)
+
+    assert startup.main() == 1
+    assert "refusing to start" in capsys.readouterr().err
+
+
+def test_startup_check_passes_a_complete_production_web(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name, value in PRODUCTION.items():
+        monkeypatch.setenv(name, value)
+
+    assert startup.main() == 0
+
+
+def test_the_image_runs_the_startup_check_before_streamlit() -> None:
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "web|*) python -m ui.startup && exec streamlit run app.py" in dockerfile
