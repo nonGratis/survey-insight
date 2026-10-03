@@ -494,6 +494,11 @@ def _log_catalog_enrich_telemetry(
             "deleted_count": status_counts.get("deleted", 0),
             "unsupported_count": status_counts.get("unsupported", 0),
             "ok_count": status_counts.get("ok", 0),
+            # Loaded forms whose state Google does not report (legacy forms without
+            # publishSettings): the catalog shows them as «Невідомо».
+            "publish_state_unknown_count": sum(
+                1 for row in rows if row.summary is not None and row.summary.is_published is None
+            ),
         },
     )
 
