@@ -184,16 +184,30 @@ def _parse_form(form: dict[str, Any]) -> FormEnrichment:
     items = form.get("items", [])
     sections = sum(1 for item in items if "pageBreakItem" in item)
     questions = sum(1 for item in items if "questionItem" in item)
-    publish_state = form.get("publishSettings", {}).get("publishState", {})
+    is_published, accepting_responses = _publish_state(form)
     return FormEnrichment(
         title=info.get("title", "—"),
         description=info.get("description", ""),
         sections_count=sections,
         questions_count=questions,
         linked_sheet_id=form.get("linkedSheetId"),
-        is_published=publish_state.get("isPublished"),
-        accepting_responses=publish_state.get("isAcceptingResponses"),
+        is_published=is_published,
+        accepting_responses=accepting_responses,
     )
+
+
+def _publish_state(form: dict[str, Any]) -> tuple[bool | None, bool | None]:
+    """(опублікована, приймає відповіді) з `publishSettings` форми.
+
+    Legacy-форми не мають `publishSettings` зовсім, і Google не повідомляє їхній стан.
+    В інших Google пропускає булеві поля зі значенням false, тож відсутнє поле — це false:
+    закрита форма приходить лише з `isPublished`, неопублікована — з порожнім `publishState`.
+    """
+    settings = form.get("publishSettings")
+    if settings is None:
+        return None, None
+    state = settings.get("publishState") or {}
+    return bool(state.get("isPublished", False)), bool(state.get("isAcceptingResponses", False))
 
 
 def fetch_response_stats(creds: Credentials, sheet_id: str) -> ResponseStats:
