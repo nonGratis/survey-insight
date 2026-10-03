@@ -1,8 +1,8 @@
-# Exact versions of every package (direct and transitive, dev tools included) that CI validated on Linux / CPython 3.11.
+# Exact versions of every package (direct and transitive, dev tools included) that CI validated on Linux / CPython 3.13.
 # pip applies this file through "-c constraints.txt" in requirements.txt. A constraint only
 # limits a package that is otherwise needed, so entries for other platforms are harmless.
-# Source: GitHub Actions run 36776878019 on main@246ee82 (574 tests passed, docker build ok);
-# pytest was raised to 9.1.1 afterwards and is validated by the CI of the PR that did it.
+# Source: GitHub Actions run 36776878019 on main@246ee82 (574 tests passed, docker build ok) on 3.11;
+# every later change, including the move to 3.13 with the same pins, is validated by the CI of its PR.
 # Dependabot proposes updates weekly; do not change versions by hand. An entry is removed by
 # hand only together with the requirement that pulled it in.
 # pydantic-core is deliberately not pinned: pydantic requires it at one exact version, so
