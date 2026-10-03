@@ -6,7 +6,6 @@ credential path for developer convenience.
 
 from __future__ import annotations
 
-import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,6 +38,7 @@ from core.forms_catalog import (
 from core.forms_catalog import (
     list_forms_with_drive_meta as local_list_catalog_forms,
 )
+from core.saas.settings import load_web_settings
 from core.sheets_api import fetch_all_grids as local_fetch_all_grids
 from ui.api_boundary import handle_api_errors
 from ui.data_access_cache import (
@@ -258,7 +258,8 @@ class GoogleDataClient:
 
 
 def is_saas_mode() -> bool:
-    return os.environ.get("APP_ENV") == "production" and bool(os.environ.get("API_BASE_URL"))
+    """True in production; raises there if the web settings are missing."""
+    return load_web_settings().signs_in_through_api
 
 
 def google_data_client() -> GoogleDataClient:
@@ -394,7 +395,7 @@ def clear_timestamps_cache(form_id: str, session_id: str | None = None) -> None:
 
 @st.cache_resource
 def _client() -> SaaSApiClient:
-    return SaaSApiClient(os.environ.get("API_BASE_URL", "http://localhost:8000"))
+    return SaaSApiClient(load_web_settings().api_base_url)
 
 
 def _session_id_from_state() -> str:
@@ -435,8 +436,7 @@ def _session_for_clear(session_id: str | None) -> str | None:
 
 
 def _next_url() -> str:
-    app_base = os.environ.get("APP_BASE_URL", "").rstrip("/")
-    return f"{app_base}/" if app_base else "/"
+    return f"{load_web_settings().app_base_url}/"
 
 
 def _local_credentials():

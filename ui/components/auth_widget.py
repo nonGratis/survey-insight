@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -27,6 +26,7 @@ from core.auth import (
     save_verifier,
 )
 from core.logger import get_logger, hash_email
+from core.saas.settings import load_web_settings
 from ui.api_boundary import handle_access_check_errors
 from ui.data_access_cache import ACCESS_TTL_SECONDS, CacheKey, get_or_load, session_cache_key
 from ui.google_data import clear_google_data_cache
@@ -45,15 +45,15 @@ SESSION_RESTORE_RETRY_DELAY_SECONDS = 2.0
 
 
 def _saas_auth_enabled() -> bool:
-    return os.environ.get("APP_ENV") == "production" and bool(os.environ.get("API_BASE_URL"))
+    return load_web_settings().signs_in_through_api
 
 
 def _app_base_url() -> str:
-    return os.environ.get("APP_BASE_URL", "http://localhost:8501").rstrip("/")
+    return load_web_settings().app_base_url
 
 
 def _api_base_url() -> str:
-    return os.environ.get("API_BASE_URL", "http://localhost:8000").rstrip("/")
+    return load_web_settings().api_base_url
 
 
 @st.cache_resource

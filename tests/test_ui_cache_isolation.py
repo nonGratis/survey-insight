@@ -57,6 +57,7 @@ def _saas_state(monkeypatch, state: dict) -> None:
 
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("API_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
     monkeypatch.setattr(google_data.st, "session_state", state)
 
 

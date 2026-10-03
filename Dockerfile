@@ -28,4 +28,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD python -c "import os, urllib.request as r; path = '/health' if os.environ.get('SERVICE') in ('api', 'worker') else '/_stcore/health'; r.urlopen('http://localhost:' + os.environ.get('PORT', '8080') + path, timeout=4)"
 
-CMD ["sh", "-c", "case \"$SERVICE\" in api) exec python -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} ;; worker) exec python -m uvicorn worker.main:app --host 0.0.0.0 --port ${PORT:-8080} ;; web|*) exec streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-8080} --server.headless=true ;; esac"]
+# The web branch checks its settings first (ui/startup.py): a production container without
+# APP_BASE_URL or API_BASE_URL exits, so a misconfigured revision never takes traffic.
+CMD ["sh", "-c", "case \"$SERVICE\" in api) exec python -m uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8080} ;; worker) exec python -m uvicorn worker.main:app --host 0.0.0.0 --port ${PORT:-8080} ;; web|*) python -m ui.startup && exec streamlit run app.py --server.address=0.0.0.0 --server.port=${PORT:-8080} --server.headless=true ;; esac"]

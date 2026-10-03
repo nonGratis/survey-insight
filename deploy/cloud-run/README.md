@@ -124,6 +124,6 @@ gcloud run deploy survey-insight-web `
   --set-env-vars SERVICE=web,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>
 ```
 
-With `APP_ENV=production` and `API_BASE_URL` set, the web service signs users in through the API (Google OAuth on the API, then a login ticket exchanged for a session) and reads all Google data through it. Without them it falls back to the local demo mode, which talks to Google directly and must not be used for a deployed service.
+With `APP_ENV=production` the web service signs users in through the API (Google OAuth on the API, then a login ticket exchanged for a session) and reads all Google data through it. It needs `APP_BASE_URL` and `API_BASE_URL`, both HTTPS: without them the container refuses to start (`ui/startup.py` runs before Streamlit), the revision never becomes ready and traffic stays on the previous one. The local demo sign-in, where Streamlit talks to Google directly and holds the tokens, exists only outside production.
 
 `--session-affinity` keeps a browser on the instance that holds its Streamlit session. Streamlit keeps download files (`st.download_button`) and component assets in that instance's memory, so without affinity a second instance answers those requests with 404: the PDF download fails as an empty file named by a hash. Affinity is best effort, so an instance shutting down can still cut a session; serving reports through the API would remove the dependency. Redeploys with `--image` keep the setting.
