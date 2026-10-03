@@ -8,11 +8,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Generic, TypeVar
 
 from core.logger import get_logger
-
-T = TypeVar("T")
 
 log = get_logger(__name__)
 
@@ -25,7 +22,7 @@ class ApiCacheKey:
 
 
 @dataclass(frozen=True)
-class ApiCacheResult(Generic[T]):
+class ApiCacheResult[T]:
     value: T
     fetched_at: datetime
     cache_hit: bool
@@ -42,7 +39,7 @@ _CACHE: dict[tuple[str, str, str], _Entry] = {}
 _LOCK = threading.RLock()
 
 
-def get_or_load(
+def get_or_load[T](
     key: ApiCacheKey,
     *,
     ttl_seconds: int,

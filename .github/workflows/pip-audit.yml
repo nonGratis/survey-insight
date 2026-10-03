@@ -33,7 +33,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       # The action installs pip-audit in its own environment, so neither the tool nor its
       # dependencies end up in requirements-dev.txt.

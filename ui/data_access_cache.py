@@ -14,13 +14,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 from core.logger import get_logger
 
 log = get_logger(__name__)
 
-T = TypeVar("T")
 
 ACCESS_TTL_SECONDS = 180
 FORMS_LIST_TTL_SECONDS = 120
@@ -61,7 +60,7 @@ def session_cache_key(session_id: str) -> str:
     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:24]
 
 
-def get_or_load(
+def get_or_load[T](
     key: CacheKey,
     *,
     ttl_seconds: int,

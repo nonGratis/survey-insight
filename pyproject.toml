@@ -1,12 +1,12 @@
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 # E/F   — pycodestyle errors + pyflakes (базовий must-have)
 # I     — import sorting (replaces isort)
 # B     — flake8-bugbear (anti-patterns)
-# UP    — pyupgrade (рекомендує сучасний синтаксис для py311)
+# UP    — pyupgrade (рекомендує сучасний синтаксис для py313)
 # N     — PEP-8 naming
 # SIM   — flake8-simplify (читабельність)
 select = ["E", "F", "I", "B", "UP", "N", "SIM"]
@@ -19,6 +19,6 @@ ignore = ["E501"]
 "app.py" = ["E402"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 ignore_missing_imports = true
 warn_unused_ignores = true

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import functools
 from collections.abc import Callable
-from typing import ParamSpec, TypeVar
 
 import streamlit as st
 from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -30,23 +29,21 @@ from ui.saas_api import (
 
 log = get_logger(__name__)
 
-P = ParamSpec("P")
-T = TypeVar("T")
 
 GOOGLE_UNAVAILABLE_MESSAGE = "Тимчасова проблема з Google API. Спробуй оновити сторінку."
 
 
-def handle_api_errors(func: Callable[P, T]) -> Callable[P, T]:
+def handle_api_errors[**P, T](func: Callable[P, T]) -> Callable[P, T]:
     """Guard a data call: session, Google, server and missing-Forms-scope failures."""
     return _guarded(func, scope_errors=True)
 
 
-def handle_access_check_errors(func: Callable[P, T]) -> Callable[P, T]:
+def handle_access_check_errors[**P, T](func: Callable[P, T]) -> Callable[P, T]:
     """Guard the access decision call, where missing scopes are the expected answer."""
     return _guarded(func, scope_errors=False)
 
 
-def _guarded(func: Callable[P, T], *, scope_errors: bool) -> Callable[P, T]:
+def _guarded[**P, T](func: Callable[P, T], *, scope_errors: bool) -> Callable[P, T]:
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         try:
