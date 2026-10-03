@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/nonGratis/survey-insight/actions/workflows/ci.yml/badge.svg)](https://github.com/nonGratis/survey-insight/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
 
 Хмарна інформаційно-аналітична система для обробки, статистично коректного аналізу та візуалізації результатів соціологічних опитувань в освітньому середовищі. Збирає дані безпосередньо з Google Forms, застосовує методи вибіркового обстеження (постстратифікаційне зважування, ефект дизайну, аналіз зв'язків між питаннями) та прогнозує динаміку надходження відповідей.
 
@@ -12,7 +12,7 @@
 
 ## Стек
 
-Python 3.11 · Streamlit (web) · FastAPI (API, worker) · pandas · NumPy · SciPy · ruptures · Altair · ReportLab · Google Forms / Drive / Sheets API · Firestore · Cloud KMS · Cloud Tasks · Cloud Storage · Docker · Google Cloud Run.
+Python 3.13 · Streamlit (web) · FastAPI (API, worker) · pandas · NumPy · SciPy · ruptures · Altair · ReportLab · Google Forms / Drive / Sheets API · Firestore · Cloud KMS · Cloud Tasks · Cloud Storage · Docker · Google Cloud Run.
 
 ## Можливості
 
