@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from io import BytesIO
+
 import pytest
+from pypdf import PdfReader
 
 from core.report import (
     BarChart,
@@ -160,8 +163,18 @@ def test_collect_heading_entries_includes_all_headings_and_clamps_levels():
     assert len({entry.key for entry in entries}) == 3
 
 
+def _outline(reader: PdfReader, items: list | None = None, level: int = 1) -> list:
+    """(level, title, page index) of every bookmark; a nested list holds the children."""
+    rows = []
+    for item in reader.outline if items is None else items:
+        if isinstance(item, list):
+            rows.extend(_outline(reader, item, level + 1))
+        else:
+            rows.append((level, item.title, reader.get_destination_page_number(item)))
+    return rows
+
+
 def test_pdf_has_interactive_toc_and_outline():
-    fitz = pytest.importorskip("fitz")
     pdf = render_pdf(
         Report(
             title="Report",
@@ -176,12 +189,15 @@ def test_pdf_has_interactive_toc_and_outline():
             ],
         )
     )
-    doc = fitz.open(stream=pdf, filetype="pdf")
+    reader = PdfReader(BytesIO(pdf))
 
-    toc = doc.get_toc()
-    assert [row[1] for row in toc] == ["Overview", "Question 1", "Details"]
-    assert [row[0] for row in toc] == [1, 1, 2]
-    assert doc[1].get_links()
+    # title page, table of contents, then the headings
+    assert _outline(reader) == [(1, "Overview", 2), (1, "Question 1", 2), (2, "Details", 2)]
+    annotations = [ref.get_object() for ref in reader.pages[1].get("/Annots", [])]
+    links = [a for a in annotations if a.get("/Subtype") == "/Link"]
+    page_ids = [page.indirect_reference.idnum for page in reader.pages]
+    assert links
+    assert {page_ids.index(link["/Dest"][0].idnum) for link in links} == {2}
 
 
 def test_render_large_table_multipage():
