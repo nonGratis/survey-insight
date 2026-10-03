@@ -118,7 +118,10 @@ The API service needs those values so it can enqueue Cloud Tasks with OIDC.
 gcloud run deploy survey-insight-web `
   --image europe-central2-docker.pkg.dev/survey-insight/survey-insight/app:latest `
   --region europe-central2 `
+  --session-affinity `
   --set-env-vars SERVICE=web,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>
 ```
 
 With `APP_ENV=production` and `API_BASE_URL` set, the web service signs users in through the API (Google OAuth on the API, then a login ticket exchanged for a session) and reads all Google data through it. Without them it falls back to the local demo mode, which talks to Google directly and must not be used for a deployed service.
+
+`--session-affinity` keeps a browser on the instance that holds its Streamlit session. Streamlit keeps download files (`st.download_button`) and component assets in that instance's memory, so without affinity a second instance answers those requests with 404: the PDF download fails as an empty file named by a hash. Affinity is best effort, so an instance shutting down can still cut a session; serving reports through the API would remove the dependency. Redeploys with `--image` keep the setting.
