@@ -5,3 +5,5 @@
 pytest>=9.0,<10.0
 ruff>=0.16.9,<1.0
 mypy>=2.3.1,<3.0
+# Reads the generated PDF reports in tests (bookmarks, links). Pure Python, BSD licence.
+pypdf>=6.0,<7.0

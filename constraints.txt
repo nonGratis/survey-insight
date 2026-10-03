@@ -70,6 +70,7 @@ pydantic==2.13.5
 pydeck==0.9.3
 pygments==2.21.0
 pyparsing==3.3.3
+pypdf==6.19.0
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
