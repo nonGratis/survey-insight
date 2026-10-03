@@ -54,7 +54,7 @@ markupsafe==3.0.3
 mypy==2.3.1
 mypy-extensions==1.1.0
 narwhals==2.26.0
-numpy==2.4.6
+numpy==2.5.3
 oauthlib==4.0.0
 opentelemetry-api==1.45.0
 packaging==26.3
@@ -86,7 +86,7 @@ requests-oauthlib==2.0.0
 rpds-py==2026.6.3
 ruff==0.16.9
 ruptures==1.1.10
-scipy==1.17.1
+scipy==1.18.1
 six==1.17.0
 starlette==1.7.0
 streamlit==1.64.0
