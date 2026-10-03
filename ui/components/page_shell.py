@@ -10,6 +10,8 @@ from typing import Literal, Protocol
 
 import streamlit as st
 
+from core.version import current_version
+
 StateKind = Literal["info", "success", "warning", "error"]
 
 
@@ -61,6 +63,11 @@ def render_form_caption(
 ) -> None:
     """Render the selected form caption in the same format everywhere."""
     container.caption(format_form_caption(form_title, label=label))
+
+
+def render_app_version(*, container: _MessageContainer = st) -> None:
+    """Render the deployed build, so anyone can tell which version is live."""
+    container.caption(f"Версія {current_version().label}")
 
 
 def render_state(

@@ -89,6 +89,39 @@ def test_api_cold_start_keeps_the_session_and_falls_back_to_login_after_retries(
     assert at.session_state["saas_session_id"] == "sid-1"
 
 
+def test_login_screen_shows_the_deployed_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_VERSION", "cd3b096")
+    monkeypatch.setenv("APP_BUILD_DATE", "2026-10-03")
+    with mock.patch.object(
+        SaaSApiClient, "read_session", return_value=SaaSSession(authenticated=False)
+    ):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=APP_TIMEOUT_SECONDS)
+        at.session_state["saas_session_id"] = "sid-1"
+        at.run()
+
+    assert not at.exception
+    assert "Вхід" in [s.value for s in at.subheader]
+    assert "Версія cd3b096 · 03.10.2026" in [c.value for c in at.caption]
+
+
+def test_signed_in_sidebar_shows_the_deployed_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_VERSION", "cd3b096")
+    monkeypatch.delenv("APP_BUILD_DATE", raising=False)
+    with (
+        mock.patch.object(
+            SaaSApiClient,
+            "check_google_access",
+            return_value=GoogleAccess(ok=True, purpose="forms"),
+        ),
+        mock.patch.object(SaaSApiClient, "list_forms", return_value=[]),
+    ):
+        at = _app_with_validated_session()
+        at.run()
+
+    assert not at.exception
+    assert "Версія cd3b096" in [c.value for c in at.sidebar.caption]
+
+
 _CACHED_BOUNDARY_APP = """
 import streamlit as st
 from ui.api_boundary import handle_api_errors
