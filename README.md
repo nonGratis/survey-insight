@@ -12,7 +12,7 @@
 
 ## Стек
 
-Python 3.11 · Streamlit (web) · FastAPI (API, worker) · pandas · NumPy · SciPy · ruptures · Plotly · Altair · ReportLab · Google Forms / Drive / Sheets API · Firestore · Cloud KMS · Cloud Tasks · Cloud Storage · Docker · Google Cloud Run.
+Python 3.11 · Streamlit (web) · FastAPI (API, worker) · pandas · NumPy · SciPy · ruptures · Altair · ReportLab · Google Forms / Drive / Sheets API · Firestore · Cloud KMS · Cloud Tasks · Cloud Storage · Docker · Google Cloud Run.
 
 ## Можливості
 

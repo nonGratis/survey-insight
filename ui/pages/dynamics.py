@@ -321,31 +321,21 @@ with st.container():
             ),
         )
 
-        # Свіжість даних — анотацією ПОВЕРХ графіка (правий нижній кут).
-        # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації).
-        fig = plot_timeline_with_forecast(
+        # Рядок 2: графік (з CP-маркерами, якщо знайдені хвилі агітації),
+        # під ним — свіжість даних.
+        chart = plot_timeline_with_forecast(
             timeline=timeline,
             forecast=forecast,
             excluded_mask=excluded_mask,
             changepoints=changepoints,
+            axis_ranges=(
+                forecast_window_axis_ranges(timestamps, start_idx, end_idx, forecast)
+                if auto_scale
+                else None
+            ),
         )
-        if auto_scale:
-            axis_ranges = forecast_window_axis_ranges(timestamps, start_idx, end_idx, forecast)
-            if axis_ranges is not None:
-                fig.update_xaxes(range=list(axis_ranges.x))
-                fig.update_yaxes(range=list(axis_ranges.y))
-        fig.add_annotation(
-            text=f"Оновлено {_fresh_label}",
-            xref="paper",
-            yref="paper",
-            x=1.0,
-            y=0.0,
-            xanchor="right",
-            yanchor="bottom",
-            showarrow=False,
-            font=dict(color="#888", size=10),
-        )
-        st.plotly_chart(fig, width="stretch")
+        st.altair_chart(chart, width="stretch")
+        st.caption(f"Оновлено {_fresh_label}")
 
         # Рядок 3: маленька іконка-завантаження прогнозу у CSV.
         if forecast is not None:

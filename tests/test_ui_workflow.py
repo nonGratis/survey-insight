@@ -232,8 +232,8 @@ def test_dynamics_has_forecast_window_autoscaling() -> None:
     charts_timeline = (ROOT / "core/charts_timeline.py").read_text(encoding="utf-8")
     assert "Автомасштабування вікна прогнозу" in dynamics
     assert "forecast_window_axis_ranges(" in dynamics
-    assert "fig.update_xaxes(range=list(axis_ranges.x))" in dynamics
-    assert "fig.update_yaxes(range=list(axis_ranges.y))" in dynamics
+    assert "axis_ranges=(" in dynamics
+    assert "st.altair_chart(chart" in dynamics
     assert "class ChartAxisRanges" in charts_timeline
 
 

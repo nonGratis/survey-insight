@@ -1,7 +1,11 @@
-"""Plotly-чарт для timeline + forecast.
+"""Altair-чарт для timeline + forecast.
 
-Composite figure з кількома trace'ами і вертикальними/горизонтальними
-markerами: факт, прогноз із довірчим інтервалом і позначки хвиль.
+Шари: факт сходинками, прогноз із довірчим інтервалом і позначки хвиль агітації.
+Модуль повертає специфікацію Vega-Lite (`alt.LayerChart`): її малює Streamlit, а
+`chart.to_dict()` — будь-який інший фронтенд.
+
+Часові мітки відповідей — naive UTC (Forms API `createTime`). На графік вони йдуть
+як UTC-моменти, тож браузер показує їх у місцевому часі глядача.
 """
 
 from __future__ import annotations
@@ -9,9 +13,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+import altair as alt
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 
 from core.detection import Changepoint
 from core.forecast import ForecastResult
@@ -19,7 +23,32 @@ from core.timeline import TimelineSeries
 
 _INCLUDED_COLOR = "#1f77b4"
 _EXCLUDED_COLOR = "rgba(150, 150, 150, 0.55)"
+_BAND_COLOR = "rgba(31, 119, 180, 0.15)"
 _CHANGEPOINT_COLOR = "#ff7f0e"  # помаранчевий — хвилі агітації
+
+FACT_LABEL = "Фактично"
+EXCLUDED_LABEL = "Виключено з фіту"
+BAND_LABEL = "95% CI"
+FORECAST_LABEL = "Прогноз"
+
+_DATE = "Дата"
+_SERIES = "Ряд"
+_RESPONSE = "Відповідь №"
+_FORECAST = "Прогноз"
+_LOWER = "Нижня межа"
+_UPPER = "Верхня межа"
+_MODEL = "Модель"
+_Y_TITLE = "К-сть відповідей (кумулятив)"
+_TOOLTIP_TIME = "%d.%m.%Y %H:%M"
+# Опівнічні поділки підписуємо датою, решту — часом: вбудовані формати Vega
+# пишуть місяці англійською. Поділок небагато, щоб Vega не ховав підписи від
+# тісноти (тоді зникали саме дати); крок він обирає сам, і при масштабуванні теж.
+_X_LABEL_EXPR = (
+    "hours(datum.value) == 0 && minutes(datum.value) == 0"
+    " ? timeFormat(datum.value, '%d.%m') : timeFormat(datum.value, '%H:%M')"
+)
+_X_TICK_COUNT = 8
+_X_PADDING_PX = 10
 
 
 @dataclass(frozen=True)
@@ -85,15 +114,16 @@ def plot_timeline_with_forecast(
     forecast: ForecastResult | None,
     excluded_mask: np.ndarray | None = None,
     changepoints: list[Changepoint] | None = None,
-) -> go.Figure:
+    axis_ranges: ChartAxisRanges | None = None,
+) -> alt.LayerChart:
     """Скомпонувати чарт кумулятиву + прогнозу + хвиль агітації.
 
     Лейаут:
-    - Step-крива з маркерами: кожна відповідь — окрема точка.
+    - Сходинкова крива з маркерами: кожна відповідь — окрема точка.
     - Якщо `excluded_mask` — точки з True сірі (виключені з фіту).
     - Пунктирна синя лінія: прогнозний future_cum (якщо forecast).
     - Затемнена зона: 95% prediction interval.
-    - Помаранчеві вертикальні dashed-лінії: виявлені CP (хвилі агітації).
+    - Помаранчеві вертикальні пунктири: виявлені CP (хвилі агітації).
 
     Args:
         timeline: повний timeline з усіма timestamps.
@@ -101,23 +131,83 @@ def plot_timeline_with_forecast(
         excluded_mask: bool-масив довжини N; True → виключено з фіту.
         changepoints: список виявлених CP для візуалізації. None або
             пустий → не малюємо маркери.
+        axis_ranges: межі осей для фокусу на вікні прогнозу; None → увесь ряд.
+            Те, що виходить за межі, обрізається.
     """
-    fig = go.Figure()
+    x = _x_encoding(axis_ranges)
+    y_scale = alt.Scale(domain=list(axis_ranges.y)) if axis_ranges is not None else alt.Scale()
+    legend: dict[str, str] = {}  # підпис ряду → колір, у порядку легенди
 
-    _add_fact_traces(fig, timeline, excluded_mask)
+    fact = _fact_frame(timeline, excluded_mask)
+    fact_layers: list[alt.Chart] = []
+    # Виключені малюємо першими, щоб синя крива була зверху.
+    for label, series_color in ((EXCLUDED_LABEL, _EXCLUDED_COLOR), (FACT_LABEL, _INCLUDED_COLOR)):
+        rows = fact[fact[_SERIES] == label]
+        if not rows.empty:
+            legend[label] = series_color
+            fact_layers.append(_fact_layer(rows, x, y_scale))
+    if not fact_layers:  # відповідей ще немає: лишаємо порожні осі
+        legend[FACT_LABEL] = _INCLUDED_COLOR
+        fact_layers.append(_fact_layer(fact, x, y_scale))
+
+    layers: list[alt.Chart] = []
     boundary = _compute_forecast_boundary(timeline, excluded_mask)
-    _add_forecast_traces(fig, forecast, boundary)
-    _add_changepoint_markers(fig, changepoints)
+    projected = _forecast_frame(forecast, boundary)
+    if forecast is not None and projected is not None:
+        # Назва моделі — у підказці: у легенді довгий підпис не вміщується на телефоні.
+        projected[_MODEL] = forecast.model
+        legend[BAND_LABEL] = _BAND_COLOR
+        legend[FORECAST_LABEL] = _INCLUDED_COLOR
+        # CI band — першим, щоб лінія прогнозу була зверху.
+        layers.append(
+            alt.Chart(projected.assign(**{_SERIES: BAND_LABEL}))
+            .mark_area(clip=True)
+            .encode(
+                x=x,
+                y=alt.Y(field=_LOWER, type="quantitative", title=_Y_TITLE, scale=y_scale),
+                y2=alt.Y2(field=_UPPER),
+            )
+        )
+        layers.extend(fact_layers)
+        layers.append(
+            alt.Chart(projected.assign(**{_SERIES: FORECAST_LABEL}))
+            .mark_line(
+                strokeDash=[6, 4],
+                clip=True,
+                # маркери — щоб single-point horizon було видно
+                point=alt.OverlayMarkDef(shape="diamond", filled=False, size=50, clip=True),
+            )
+            .encode(
+                x=x,
+                y=alt.Y(field=_FORECAST, type="quantitative", title=_Y_TITLE, scale=y_scale),
+                tooltip=[
+                    alt.Tooltip(field=_DATE, type="temporal", format=_TOOLTIP_TIME),
+                    alt.Tooltip(field=_FORECAST, type="quantitative", format=".0f"),
+                    alt.Tooltip(field=_LOWER, type="quantitative", format=".0f"),
+                    alt.Tooltip(field=_UPPER, type="quantitative", format=".0f"),
+                    alt.Tooltip(field=_MODEL, type="nominal"),
+                ],
+            )
+        )
+    else:
+        layers.extend(fact_layers)
 
-    fig.update_layout(
-        title="Динаміка надходження відповідей",
-        xaxis_title="Дата",
-        yaxis_title="К-сть відповідей (кумулятив)",
-        hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=40, r=40, t=60, b=40),
+    color = alt.Color(
+        field=_SERIES,
+        type="nominal",
+        scale=alt.Scale(domain=list(legend), range=list(legend.values())),
+        # Два стовпчики: в один рядок легенда не вміщується на телефоні.
+        legend=alt.Legend(orient="top", title=None, columns=2),
     )
-    return fig
+    layers = [layer.encode(color=color) for layer in layers]
+    layers.extend(_changepoint_layers(changepoints, x))
+
+    # Масштаб і зсув мишею, як у .interactive().
+    return (
+        alt.LayerChart(layer=layers)
+        .properties(title="Динаміка надходження відповідей", height=420)
+        .add_params(alt.selection_interval(bind="scales"))
+    )
 
 
 def _to_datetime_series(values: Iterable) -> pd.Series:
@@ -131,64 +221,82 @@ def _finite_numeric_values(values: Iterable) -> list[float]:
     return [float(value) for value in numeric]
 
 
-def _add_fact_traces(
-    fig: go.Figure,
-    timeline: TimelineSeries,
-    excluded_mask: np.ndarray | None,
-) -> None:
-    """Додати трасу(и) фактичної кумулятивної кривої.
+def _as_utc(values: Iterable) -> pd.Series:
+    """Naive-мітки вважаємо UTC; aware переводимо в UTC."""
+    parsed = pd.Series(pd.to_datetime(list(values)))
+    if parsed.dt.tz is None:
+        return parsed.dt.tz_localize("UTC")
+    return parsed.dt.tz_convert("UTC")
 
-    Якщо mask=None або всі False — один трейс синім. Інакше два трейси:
-    включені (сині) і виключені (сірі); y-значення зберігають глобальну
-    нумерацію 1..N, щоб точки лишалися на своїх "висотах" у cumulative.
+
+def _utc_datetime(value: pd.Timestamp) -> alt.DateTime:
+    """Межа осі як UTC-момент — так само, як дані на графіку."""
+    ts = pd.Timestamp(value)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    return alt.DateTime(
+        year=ts.year,
+        month=ts.month,
+        date=ts.day,
+        hours=ts.hour,
+        minutes=ts.minute,
+        seconds=ts.second,
+        utc=True,
+    )
+
+
+def _x_encoding(axis_ranges: ChartAxisRanges | None) -> alt.X:
+    # Без фокусу — запас у кілька пікселів, щоб крайні маркери не різались навпіл;
+    # межі фокусу вже містять свій запас.
+    scale = (
+        alt.Scale(domain=[_utc_datetime(axis_ranges.x[0]), _utc_datetime(axis_ranges.x[1])])
+        if axis_ranges is not None
+        else alt.Scale(padding=_X_PADDING_PX)
+    )
+    return alt.X(
+        field=_DATE,
+        type="temporal",
+        title="Дата",
+        scale=scale,
+        axis=alt.Axis(labelExpr=_X_LABEL_EXPR, tickCount=_X_TICK_COUNT),
+    )
+
+
+def _fact_frame(timeline: TimelineSeries, excluded_mask: np.ndarray | None) -> pd.DataFrame:
+    """Фактичні відповіді з глобальною нумерацією 1..N.
+
+    Виключені й включені точки лишаються на своїх «висотах» кумулятиву, тож
+    сіра і синя криві не зсуваються одна відносно одної.
     """
-    if timeline.timestamps.empty:
-        return
-
     n = len(timeline.timestamps)
-    ts_array = np.asarray(timeline.timestamps)
-    y_global = np.arange(1, n + 1)
+    excluded = np.zeros(n, dtype=bool) if excluded_mask is None else np.asarray(excluded_mask, bool)
+    return pd.DataFrame(
+        {
+            _DATE: _as_utc(timeline.timestamps),
+            _RESPONSE: np.arange(1, n + 1),
+            _SERIES: np.where(excluded, EXCLUDED_LABEL, FACT_LABEL),
+        }
+    )
 
-    has_exclusions = excluded_mask is not None and bool(np.asarray(excluded_mask).any())
 
-    if not has_exclusions:
-        fig.add_trace(
-            go.Scatter(
-                x=ts_array,
-                y=y_global,
-                mode="lines+markers",
-                name="Фактично",
-                line=dict(color=_INCLUDED_COLOR, width=2, shape="hv"),
-                marker=dict(size=5),
-            )
+def _fact_layer(rows: pd.DataFrame, x: alt.X, y_scale: alt.Scale) -> alt.Chart:
+    """Сходинкова крива з маркером на кожній відповіді."""
+    return (
+        alt.Chart(rows)
+        .mark_line(
+            interpolate="step-after",
+            clip=True,
+            point=alt.OverlayMarkDef(size=25, clip=True),
         )
-        return
-
-    mask = np.asarray(excluded_mask, dtype=bool)
-
-    # Виключені: малюємо ПЕРШИМ, щоб синя крива була зверху.
-    if mask.any():
-        fig.add_trace(
-            go.Scatter(
-                x=ts_array[mask],
-                y=y_global[mask],
-                mode="lines+markers",
-                name="Виключено з фіту",
-                line=dict(color=_EXCLUDED_COLOR, width=2, shape="hv"),
-                marker=dict(size=5, color=_EXCLUDED_COLOR),
-            )
+        .encode(
+            x=x,
+            y=alt.Y(field=_RESPONSE, type="quantitative", title=_Y_TITLE, scale=y_scale),
+            tooltip=[
+                alt.Tooltip(field=_DATE, type="temporal", format=_TOOLTIP_TIME),
+                alt.Tooltip(field=_RESPONSE, type="quantitative"),
+                alt.Tooltip(field=_SERIES, type="nominal"),
+            ],
         )
-    if (~mask).any():
-        fig.add_trace(
-            go.Scatter(
-                x=ts_array[~mask],
-                y=y_global[~mask],
-                mode="lines+markers",
-                name="Фактично",
-                line=dict(color=_INCLUDED_COLOR, width=2, shape="hv"),
-                marker=dict(size=5),
-            )
-        )
+    )
 
 
 def _compute_forecast_boundary(
@@ -212,21 +320,19 @@ def _compute_forecast_boundary(
     return timeline.timestamps.iloc[last_inc], last_inc + 1
 
 
-def _add_forecast_traces(
-    fig: go.Figure,
-    forecast: ForecastResult | None,
-    boundary: tuple | None,
-) -> None:
-    if forecast is None or forecast.future_cum.empty:
-        return
+def _forecast_frame(forecast: ForecastResult | None, boundary: tuple | None) -> pd.DataFrame | None:
+    """Точки прогнозу і CI, починаючи з останнього факту.
 
-    # Приплюсовуємо boundary-point (останній факт): дає візуальну неперервність
-    # між фактом і прогнозом, і гарантує ≥ 2 точки навіть для horizon=1
-    # (інакше mode="lines" нічого не малює, CI-polygon degenerate).
+    Boundary-point дає візуальну неперервність між фактом і прогнозом і
+    гарантує ≥ 2 точки навіть для horizon=1 (інакше лінія й смуга вироджені).
+    """
+    if forecast is None or forecast.future_cum.empty:
+        return None
+
     future_dates = list(forecast.future_dates)
-    future_cum = list(forecast.future_cum.values)
-    ci_lower = list(forecast.ci_lower.values)
-    ci_upper = list(forecast.ci_upper.values)
+    future_cum = [float(v) for v in forecast.future_cum.values]
+    ci_lower = [float(v) for v in forecast.ci_lower.values]
+    ci_upper = [float(v) for v in forecast.ci_upper.values]
     if boundary is not None:
         b_ts, b_y = boundary
         future_dates = [b_ts] + future_dates
@@ -234,58 +340,43 @@ def _add_forecast_traces(
         ci_lower = [float(b_y)] + ci_lower
         ci_upper = [float(b_y)] + ci_upper
 
-    # CI band — додаємо першим, щоб лінія прогнозу була зверху.
-    fig.add_trace(
-        go.Scatter(
-            x=future_dates + future_dates[::-1],
-            y=ci_upper + ci_lower[::-1],
-            fill="toself",
-            fillcolor="rgba(31, 119, 180, 0.15)",
-            line=dict(color="rgba(0,0,0,0)"),
-            hoverinfo="skip",
-            name="95% CI",
-            showlegend=True,
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=future_dates,
-            y=future_cum,
-            mode="lines+markers",  # markers — щоб single-point horizon було видно
-            name=f"Прогноз ({forecast.model})",
-            line=dict(color=_INCLUDED_COLOR, width=2, dash="dash"),
-            marker=dict(size=6, symbol="diamond-open"),
-        )
+    return pd.DataFrame(
+        {
+            _DATE: _as_utc(future_dates),
+            _FORECAST: future_cum,
+            _LOWER: ci_lower,
+            _UPPER: ci_upper,
+        }
     )
 
 
-def _add_changepoint_markers(fig: go.Figure, changepoints: list[Changepoint] | None) -> None:
-    """Вертикальні dashed-лінії на timestamp'ах виявлених хвиль агітації.
+def _changepoint_layers(changepoints: list[Changepoint] | None, x: alt.X) -> list[alt.Chart]:
+    """Вертикальні пунктири на хвилях агітації і один підпис на всі.
 
-    Малюємо як shapes (на paper-y-axis), не як scatter — щоб не з'являлись
-    у legend і не "ламались" hovermode="x unified".
+    Поза легендою: це позначки подій, а не ряд даних.
     """
     if not changepoints:
-        return
-    for cp in changepoints:
-        fig.add_shape(
-            type="line",
-            xref="x",
-            yref="paper",
-            x0=cp.timestamp,
-            x1=cp.timestamp,
-            y0=0,
-            y1=1,
-            line=dict(color=_CHANGEPOINT_COLOR, width=1, dash="dash"),
+        return []
+    frame = pd.DataFrame({_DATE: _as_utc(cp.timestamp for cp in changepoints)})
+    rules = (
+        alt.Chart(frame)
+        .mark_rule(color=_CHANGEPOINT_COLOR, strokeDash=[4, 4], strokeWidth=1, clip=True)
+        .encode(
+            x=x,
+            tooltip=[alt.Tooltip(field=_DATE, type="temporal", format=_TOOLTIP_TIME)],
         )
-    # Один annotation на ВСІ маркери — щоб не дублювати legend-noise.
-    fig.add_annotation(
-        x=changepoints[-1].timestamp,
-        y=1.02,
-        xref="x",
-        yref="paper",
-        text=f"🔶 хвиль виявлено: {len(changepoints)}",
-        showarrow=False,
-        font=dict(color=_CHANGEPOINT_COLOR, size=10),
-        xanchor="right",
     )
+    label = (
+        alt.Chart(frame.tail(1).assign(Підпис=f"🔶 хвиль виявлено: {len(changepoints)}"))
+        .mark_text(
+            align="right",
+            baseline="top",
+            dx=-4,
+            dy=4,
+            color=_CHANGEPOINT_COLOR,
+            fontSize=10,
+            clip=True,
+        )
+        .encode(x=x, y=alt.value(0), text=alt.Text(field="Підпис", type="nominal"))
+    )
+    return [rules, label]
