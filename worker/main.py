@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from core.saas.container import SaaSContainer
 from core.saas.errors import JobConflict
 from core.saas.models import JobStatus, ReportStatus
+from core.version import current_version
 
 
 class WorkerJobResponse(BaseModel):
@@ -21,10 +22,11 @@ class WorkerJobResponse(BaseModel):
 def create_worker_app(container: SaaSContainer | None = None) -> FastAPI:
     app = FastAPI(title="Survey Insight Worker", version="0.1.0")
     app.state.container = container or SaaSContainer.from_settings()
+    version = current_version().version
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "survey-insight-worker"}
+        return {"status": "ok", "service": "survey-insight-worker", "version": version}
 
     @app.post("/tasks/reports/{job_id}", response_model=WorkerJobResponse)
     def run_report_job(job_id: str, request: Request) -> WorkerJobResponse:

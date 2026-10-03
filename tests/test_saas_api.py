@@ -258,6 +258,23 @@ def _seed_google_grant(
     )
 
 
+@pytest.mark.parametrize(("baked", "expected"), [("cd3b096", "cd3b096"), (None, "dev")])
+def test_api_health_reports_the_baked_in_version(
+    monkeypatch: pytest.MonkeyPatch, baked: str | None, expected: str
+) -> None:
+    if baked is None:
+        monkeypatch.delenv("APP_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("APP_VERSION", baked)
+    client = TestClient(create_api_app(_test_container()))
+
+    assert client.get("/health").json() == {
+        "status": "ok",
+        "service": "survey-insight-api",
+        "version": expected,
+    }
+
+
 def test_api_session_restores_from_cookie_and_never_requires_streamlit_state() -> None:
     container = _test_container()
     session_id = _seed_user_session(container)

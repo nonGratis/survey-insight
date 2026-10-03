@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from fastapi.testclient import TestClient
 
 from core.saas.container import SaaSContainer
@@ -51,6 +52,17 @@ def _seed_user(container: SaaSContainer) -> None:
             created_at=NOW,
         )
     )
+
+
+def test_worker_health_reports_the_baked_in_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_VERSION", "cd3b096")
+    client = TestClient(create_worker_app(_test_container()))
+
+    assert client.get("/health").json() == {
+        "status": "ok",
+        "service": "survey-insight-worker",
+        "version": "cd3b096",
+    }
 
 
 def test_worker_runs_report_job_idempotently_without_raw_response_storage() -> None:

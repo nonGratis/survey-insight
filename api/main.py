@@ -39,6 +39,7 @@ from core.saas.google_scopes import scopes_for_purpose
 from core.saas.models import OAuthAccount, Plan, Quota, ReportJob, Session, User, UserStatus
 from core.saas.ports import GoogleFormsClient, GoogleSheetsClient
 from core.saas.security import hash_secret, utcnow
+from core.version import current_version
 
 log = get_logger(__name__)
 DEFAULT_NEW_USER_QUOTA = Quota(monthly_report_limit=20, reports_used_this_month=0)
@@ -47,6 +48,7 @@ DEFAULT_NEW_USER_QUOTA = Quota(monthly_report_limit=20, reports_used_this_month=
 class HealthResponse(BaseModel):
     status: str
     service: str
+    version: str
 
 
 class SessionResponse(BaseModel):
@@ -99,10 +101,11 @@ def create_api_app(
     register_google_error_handlers(app)
     app.include_router(google_forms_router)
     app.include_router(google_sheets_router)
+    version = current_version().version
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        return HealthResponse(status="ok", service="survey-insight-api")
+        return HealthResponse(status="ok", service="survey-insight-api", version=version)
 
     @app.get("/v1/session", response_model=SessionResponse, response_model_exclude_none=True)
     def read_session(request: Request, session_id: SessionCookie = None) -> SessionResponse:

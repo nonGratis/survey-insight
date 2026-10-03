@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
+
 from ui.components.page_shell import (
     format_form_caption,
+    render_app_version,
     render_empty_state,
     render_error_state,
     render_form_caption,
@@ -44,6 +47,16 @@ def test_format_form_caption_uses_custom_label() -> None:
     assert format_form_caption("Супергерої КПІ", label="Опитування") == (
         "Опитування: **Супергерої КПІ**"
     )
+
+
+def test_render_app_version_shows_commit_and_build_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_VERSION", "cd3b096")
+    monkeypatch.setenv("APP_BUILD_DATE", "2026-10-03")
+    fake = FakeContainer()
+
+    render_app_version(container=fake)
+
+    assert fake.calls == [("caption", "Версія cd3b096 · 03.10.2026", None)]
 
 
 def test_render_page_header_title_and_caption() -> None:

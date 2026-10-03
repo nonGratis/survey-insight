@@ -19,6 +19,7 @@ from ui.components.auth_widget import (  # noqa: E402
     render_login_button,
     render_profile,
 )
+from ui.components.page_shell import render_app_version  # noqa: E402
 
 st.set_page_config(page_title="Survey Insight", layout="wide")
 
@@ -61,9 +62,12 @@ if not logged_in:
         st.subheader("Підтримка")
         st.write("Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua")
 
+    render_app_version()
     st.stop()
 
 render_profile(location="sidebar")
+# Pages call st.stop() early, so the version goes here: the sidebar is always rendered.
+render_app_version(container=st.sidebar)
 
 pages = [
     st.Page(

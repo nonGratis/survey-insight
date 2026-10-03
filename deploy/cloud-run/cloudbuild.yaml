@@ -1,0 +1,21 @@
+# Builds the app image with its version baked in (APP_VERSION and APP_BUILD_DATE in the Dockerfile).
+# Run from the repository root:
+#
+#   gcloud builds submit --config deploy/cloud-run/cloudbuild.yaml \
+#     --substitutions=_IMAGE=<registry>/app:<tag>,_APP_VERSION=<short sha>,_APP_BUILD_DATE=<yyyy-mm-dd>
+#
+# Same steps as `gcloud builds submit --tag <image>`, plus the two build arguments.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --network=cloudbuild
+      - --build-arg=APP_VERSION=${_APP_VERSION}
+      - --build-arg=APP_BUILD_DATE=${_APP_BUILD_DATE}
+      - --tag=${_IMAGE}
+      - .
+images:
+  - ${_IMAGE}
+substitutions:
+  _APP_VERSION: dev
+  _APP_BUILD_DATE: ""
