@@ -1,0 +1,46 @@
+name: Dependency audit
+
+# Dependabot alerts cover only what GitHub sees as direct dependencies. pip-audit checks
+# every version pinned in constraints.txt (transitive packages and dev tools included)
+# against the PyPI advisory database. pydantic-core is the one package it does not see:
+# constraints.txt leaves it to pydantic, which requires one exact version.
+on:
+  pull_request:
+    paths:
+      - "requirements*.txt"
+      - "constraints.txt"
+      - ".github/workflows/pip-audit.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "requirements*.txt"
+      - "constraints.txt"
+      - ".github/workflows/pip-audit.yml"
+  # Advisories also appear for versions we already pin, so check every week too.
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # The action installs pip-audit in its own environment, so neither the tool nor its
+      # dependencies end up in requirements-dev.txt.
+      - name: Audit pinned dependencies
+        uses: pypa/gh-action-pip-audit@v1.1.0
+        with:
+          inputs: constraints.txt
+          # Every line is an exact pin: read the versions, resolve and download nothing.
+          no-deps: true
+          disable-pip: true
