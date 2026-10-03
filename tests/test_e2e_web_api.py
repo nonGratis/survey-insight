@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from google.auth.exceptions import RefreshError
@@ -66,12 +67,50 @@ def _isolate(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_api_cache()
 
 
+# Headers the transports set from the body and the URL; passing them on would duplicate them.
+_TRANSPORT_HEADERS = {"host", "content-length", "content-encoding", "transfer-encoding"}
+
+
+class _ApiAppTransport(httpx.BaseTransport):
+    """Serve the web client's ``httpx`` requests from the API app, in process.
+
+    Starlette's TestClient speaks httpx2, while the web client and its error handling use
+    httpx. Converting at the transport keeps the client on the exact types it has in
+    production: an unexpected status still raises ``httpx.HTTPStatusError``, which the
+    pages catch as ``httpx.HTTPError``.
+    """
+
+    def __init__(self, api_app) -> None:
+        self._api = TestClient(api_app, follow_redirects=False)
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        answer = self._api.request(
+            request.method,
+            str(request.url),
+            headers=[
+                (k, v) for k, v in request.headers.multi_items() if k not in _TRANSPORT_HEADERS
+            ],
+            content=request.read(),
+        )
+        return httpx.Response(
+            answer.status_code,
+            headers=[
+                (k, v) for k, v in answer.headers.multi_items() if k not in _TRANSPORT_HEADERS
+            ],
+            content=answer.content,
+            request=request,
+        )
+
+
 def _web_talking_to(api_app) -> mock._patch:
     """Make every SaaSApiClient call go to ``api_app`` instead of the network."""
+    transport = _ApiAppTransport(api_app)
     return mock.patch.object(
         SaaSApiClient,
         "_client",
-        lambda self, timeout: TestClient(api_app, base_url=self.base_url),
+        lambda self, timeout: httpx.Client(
+            base_url=self.base_url, timeout=timeout, transport=transport, follow_redirects=False
+        ),
     )
 
 
@@ -97,6 +136,19 @@ def _app_with(
 ) -> tuple[TestClient, object]:
     api_app = create_api_app(container, google_forms_client=google_forms_client)
     return TestClient(api_app), api_app
+
+
+def test_the_bridge_keeps_the_web_client_on_httpx_types() -> None:
+    # An unexpected API status must reach the pages as httpx.HTTPError, as in production.
+    # A TestClient handed to the web client directly would raise httpx2 errors instead.
+    api_app = create_api_app(_test_container())
+
+    with _web_talking_to(api_app), pytest.raises(httpx.HTTPStatusError) as raised:
+        SaaSApiClient("https://api.example.com")._request_with_session(
+            "sid", "GET", "/v1/does-not-exist"
+        )
+
+    assert raised.value.response.status_code == 404
 
 
 def test_a_record_that_overstates_its_scopes_leads_to_reconnect_not_a_raw_403() -> None:
