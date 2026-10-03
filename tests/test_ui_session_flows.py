@@ -30,8 +30,8 @@ APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 @pytest.fixture(autouse=True)
 def saas_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("API_BASE_URL", "http://api.test")
-    monkeypatch.setenv("APP_BASE_URL", "http://app.test")
+    monkeypatch.setenv("API_BASE_URL", "https://api.test")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.test")
 
 
 def _app_with_validated_session() -> AppTest:
