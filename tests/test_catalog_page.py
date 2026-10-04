@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from google.oauth2.credentials import Credentials
 
@@ -95,4 +97,26 @@ def test_table_keeps_its_identity_while_details_load() -> None:
     # Streamlit derives an unkeyed table's identity from its data, and a new identity
     # remounts the table in the browser: scroll, sorting and selection are lost.
     assert after.proto.id == before.proto.id
-    assert before.key == "catalog_table"
+    assert before.key.startswith("catalog_table")
+
+
+def test_changing_a_filter_starts_a_fresh_table_that_marks_the_current_form() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.session_state["global_form_id"] = "form_05"
+        at.run()
+        before = at.dataframe[0]
+        at.text_input(key="catalog_search").set_value("5").run()
+        after = at.dataframe[0]
+
+    assert not at.exception, [e.value for e in at.exception]
+    # A row is marked by its position, and after filtering another form sits there.
+    assert after.proto.id != before.proto.id
+    assert json.loads(before.proto.selection_default)["selection"]["rows"] == [5]
+    assert after.value["FormName"].iloc[0] == "Poll 05"
+    assert json.loads(after.proto.selection_default)["selection"]["rows"] == [0]

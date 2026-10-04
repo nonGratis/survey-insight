@@ -14,6 +14,8 @@ session_state. Користувач не чекає на повний enrichment
 
 from __future__ import annotations
 
+import functools
+import hashlib
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -399,14 +401,24 @@ def _build_dataframe(
 filter_values = _render_table_filters(forms_meta)
 
 
-def _pick_form_from_table() -> None:
+def _table_key(filters: dict) -> str:
+    """Ключ таблиці: сталий, поки довантажуються деталі, новий — коли змінились фільтри.
+
+    Streamlit пам'ятає позначений рядок за номером, а після зміни фільтрів на цьому номері
+    вже інша форма. Тому з новими фільтрами таблиця починається наново й позначає поточну.
+    """
+    signature = hashlib.sha256(repr(sorted(filters.items())).encode("utf-8")).hexdigest()
+    return f"{TABLE_KEY}_{signature[:12]}"
+
+
+def _pick_form_from_table(table_key: str) -> None:
     """Зробити поточною форму клікнутого рядка.
 
     Streamlit викликає це лише тоді, коли користувач змінив вибір, і передає номер рядка.
     Номер читаємо за рядками, які користувач бачив, тож рядки, що зсунулись під час
     довантаження чи фільтрування, самі форму не перемикають.
     """
-    rows = st.session_state[TABLE_KEY]["selection"]["rows"]
+    rows = st.session_state[table_key]["selection"]["rows"]
     form_ids = st.session_state.get(TABLE_FORM_IDS_KEY, [])
     if not rows or rows[0] >= len(form_ids):
         return
@@ -492,17 +504,26 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     if "Accepting" in display.columns:
         display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
 
-    st.session_state[TABLE_FORM_IDS_KEY] = list(selection_source["FormID"])
+    form_ids = list(selection_source["FormID"])
+    st.session_state[TABLE_FORM_IDS_KEY] = form_ids
+    current_form_id = st.session_state.get(FORM_KEY)
+    table_key = _table_key(filter_values)
     st.dataframe(
         display,
         # Сталий key: інакше Streamlit виводить ідентичність таблиці з даних і на кожному
         # кроці довантаження створює її наново, скидаючи прокрутку, сортування й вибір.
-        key=TABLE_KEY,
+        key=table_key,
         hide_index=True,
         width="stretch",
         height=_table_height(len(display)),
-        on_select=_pick_form_from_table,
+        on_select=functools.partial(_pick_form_from_table, table_key),
         selection_mode="single-row",
+        # Нова таблиця (перша або з іншими фільтрами) позначає поточну форму.
+        selection_default=(
+            {"selection": {"rows": [form_ids.index(current_form_id)]}}
+            if current_form_id in form_ids
+            else None
+        ),
         column_config={
             "FormName": st.column_config.TextColumn("Назва"),
             "PublicationStatus": st.column_config.TextColumn("Статус"),
