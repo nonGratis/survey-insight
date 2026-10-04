@@ -8,6 +8,7 @@ import pytest
 from google.oauth2.credentials import Credentials
 
 from api.google_data_cache import clear_api_cache
+from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from tests.test_e2e_web_api import _app_with, _signed_in_web, _web_talking_to
 from tests.test_saas_api import (
     _FakeGoogleFormsClient,
@@ -155,3 +156,45 @@ def test_the_table_stays_in_place_when_loading_ends() -> None:
     # A fragment draws inside its own container; drawn anywhere else when loading ends, the
     # table would be built anew in the browser and lose its scroll position.
     assert loaded == while_loading
+
+
+def test_one_loading_step_sends_several_batches() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    table = at.dataframe[0].value
+    # Three parallel requests of 20 forms, the most the API takes in one request.
+    assert int((table["DataStatus"] != "Завантажується").sum()) == 60
+
+
+def test_rows_held_back_by_the_quota_show_their_status_and_wait_for_a_retry() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+    api_app.state.forms_quota = FormsQuotaGuards(
+        reads=RollingWindowGuard(1000), response_lists=RollingWindowGuard(5)
+    )
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    table = at.dataframe[0].value
+    counted = table["Total"].notna()
+    assert int(counted.sum()) == 5
+    # Every loaded form has its status; the held-back ones only wait for the response count,
+    # quietly, without an error label or the manual retry button.
+    loaded = table["PublicationStatus"] != "Завантажується"
+    assert int(loaded.sum()) == 60
+    assert set(table.loc[loaded, "PublicationStatus"]) == {"Відкриті"}
+    assert set(table.loc[loaded & ~counted, "DataStatus"]) == {"Завантажується"}
+    assert not any("Повторити" in button.label for button in at.button)
