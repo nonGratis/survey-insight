@@ -81,6 +81,9 @@ class GoogleDataClient:
 
     session_id: str | None = None
     local_credentials: Any | None = None
+    # Resolved by the factory in the script run: `_client()` is a Streamlit cache, which a
+    # worker thread should not touch.
+    api: SaaSApiClient | None = None
 
     def list_forms_for_picker(self) -> list[dict[str, Any]]:
         if is_saas_mode():
@@ -155,7 +158,7 @@ class GoogleDataClient:
             session_id = _require_session_id(self.session_id)
             return [
                 _catalog_enrichment_from_payload(row)
-                for row in _client().enrich_forms_catalog(
+                for row in (self.api or _client()).enrich_forms_catalog(
                     session_id,
                     form_ids,
                     include_summary=include_summary,
@@ -264,7 +267,7 @@ def is_saas_mode() -> bool:
 
 def google_data_client() -> GoogleDataClient:
     if is_saas_mode():
-        return GoogleDataClient(session_id=_session_id_from_state())
+        return GoogleDataClient(session_id=_session_id_from_state(), api=_client())
     return GoogleDataClient(local_credentials=_local_credentials())
 
 
