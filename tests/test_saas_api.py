@@ -545,6 +545,34 @@ def test_forms_catalog_enrich_logs_aggregate_safe_telemetry(caplog) -> None:
     assert "raw-form-id" not in str(record.__dict__)
 
 
+def test_forms_catalog_enrich_telemetry_counts_forms_without_publish_state(caplog) -> None:
+    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
+
+    def summary(**publish_state) -> google_forms_routes.FormSummaryResponse:
+        return google_forms_routes.FormSummaryResponse(
+            title="Poll", description="", sections_count=1, questions_count=3, **publish_state
+        )
+
+    google_forms_routes._log_catalog_enrich_telemetry(
+        [
+            google_forms_routes.CatalogEnrichRow(form_id="legacy", status="ok", summary=summary()),
+            google_forms_routes.CatalogEnrichRow(
+                form_id="closed",
+                status="ok",
+                summary=summary(is_published=True, accepting_responses=False),
+            ),
+            google_forms_routes.CatalogEnrichRow(form_id="foreign", status="no_access"),
+        ],
+        chunk_size=3,
+        include_summary=True,
+        include_stats=False,
+        duration_ms=1.0,
+    )
+
+    record = next(r for r in caplog.records if r.message == "forms_catalog_enrich_completed")
+    assert record.publish_state_unknown_count == 1
+
+
 def test_api_google_data_cache_logs_hashed_resource_id(caplog) -> None:
     clear_api_cache()
     caplog.set_level(logging.INFO, logger="api.google_data_cache")

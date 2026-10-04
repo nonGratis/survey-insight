@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from core.forms_catalog import (
     CATALOG_SUMMARY_FIELDS,
     _parse_form,
@@ -99,6 +101,25 @@ def test_parse_form_keeps_legacy_publish_state_unknown() -> None:
 
     assert enrichment.is_published is None
     assert enrichment.accepting_responses is None
+
+
+@pytest.mark.parametrize(
+    ("publish_settings", "expected"),
+    [
+        ({"publishState": {"isPublished": True, "isAcceptingResponses": True}}, (True, True)),
+        # Google leaves out booleans that are false: a closed form comes back with
+        # isPublished alone, an unpublished one with an empty publishState.
+        ({"publishState": {"isPublished": True}}, (True, False)),
+        ({"publishState": {}}, (False, False)),
+        ({}, (False, False)),
+    ],
+)
+def test_parse_form_reads_omitted_publish_flags_as_false(
+    publish_settings: dict, expected: tuple[bool, bool]
+) -> None:
+    enrichment = _parse_form({"info": {"title": "Demo"}, "publishSettings": publish_settings})
+
+    assert (enrichment.is_published, enrichment.accepting_responses) == expected
 
 
 def test_enrich_form_requests_only_catalog_summary_fields(monkeypatch) -> None:
