@@ -93,7 +93,9 @@ def test_catalog_table_selects_global_form_without_action_columns() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "st.column_config.LinkColumn" not in catalog
     assert '"FormID": f.id' in catalog
-    assert 'on_select="rerun"' in catalog
+    # Only a click switches the form, read against the rows the user saw.
+    assert "on_select=functools.partial(_pick_form_from_table, table_key)" in catalog
+    assert "form_ids = st.session_state.get(TABLE_FORM_IDS_KEY, [])" in catalog
     assert 'selection_mode="single-row"' in catalog
     assert "st.session_state[FORM_KEY] = selected_form_id" in catalog
 

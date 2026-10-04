@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from google.oauth2.credentials import Credentials
 
@@ -74,3 +76,82 @@ def test_rows_still_loading_are_not_counted_as_unknown() -> None:
     assert set(table.loc[~loading, "PublicationStatus"]) == {"Відкриті"}
     metrics = {metric.label: metric.value for metric in at.metric}
     assert metrics["Невідомо"] == "0"
+
+
+def test_table_keeps_its_identity_while_details_load() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+        before = at.dataframe[0]
+        loaded_before = int((before.value["DataStatus"] != "Завантажується").sum())
+        at.run()  # the next loading step brings more rows
+        after = at.dataframe[0]
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert int((after.value["DataStatus"] != "Завантажується").sum()) > loaded_before
+    # Streamlit derives an unkeyed table's identity from its data, and a new identity
+    # remounts the table in the browser: scroll, sorting and selection are lost.
+    assert after.proto.id == before.proto.id
+    assert before.key.startswith("catalog_table")
+
+
+def test_changing_a_filter_starts_a_fresh_table_that_marks_the_current_form() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.session_state["global_form_id"] = "form_05"
+        at.run()
+        before = at.dataframe[0]
+        at.text_input(key="catalog_search").set_value("5").run()
+        after = at.dataframe[0]
+
+    assert not at.exception, [e.value for e in at.exception]
+    # A row is marked by its position, and after filtering another form sits there.
+    assert after.proto.id != before.proto.id
+    assert json.loads(before.proto.selection_default)["selection"]["rows"] == [5]
+    assert after.value["FormName"].iloc[0] == "Poll 05"
+    assert json.loads(after.proto.selection_default)["selection"]["rows"] == [0]
+
+
+def _position_of_table(node, path=()):
+    """Index path of the table in the page tree, the way the browser places it."""
+    for index, child in getattr(node, "children", {}).items():
+        if getattr(child, "type", None) == "dataframe":
+            return (*path, index)
+        found = _position_of_table(child, (*path, index))
+        if found:
+            return found
+    return None
+
+
+def test_the_table_stays_in_place_when_loading_ends() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+        while_loading = (_position_of_table(at._tree), at.dataframe[0].proto.id)
+        for _ in range(20):
+            if "Завантажується" not in set(at.dataframe[0].value["DataStatus"]):
+                break
+            at.run()
+        at.run()  # the page without the loading timer
+        loaded = (_position_of_table(at._tree), at.dataframe[0].proto.id)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Завантажується" not in set(at.dataframe[0].value["DataStatus"])
+    # A fragment draws inside its own container; drawn anywhere else when loading ends, the
+    # table would be built anew in the browser and lose its scroll position.
+    assert loaded == while_loading

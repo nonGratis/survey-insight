@@ -14,6 +14,8 @@ session_state. Користувач не чекає на повний enrichment
 
 from __future__ import annotations
 
+import functools
+import hashlib
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -47,6 +49,11 @@ TABLE_HEADER_HEIGHT_PX = 38
 TABLE_ROW_HEIGHT_PX = 35
 TABLE_MIN_HEIGHT_PX = 360
 TABLE_MAX_HEIGHT_PX = 680
+TABLE_KEY = "catalog_table"
+# FormID рядків у порядку, в якому таблицю показано востаннє: вибір приходить номером рядка.
+TABLE_FORM_IDS_KEY = "catalog_table_form_ids"
+TABLE_PICKED_KEY = "catalog_table_picked_form"
+LOADING_STATUS_HEIGHT_PX = 72
 STATUS_ALL = "Усі"
 STATUS_OPEN = "Відкриті"
 STATUS_CLOSED = "Закриті"
@@ -394,7 +401,55 @@ def _build_dataframe(
 filter_values = _render_table_filters(forms_meta)
 
 
-def _render_table_with_enrichment() -> None:
+def _table_key(filters: dict) -> str:
+    """Ключ таблиці: сталий, поки довантажуються деталі, новий — коли змінились фільтри.
+
+    Streamlit пам'ятає позначений рядок за номером, а після зміни фільтрів на цьому номері
+    вже інша форма. Тому з новими фільтрами таблиця починається наново й позначає поточну.
+    """
+    signature = hashlib.sha256(repr(sorted(filters.items())).encode("utf-8")).hexdigest()
+    return f"{TABLE_KEY}_{signature[:12]}"
+
+
+def _pick_form_from_table(table_key: str) -> None:
+    """Зробити поточною форму клікнутого рядка.
+
+    Streamlit викликає це лише тоді, коли користувач змінив вибір, і передає номер рядка.
+    Номер читаємо за рядками, які користувач бачив, тож рядки, що зсунулись під час
+    довантаження чи фільтрування, самі форму не перемикають.
+    """
+    rows = st.session_state[table_key]["selection"]["rows"]
+    form_ids = st.session_state.get(TABLE_FORM_IDS_KEY, [])
+    if not rows or rows[0] >= len(form_ids):
+        return
+    selected_form_id = form_ids[rows[0]]
+    if st.session_state.get(FORM_KEY) != selected_form_id:
+        st.session_state[FORM_KEY] = selected_form_id
+        st.session_state[TABLE_PICKED_KEY] = True
+
+
+def _render_loading_status(loaded: int, total: int, retryable_ids: list[str]) -> None:
+    """Прогрес довантаження й кнопка повтору в рядку сталої висоти.
+
+    Раніше прогрес зникав після довантаження, а кнопка то з'являлась, то зникала, і щоразу
+    лічильники й таблиця під ними стрибали.
+    """
+    with st.container(height=LOADING_STATUS_HEIGHT_PX, border=False):
+        progress_col, retry_col = st.columns([3, 2], vertical_alignment="center")
+        if loaded < total:
+            progress_col.progress(loaded / total, text=f"Підвантажую деталі: {loaded}/{total}")
+        else:
+            progress_col.caption(f"Деталі завантажено для всіх форм: {total}.")
+        if retryable_ids and retry_col.button(
+            f"Повторити проблемні рядки ({len(retryable_ids)})",
+            key="catalog_retry_failed_rows",
+            help="Повторно завантажити рядки зі статусами timeout, api_error або rate_limited.",
+        ):
+            _clear_enrichment_state_for(retryable_ids)
+            st.rerun()
+
+
+def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     """One enrichment chunk plus table render."""
     enrichments = st.session_state["form_enrichments"]
     stats = st.session_state["form_response_stats"]
@@ -430,32 +485,15 @@ def _render_table_with_enrichment() -> None:
                     enrichments[result.form_id] = None
                 if result.response_stats is not None:
                     stats[result.form_id] = result.response_stats
-                if result.status != "ok":
-                    form_name = chunk_by_id.get(result.form_id)
-                    label = form_name.name if form_name else result.form_id
-                    st.toast(f"⚠️ {label}: {result.status}", icon="⚠️")
 
-            for missing_id, form in chunk_by_id.items():
+            # Без тосту на кожен рядок: проблемні рядки видно у «Стан даних» і на кнопці повтору.
+            for missing_id in chunk_by_id:
                 if missing_id not in returned_ids:
                     enrichments[missing_id] = None
                     statuses[missing_id] = "api_error"
-                    st.toast(f"⚠️ {form.name}: no enrichment result", icon="⚠️")
 
     loaded = sum(1 for f in forms_meta if f.id in enrichments)
-    total = len(forms_meta)
-    if loaded < total:
-        st.progress(
-            loaded / total,
-            text=f"Підвантажую деталі: {loaded}/{total}",
-        )
-    retryable_ids = _retryable_enrichment_ids(forms_meta, statuses)
-    if retryable_ids and st.button(
-        f"Повторити проблемні рядки ({len(retryable_ids)})",
-        key="catalog_retry_failed_rows",
-        help="Повторно завантажити рядки зі статусами timeout, api_error або rate_limited.",
-    ):
-        _clear_enrichment_state_for(retryable_ids)
-        st.rerun()
+    _render_loading_status(loaded, len(forms_meta), _retryable_enrichment_ids(forms_meta, statuses))
 
     df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at)
     _render_catalog_metrics(df)
@@ -466,13 +504,26 @@ def _render_table_with_enrichment() -> None:
     if "Accepting" in display.columns:
         display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
 
-    selection = st.dataframe(
+    form_ids = list(selection_source["FormID"])
+    st.session_state[TABLE_FORM_IDS_KEY] = form_ids
+    current_form_id = st.session_state.get(FORM_KEY)
+    table_key = _table_key(filter_values)
+    st.dataframe(
         display,
+        # Сталий key: інакше Streamlit виводить ідентичність таблиці з даних і на кожному
+        # кроці довантаження створює її наново, скидаючи прокрутку, сортування й вибір.
+        key=table_key,
         hide_index=True,
         width="stretch",
         height=_table_height(len(display)),
-        on_select="rerun",
+        on_select=functools.partial(_pick_form_from_table, table_key),
         selection_mode="single-row",
+        # Нова таблиця (перша або з іншими фільтрами) позначає поточну форму.
+        selection_default=(
+            {"selection": {"rows": [form_ids.index(current_form_id)]}}
+            if current_form_id in form_ids
+            else None
+        ),
         column_config={
             "FormName": st.column_config.TextColumn("Назва"),
             "PublicationStatus": st.column_config.TextColumn("Статус"),
@@ -499,20 +550,29 @@ def _render_table_with_enrichment() -> None:
             "Description": st.column_config.TextColumn("Опис"),
         },
     )
-    selected_rows = getattr(getattr(selection, "selection", None), "rows", [])
-    if selected_rows:
-        selected_form_id = selection_source.iloc[selected_rows[0]]["FormID"]
-        if selected_form_id and st.session_state.get(FORM_KEY) != selected_form_id:
-            st.session_state[FORM_KEY] = selected_form_id
-            st.rerun()
+    # Клік у фрагменті перезапускає лише фрагмент, а вибрану форму показує панель над ним.
+    if st.session_state.pop(TABLE_PICKED_KEY, False) and in_fragment:
+        st.rerun()
+
+
+def _has_pending_forms() -> bool:
+    return any(f.id not in st.session_state["form_enrichments"] for f in forms_meta)
 
 
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
 def _table_with_enrichment_fragment() -> None:
-    _render_table_with_enrichment()
+    _render_table_with_enrichment(in_fragment=True)
+    if not _has_pending_forms():
+        # Усе довантажено: повний перезапуск малює сторінку вже без таймера фрагмента,
+        # який інакше й далі перемальовував би таблицю кожні ENRICHMENT_TICK_SECONDS.
+        st.rerun()
 
 
-if any(f.id not in st.session_state["form_enrichments"] for f in forms_meta):
+if _has_pending_forms():
     _table_with_enrichment_fragment()
 else:
-    _render_table_with_enrichment()
+    # Фрагмент малює свій вміст у власному контейнері. Той самий контейнер тут тримає
+    # таблицю на тому ж місці сторінки, коли довантаження завершується, — інакше браузер
+    # будує її наново й скидає прокрутку.
+    with st.container():
+        _render_table_with_enrichment(in_fragment=False)
