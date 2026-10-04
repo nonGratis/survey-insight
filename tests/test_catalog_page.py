@@ -198,3 +198,27 @@ def test_rows_held_back_by_the_quota_show_their_status_and_wait_for_a_retry() ->
     assert set(table.loc[loaded, "PublicationStatus"]) == {"Відкриті"}
     assert set(table.loc[loaded & ~counted, "DataStatus"]) == {"Завантажується"}
     assert not any("Повторити" in button.label for button in at.button)
+
+
+def test_choosing_a_form_above_moves_the_mark_in_the_same_table() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.session_state["global_form_id"] = "form_05"
+        at.run()
+        before = at.dataframe[0]
+        # The browser keeps the table's selection between runs; AppTest has no browser, so set
+        # the row the table marks, or every run would start again from selection_default.
+        at.session_state[before.key] = {"selection": {"rows": [5], "columns": [], "cells": []}}
+        at.selectbox(key="global_form_select_catalog").set_value("form_10").run()
+        after = at.dataframe[0]
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert json.loads(before.proto.selection_default)["selection"]["rows"] == [5]
+    # The same table, so the browser keeps its scroll; only the mark moves to the new form.
+    assert after.proto.id == before.proto.id
+    assert list(at.session_state[after.key]["selection"]["rows"]) == [10]
