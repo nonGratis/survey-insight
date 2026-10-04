@@ -7,6 +7,7 @@ from dataclasses import replace
 from fastapi import FastAPI, HTTPException, Request, status
 from pydantic import BaseModel
 
+from core.logger import setup_logging
 from core.saas.container import SaaSContainer
 from core.saas.errors import JobConflict
 from core.saas.models import JobStatus, ReportStatus
@@ -103,4 +104,7 @@ def _response(job) -> WorkerJobResponse:
     )
 
 
+# uvicorn imports this module directly, not app.py, so the worker sets up the same JSON
+# logs itself; without a handler on the root logger every INFO event was dropped.
+setup_logging()
 app = create_worker_app()
