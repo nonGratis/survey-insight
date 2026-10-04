@@ -52,6 +52,9 @@ STATUS_OPEN = "Відкриті"
 STATUS_CLOSED = "Закриті"
 STATUS_UNPUBLISHED = "Неопубліковані"
 STATUS_UNKNOWN = "Невідомо"
+# Деталі форми ще не прийшли. Окремо від «Невідомо», щоб черга довантаження не виглядала
+# як форми, про які Google нічого не каже.
+STATUS_LOADING = "Завантажується"
 STATUS_OPTIONS = [STATUS_ALL, STATUS_OPEN, STATUS_CLOSED, STATUS_UNPUBLISHED, STATUS_UNKNOWN]
 
 # Усі колонки таблиці у канонічному порядку. UI-користувач у settings
@@ -210,7 +213,9 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
     return out
 
 
-def _publication_status(enr: FormEnrichment | None) -> str:
+def _publication_status(enr: FormEnrichment | None, *, loaded: bool) -> str:
+    if not loaded:
+        return STATUS_LOADING
     if enr is None:
         return STATUS_UNKNOWN
     if enr.is_published is True and enr.accepting_responses is True:
@@ -330,7 +335,7 @@ def _build_dataframe(
         row = {
             "FormID": f.id,
             "FormName": f.name,
-            "PublicationStatus": _publication_status(enr),
+            "PublicationStatus": _publication_status(enr, loaded=f.id in enrichments),
             "DataStatus": _data_status_label(f.id, enrichments, statuses),
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,

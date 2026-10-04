@@ -1,0 +1,76 @@
+"""Сторінка «Каталог»: справжні web і API, фейковий лише Google."""
+
+from __future__ import annotations
+
+import pytest
+from google.oauth2.credentials import Credentials
+
+from api.google_data_cache import clear_api_cache
+from tests.test_e2e_web_api import _app_with, _signed_in_web, _web_talking_to
+from tests.test_saas_api import (
+    _FakeGoogleFormsClient,
+    _seed_google_grant,
+    _seed_user_session,
+    _test_container,
+)
+
+# Більше, ніж сторінка довантажує за один прохід: частина рядків лишається в черзі.
+FORM_COUNT = 70
+
+
+class _ManyOpenForms(_FakeGoogleFormsClient):
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        return [
+            {
+                "id": f"form_{index:02d}",
+                "name": f"Poll {index:02d}",
+                "owner_email": "owner@example.com",
+                "owner_name": "Owner",
+                "created_time": "2026-06-01T10:00:00Z",
+                "modified_time": "2026-06-02T10:00:00Z",
+                "edit_url": f"https://docs.google.com/forms/d/form_{index:02d}/edit",
+            }
+            for index in range(FORM_COUNT)
+        ]
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        return {
+            "title": form_id,
+            "description": "",
+            "sections_count": 1,
+            "questions_count": 3,
+            "linked_sheet_id": None,
+            "is_published": True,
+            "accepting_responses": True,
+        }
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        return {"total": 0, "first_response": None, "second_response": None, "last_response": None}
+
+
+@pytest.fixture(autouse=True)
+def _production_web(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("API_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("APP_BASE_URL", "https://app.example.com")
+    clear_api_cache()
+
+
+def test_rows_still_loading_are_not_counted_as_unknown() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    table = at.dataframe[0].value
+    loading = table["DataStatus"] == "Завантажується"
+    assert 0 < loading.sum() < FORM_COUNT
+    assert set(table.loc[loading, "PublicationStatus"]) == {"Завантажується"}
+    assert set(table.loc[~loading, "PublicationStatus"]) == {"Відкриті"}
+    metrics = {metric.label: metric.value for metric in at.metric}
+    assert metrics["Невідомо"] == "0"
