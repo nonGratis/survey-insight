@@ -29,7 +29,7 @@ from api.middleware import request_timing_middleware
 from api.routes.google_forms import router as google_forms_router
 from api.routes.google_sheets import router as google_sheets_router
 from api.urls import safe_next_url
-from core.logger import get_logger
+from core.logger import get_logger, setup_logging
 from core.saas.adapters.google_forms import GoogleFormsApiClient
 from core.saas.adapters.google_oauth import GoogleOAuthClient, GoogleOAuthWebClient
 from core.saas.adapters.google_sheets import GoogleSheetsApiClient
@@ -379,4 +379,7 @@ def _with_query(next_url: str, values: dict[str, str]) -> str:
     )
 
 
+# uvicorn imports this module directly, not app.py, so the API sets up the same JSON logs
+# itself; without a handler on the root logger every INFO event was dropped.
+setup_logging()
 app = create_api_app()

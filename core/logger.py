@@ -140,7 +140,8 @@ _HANDLER_MARKER = "_survey_insight_logging_handler"
 def setup_logging(force: bool = False) -> None:
     """Idempotent. Не чіпає чужі handler'и (Streamlit/uvicorn ставлять свої).
 
-    Викликати ОДИН РАЗ у entry-point (app.py) до будь-яких імпортів core/.
+    Викликати ОДИН РАЗ у entry-point: app.py (після import streamlit, до імпортів core/),
+    api/main.py, worker/main.py.
     """
     root = logging.getLogger()
     if not force and any(getattr(h, _HANDLER_MARKER, False) for h in root.handlers):
@@ -154,7 +155,10 @@ def setup_logging(force: bool = False) -> None:
 
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
-    handler.addFilter(StreamlitContextFilter())
+    # Контекст сесії є лише у web: app.py імпортує Streamlit ще до цього виклику. API й worker
+    # Streamlit не імпортують, а фільтр затягнув би в них увесь UI-стек на першому ж записі.
+    if "streamlit" in sys.modules:
+        handler.addFilter(StreamlitContextFilter())
     setattr(handler, _HANDLER_MARKER, True)
     root.addHandler(handler)
 
