@@ -116,7 +116,8 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
 def test_catalog_enrichment_uses_chunk_data_client() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     assert "data = google_data_client()" in catalog
-    assert "data.enrich_catalog_forms(" in catalog
+    # Batches go to the chunk endpoint in parallel, never one request per form.
+    assert "data.enrich_catalog_forms,\n                batch.form_ids," in catalog
     assert "data.get_form_summary(f.id)" not in catalog
     assert "data.get_response_stats" not in catalog
     assert "parallel_map" not in catalog

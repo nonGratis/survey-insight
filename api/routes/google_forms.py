@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from api.dependencies import get_container, require_session
 from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
 from api.google_errors import google_http_exception as map_google_error
+from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from api.urls import safe_next_url
 from core.forms_api import FormsApiError
 from core.logger import get_logger
@@ -34,7 +35,8 @@ CATALOG_SUMMARY_TTL_SECONDS = int(os.getenv("SI_API_CATALOG_SUMMARY_TTL_SECONDS"
 RESPONSE_STATS_TTL_SECONDS = int(os.getenv("SI_API_RESPONSE_STATS_TTL_SECONDS", "120"))
 CATALOG_ENRICH_MAX_IDS = int(os.getenv("SI_CATALOG_ENRICH_MAX_IDS", "20"))
 CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECONDS", "8"))
-CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "5"))
+CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "10"))
+QUOTA_GUARD_REASON = "quota_guard"
 
 
 class GoogleAccessResponse(BaseModel):
@@ -383,9 +385,12 @@ def _catalog_enrich_row(
     row_status = "ok"
     error_code: str | None = None
 
+    quota = _forms_quota(request)
     if include_summary:
         try:
-            summary_result = _cached_form_summary(request, creds, user_id, form_id)
+            summary_result = _cached_form_summary(
+                request, creds, user_id, form_id, guard=quota.reads
+            )
             summary = summary_result.value
             cache_hits.append(summary_result.cache_hit)
             fetched_at_values.append(summary_result.fetched_at)
@@ -393,18 +398,20 @@ def _catalog_enrich_row(
             return CatalogEnrichRow(
                 form_id=form_id,
                 status=_catalog_status(exc),
-                error_code="google_forms_summary_error",
+                error_code=_enrich_error_code(exc, "google_forms_summary_error"),
             )
 
     if include_stats:
         try:
-            stats_result = _cached_response_stats(request, creds, user_id, form_id)
+            stats_result = _cached_response_stats(
+                request, creds, user_id, form_id, guard=quota.response_lists
+            )
             stats = stats_result.value
             cache_hits.append(stats_result.cache_hit)
             fetched_at_values.append(stats_result.fetched_at)
         except FormsApiError as exc:
             row_status = _catalog_status(exc)
-            error_code = "google_forms_stats_error"
+            error_code = _enrich_error_code(exc, "google_forms_stats_error")
 
     return CatalogEnrichRow(
         form_id=form_id,
@@ -438,13 +445,19 @@ def _cached_form_summary(
     creds: Any,
     user_id: str,
     form_id: str,
+    *,
+    guard: RollingWindowGuard | None = None,
 ) -> ApiCacheResult[FormSummaryResponse]:
+    def load() -> FormSummaryResponse:
+        _admit(guard, user_id)
+        return FormSummaryResponse.model_validate(
+            _forms_client(request).get_form_summary(creds, form_id)
+        )
+
     return get_or_load(
         ApiCacheKey(user_id=user_id, data_kind="form_summary", resource_id=form_id),
         ttl_seconds=CATALOG_SUMMARY_TTL_SECONDS,
-        loader=lambda: FormSummaryResponse.model_validate(
-            _forms_client(request).get_form_summary(creds, form_id)
-        ),
+        loader=load,
     )
 
 
@@ -453,14 +466,41 @@ def _cached_response_stats(
     creds: Any,
     user_id: str,
     form_id: str,
+    *,
+    guard: RollingWindowGuard | None = None,
 ) -> ApiCacheResult[ResponseStatsResponse]:
+    def load() -> ResponseStatsResponse:
+        _admit(guard, user_id)
+        return ResponseStatsResponse.model_validate(
+            _forms_client(request).get_response_stats(creds, form_id)
+        )
+
     return get_or_load(
         ApiCacheKey(user_id=user_id, data_kind="response_stats", resource_id=form_id),
         ttl_seconds=RESPONSE_STATS_TTL_SECONDS,
-        loader=lambda: ResponseStatsResponse.model_validate(
-            _forms_client(request).get_response_stats(creds, form_id)
-        ),
+        loader=load,
     )
+
+
+def _admit(guard: RollingWindowGuard | None, user_id: str) -> None:
+    """Spend one call of the user's quota, or fail like Google's 429 without calling Google.
+
+    Runs only when the cache misses, so cached answers cost nothing.
+    """
+    if guard is not None and not guard.try_acquire(user_id):
+        raise FormsApiError(
+            "Catalog paused to stay within the Google Forms API quota.",
+            status=429,
+            reason=QUOTA_GUARD_REASON,
+        )
+
+
+def _enrich_error_code(exc: FormsApiError, default: str) -> str:
+    return QUOTA_GUARD_REASON if exc.reason == QUOTA_GUARD_REASON else default
+
+
+def _forms_quota(request: Request) -> FormsQuotaGuards:
+    return request.app.state.forms_quota
 
 
 def _oldest_fetched_at(values: list[datetime]) -> str | None:
@@ -488,6 +528,8 @@ def _log_catalog_enrich_telemetry(
             "duration_ms": duration_ms,
             "cache_hit_count": sum(1 for row in rows if row.cache_hit),
             "timeout_count": status_counts.get("timeout", 0),
+            # Rows held back by our own quota guard; the rest of rate_limited is Google's 429.
+            "quota_guard_count": sum(1 for row in rows if row.error_code == QUOTA_GUARD_REASON),
             "api_error_count": status_counts.get("api_error", 0),
             "rate_limited_count": status_counts.get("rate_limited", 0),
             "no_access_count": status_counts.get("no_access", 0),

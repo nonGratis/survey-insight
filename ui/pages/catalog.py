@@ -3,24 +3,28 @@
 Tier 1: один Drive API виклик → миттєва таблиця з базовими метаданими.
 Tier 2: forms.get() для кожної форми → title, опис, секції, питання,
         linkedSheetId, accepting.
-Tier 3: Sheets API на колонку A привʼязаного Sheet → total / last
-        response timestamps.
+Tier 3: Forms API responses.list → кількість відповідей, перша й остання.
 
-Tier 2/3 виконуються у фоні через @st.fragment(run_every) ticker, що
-кожні N секунд бере чанк з 5 форм у ThreadPoolExecutor і поповнює
-session_state. Користувач не чекає на повний enrichment — таблиця
-відображається одразу з Tier 1 і дозаповнюється рядок-за-рядком.
+Tier 2/3 виконуються у фоні через @st.fragment(run_every) ticker: кожен крок
+надсилає до CATALOG_ENRICH_PARALLEL_REQUESTS запитів по CATALOG_ENRICH_CHUNK_SIZE
+форм паралельно і поповнює session_state. Рядки, які притримав ліміт Google
+(його стереже API), повторюються самі через паузу — core/catalog_loading.py.
+Користувач не чекає на повний enrichment — таблиця відображається одразу з
+Tier 1 і дозаповнюється.
 """
 
 from __future__ import annotations
 
 import functools
 import hashlib
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 
 import pandas as pd
 import streamlit as st
 
+from core.catalog_loading import Retry, is_loading, next_form_batches, schedule_retry
 from core.forms_catalog import (
     FormDriveMeta,
     FormEnrichment,
@@ -33,6 +37,7 @@ from ui.components.form_picker import FORM_KEY, clear_forms_cache
 from ui.components.metric_bar import MetricItem, render_metric_bar
 from ui.components.page_shell import render_empty_state, render_error_state, render_page_header
 from ui.google_data import (
+    CatalogEnrichmentResult,
     cache_token,
     clear_catalog_cache,
     google_data_client,
@@ -42,7 +47,9 @@ from ui.google_data import (
 log = get_logger(__name__)
 
 ENRICHMENT_TICK_SECONDS = 2
-CATALOG_ENRICH_CHUNK_SIZE = 10
+# Найбільша порція, яку приймає API (SI_CATALOG_ENRICH_MAX_IDS).
+CATALOG_ENRICH_CHUNK_SIZE = 20
+CATALOG_ENRICH_PARALLEL_REQUESTS = 3
 ACTIVE_RECENT_DAYS = 7
 RETRYABLE_DATA_STATUSES = {"timeout", "api_error", "rate_limited"}
 TABLE_HEADER_HEIGHT_PX = 38
@@ -131,6 +138,7 @@ if action.refresh_clicked:
     st.session_state["form_response_stats"] = {}
     st.session_state["form_data_status"] = {}
     st.session_state["form_data_fetched_at"] = {}
+    st.session_state["form_retries"] = {}
     st.rerun()
 
 if not forms_meta:
@@ -147,6 +155,8 @@ st.session_state.setdefault("form_enrichments", {})
 st.session_state.setdefault("form_response_stats", {})
 st.session_state.setdefault("form_data_status", {})
 st.session_state.setdefault("form_data_fetched_at", {})
+# Рядки, що чекають автоматичного повтору: form_id → Retry.
+st.session_state.setdefault("form_retries", {})
 st.session_state["form_enrichments"].update(initial_enrichments)
 st.session_state["form_response_stats"].update(initial_stats)
 
@@ -304,8 +314,11 @@ def _data_status_label(
     form_id: str,
     enrichments: dict[str, FormEnrichment | None],
     statuses: dict[str, str],
+    retries: dict[str, Retry],
 ) -> str:
-    if form_id not in enrichments:
+    # Рядок, що чекає автоматичного повтору, ще вантажиться: помилку показуємо лише тоді,
+    # коли повтори скінчились.
+    if form_id not in enrichments or form_id in retries:
         return "Завантажується"
     status = statuses.get(form_id)
     if status == "ok":
@@ -328,8 +341,14 @@ def _data_status_label(
 def _retryable_enrichment_ids(
     forms: list[FormDriveMeta],
     statuses: dict[str, str],
+    retries: dict[str, Retry],
 ) -> list[str]:
-    return [form.id for form in forms if statuses.get(form.id) in RETRYABLE_DATA_STATUSES]
+    """Рядки з тимчасовою помилкою, які сторінка вже не повторює сама."""
+    return [
+        form.id
+        for form in forms
+        if statuses.get(form.id) in RETRYABLE_DATA_STATUSES and form.id not in retries
+    ]
 
 
 def _clear_enrichment_state_for(form_ids: list[str]) -> None:
@@ -338,6 +357,7 @@ def _clear_enrichment_state_for(form_ids: list[str]) -> None:
         st.session_state["form_response_stats"].pop(form_id, None)
         st.session_state["form_data_status"].pop(form_id, None)
         st.session_state["form_data_fetched_at"].pop(form_id, None)
+        st.session_state["form_retries"].pop(form_id, None)
 
 
 def _updated_ago_label(value: str | None) -> str:
@@ -362,6 +382,7 @@ def _build_dataframe(
     stats: dict[str, ResponseStats],
     statuses: dict[str, str],
     fetched_at: dict[str, str],
+    retries: dict[str, Retry],
 ) -> pd.DataFrame:
     """Зібрати DataFrame, підставляючи placeholders для ще-не-enriched рядків."""
     rows = []
@@ -369,11 +390,13 @@ def _build_dataframe(
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
         activity, days_no_response = _response_activity(stat)
+        # Статус відомий, щойно прийшли деталі форми, навіть якщо відповіді ще в черзі.
+        status_loaded = enr is not None or (f.id in enrichments and f.id not in retries)
         row = {
             "FormID": f.id,
             "FormName": f.name,
-            "PublicationStatus": _publication_status(enr, loaded=f.id in enrichments),
-            "DataStatus": _data_status_label(f.id, enrichments, statuses),
+            "PublicationStatus": _publication_status(enr, loaded=status_loaded),
+            "DataStatus": _data_status_label(f.id, enrichments, statuses, retries),
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
             "Questions": enr.questions_count if enr else None,
@@ -428,7 +451,9 @@ def _pick_form_from_table(table_key: str) -> None:
         st.session_state[TABLE_PICKED_KEY] = True
 
 
-def _render_loading_status(loaded: int, total: int, retryable_ids: list[str]) -> None:
+def _render_loading_status(
+    details_loaded: int, finished: int, total: int, retryable_ids: list[str]
+) -> None:
     """Прогрес довантаження й кнопка повтору в рядку сталої висоти.
 
     Раніше прогрес зникав після довантаження, а кнопка то з'являлась, то зникала, і щоразу
@@ -436,8 +461,17 @@ def _render_loading_status(loaded: int, total: int, retryable_ids: list[str]) ->
     """
     with st.container(height=LOADING_STATUS_HEIGHT_PX, border=False):
         progress_col, retry_col = st.columns([3, 2], vertical_alignment="center")
-        if loaded < total:
-            progress_col.progress(loaded / total, text=f"Підвантажую деталі: {loaded}/{total}")
+        if details_loaded < total:
+            progress_col.progress(
+                details_loaded / total, text=f"Підвантажую деталі: {details_loaded}/{total}"
+            )
+        elif finished < total:
+            # Статуси вже є; кількість відповідей Google віддає обмежено (180 запитів
+            # за хвилину), тож решта рядків чекає повтору.
+            progress_col.progress(
+                finished / total,
+                text=f"Відповіді: {finished}/{total} — решта за хвилину-дві (ліміт Google)",
+            )
         else:
             progress_col.caption(f"Деталі завантажено для всіх форм: {total}.")
         if retryable_ids and retry_col.button(
@@ -449,53 +483,92 @@ def _render_loading_status(loaded: int, total: int, retryable_ids: list[str]) ->
             st.rerun()
 
 
+def _remember_result(result: CatalogEnrichmentResult, now: float) -> None:
+    """Записати результат рядка й, якщо помилка тимчасова, запланувати повтор."""
+    form_id = result.form_id
+    enrichments = st.session_state["form_enrichments"]
+    retries = st.session_state["form_retries"]
+    st.session_state["form_data_status"][form_id] = result.status
+    if result.fetched_at:
+        st.session_state["form_data_fetched_at"][form_id] = result.fetched_at
+    # Деталі, отримані раніше, лишаються, якщо невдалим був лише повтор.
+    if result.summary is not None or form_id not in enrichments:
+        enrichments[form_id] = result.summary
+    if result.response_stats is not None:
+        st.session_state["form_response_stats"][form_id] = result.response_stats
+    retry = schedule_retry(result.status, retries.get(form_id), now)
+    if retry is None:
+        retries.pop(form_id, None)
+    else:
+        retries[form_id] = retry
+
+
+def _enrich_next_batches() -> None:
+    """Один крок довантаження: до CATALOG_ENRICH_PARALLEL_REQUESTS запитів паралельно."""
+    enrichments = st.session_state["form_enrichments"]
+    batches = next_form_batches(
+        [f.id for f in forms_meta],
+        done=enrichments.keys(),
+        retries=st.session_state["form_retries"],
+        have_summary={form_id for form_id, enr in enrichments.items() if enr is not None},
+        now=time.monotonic(),
+        batch_size=CATALOG_ENRICH_CHUNK_SIZE,
+        max_batches=CATALOG_ENRICH_PARALLEL_REQUESTS,
+    )
+    if not batches:
+        return
+    data = google_data_client()  # створюється тут: потоки не читають session_state
+    with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+        futures = [
+            pool.submit(
+                data.enrich_catalog_forms,
+                batch.form_ids,
+                include_summary=batch.include_summary,
+                include_stats=True,
+            )
+            for batch in batches
+        ]
+    now = time.monotonic()
+    failure: Exception | None = None
+    for batch, future in zip(batches, futures, strict=True):
+        try:
+            by_id = {result.form_id: result for result in future.result()}
+        except Exception as exc:  # noqa: BLE001
+            failure, by_id = exc, {}
+        # Без тосту на кожен рядок: проблемні рядки видно у «Стан даних» і на кнопці повтору.
+        for form_id in batch.form_ids:
+            _remember_result(
+                by_id.get(form_id) or CatalogEnrichmentResult(form_id=form_id, status="api_error"),
+                now,
+            )
+    if failure is not None:
+        st.toast(f"⚠️ Не вдалося дозавантажити каталог: {failure}", icon="⚠️")
+
+
 def _render_table_with_enrichment(*, in_fragment: bool) -> None:
-    """One enrichment chunk plus table render."""
+    """One enrichment step plus table render."""
     enrichments = st.session_state["form_enrichments"]
     stats = st.session_state["form_response_stats"]
     statuses = st.session_state["form_data_status"]
     fetched_at = st.session_state["form_data_fetched_at"]
-    data = google_data_client()
+    retries = st.session_state["form_retries"]
 
-    pending = [f for f in forms_meta if f.id not in enrichments]
-    if pending:
-        chunk = pending[:CATALOG_ENRICH_CHUNK_SIZE]
-        chunk_by_id = {form.id: form for form in chunk}
-        try:
-            enrich_results = data.enrich_catalog_forms(
-                list(chunk_by_id),
-                include_summary=True,
-                include_stats=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            for form in chunk:
-                enrichments[form.id] = None  # failed — не пробуємо знову до ручного refresh
-                statuses[form.id] = "api_error"
-            st.toast(f"⚠️ Не вдалося дозавантажити каталог: {exc}", icon="⚠️")
-        else:
-            returned_ids: set[str] = set()
-            for result in enrich_results:
-                returned_ids.add(result.form_id)
-                statuses[result.form_id] = result.status
-                if result.fetched_at:
-                    fetched_at[result.form_id] = result.fetched_at
-                if result.summary is not None:
-                    enrichments[result.form_id] = result.summary
-                else:
-                    enrichments[result.form_id] = None
-                if result.response_stats is not None:
-                    stats[result.form_id] = result.response_stats
+    _enrich_next_batches()
 
-            # Без тосту на кожен рядок: проблемні рядки видно у «Стан даних» і на кнопці повтору.
-            for missing_id in chunk_by_id:
-                if missing_id not in returned_ids:
-                    enrichments[missing_id] = None
-                    statuses[missing_id] = "api_error"
+    finished = sum(1 for f in forms_meta if f.id in enrichments and f.id not in retries)
+    details_loaded = sum(
+        1
+        for f in forms_meta
+        if enrichments.get(f.id) is not None or (f.id in enrichments and f.id not in retries)
+    )
+    _render_loading_status(
+        details_loaded,
+        finished,
+        len(forms_meta),
+        _retryable_enrichment_ids(forms_meta, statuses, retries),
+    )
 
-    loaded = sum(1 for f in forms_meta if f.id in enrichments)
-    _render_loading_status(loaded, len(forms_meta), _retryable_enrichment_ids(forms_meta, statuses))
-
-    df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at)
+    df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at, retries)
     _render_catalog_metrics(df)
     filtered = _apply_filters(df, filter_values)
     selection_source = filtered.reset_index(drop=True)
@@ -556,7 +629,11 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
 
 
 def _has_pending_forms() -> bool:
-    return any(f.id not in st.session_state["form_enrichments"] for f in forms_meta)
+    return is_loading(
+        [f.id for f in forms_meta],
+        done=st.session_state["form_enrichments"].keys(),
+        retries=st.session_state["form_retries"],
+    )
 
 
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
