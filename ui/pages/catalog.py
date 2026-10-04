@@ -529,12 +529,20 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
         st.rerun()
 
 
+def _has_pending_forms() -> bool:
+    return any(f.id not in st.session_state["form_enrichments"] for f in forms_meta)
+
+
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
 def _table_with_enrichment_fragment() -> None:
     _render_table_with_enrichment(in_fragment=True)
+    if not _has_pending_forms():
+        # Усе довантажено: повний перезапуск малює сторінку вже без таймера фрагмента,
+        # який інакше й далі перемальовував би таблицю кожні ENRICHMENT_TICK_SECONDS.
+        st.rerun()
 
 
-if any(f.id not in st.session_state["form_enrichments"] for f in forms_meta):
+if _has_pending_forms():
     _table_with_enrichment_fragment()
 else:
     _render_table_with_enrichment(in_fragment=False)
