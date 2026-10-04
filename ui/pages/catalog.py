@@ -486,7 +486,13 @@ def _render_table_with_enrichment() -> None:
             "LastResponse": st.column_config.TextColumn("Остання відповідь"),
             "Activity": st.column_config.TextColumn("Активність"),
             "DaysNoResponse": st.column_config.NumberColumn("Днів без відповіді", format="%d"),
-            "UpdatedAgo": st.column_config.TextColumn("Оновлено"),
+            "UpdatedAgo": st.column_config.TextColumn(
+                "Дані отримано",
+                help=(
+                    "Коли сервіс востаннє отримав дані цієї форми з Google. "
+                    "Коли змінювали саму форму, показує стовпець «Змінено»."
+                ),
+            ),
             "Modified": st.column_config.DatetimeColumn("Змінено", format="DD.MM.YYYY HH:mm"),
             "Created": st.column_config.DatetimeColumn("Створено", format="DD.MM.YYYY HH:mm"),
             "SheetID": st.column_config.TextColumn("Sheet ID", width="small"),
