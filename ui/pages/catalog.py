@@ -144,6 +144,18 @@ st.session_state["form_enrichments"].update(initial_enrichments)
 st.session_state["form_response_stats"].update(initial_stats)
 
 
+OWNERSHIP_ALL = "Усі"
+OWNERSHIP_MINE = "Мої"
+OWNERSHIP_OTHERS = "Чужі"
+OWNERSHIP_OPTIONS = [OWNERSHIP_ALL, OWNERSHIP_MINE, OWNERSHIP_OTHERS]
+
+
+def _signed_in_email() -> str:
+    user = st.session_state.get("user")
+    email = user.get("email") if isinstance(user, dict) else None
+    return email if isinstance(email, str) else ""
+
+
 def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
     """Намалювати фільтри над таблицею, повернути значення."""
     top_left, top_mid, top_right = st.columns([2, 1, 1])
@@ -159,18 +171,28 @@ def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
             key="catalog_publication_status",
         )
 
-    bottom_left, bottom_right = st.columns([2, 1])
+    bottom_left, bottom_mid, bottom_right = st.columns([2, 1, 1])
     with bottom_left:
         date_range = st.date_input(
             "Змінено в діапазоні",
             value=[],  # порожній список = немає дефолтних меж; користувач задає обидві
             key="catalog_date_range",
         )
-    with bottom_right:
+    with bottom_mid:
         sheet = st.selectbox(
             "Sheet",
             options=["Усі", "З привʼязаним Sheet", "Без Sheet"],
             key="catalog_sheet",
+        )
+    user_email = _signed_in_email()
+    with bottom_right:
+        ownership = st.segmented_control(
+            "Чиї форми",
+            options=OWNERSHIP_OPTIONS,
+            default=OWNERSHIP_ALL,
+            key="catalog_ownership",
+            disabled=not user_email,
+            help="«Мої» — форми, власник яких ви; «Чужі» — ті, якими з вами поділились.",
         )
 
     return {
@@ -179,6 +201,9 @@ def _render_table_filters(forms: list[FormDriveMeta]) -> dict:
         "date_range": date_range,
         "publication_status": publication_status,
         "sheet": sheet,
+        # Повторний клік знімає вибір: тоді показуємо всі форми.
+        "ownership": ownership or OWNERSHIP_ALL,
+        "user_email": user_email,
     }
 
 
@@ -192,6 +217,11 @@ def _apply_filters(df: pd.DataFrame, f: dict) -> pd.DataFrame:
 
     if f["owners"]:
         out = out[out["Owner"].isin(f["owners"])]
+
+    if f["ownership"] != OWNERSHIP_ALL and f["user_email"]:
+        # Drive і вхід Google можуть писати ту саму адресу різним регістром.
+        mine = out["Owner"].astype(str).str.casefold() == f["user_email"].casefold()
+        out = out[mine] if f["ownership"] == OWNERSHIP_MINE else out[~mine]
 
     if isinstance(f["date_range"], (tuple, list)) and len(f["date_range"]) == 2:
         start, end = f["date_range"]
