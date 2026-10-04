@@ -473,16 +473,12 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
                     enrichments[result.form_id] = None
                 if result.response_stats is not None:
                     stats[result.form_id] = result.response_stats
-                if result.status != "ok":
-                    form_name = chunk_by_id.get(result.form_id)
-                    label = form_name.name if form_name else result.form_id
-                    st.toast(f"⚠️ {label}: {result.status}", icon="⚠️")
 
-            for missing_id, form in chunk_by_id.items():
+            # Без тосту на кожен рядок: проблемні рядки видно у «Стан даних» і на кнопці повтору.
+            for missing_id in chunk_by_id:
                 if missing_id not in returned_ids:
                     enrichments[missing_id] = None
                     statuses[missing_id] = "api_error"
-                    st.toast(f"⚠️ {form.name}: no enrichment result", icon="⚠️")
 
     loaded = sum(1 for f in forms_meta if f.id in enrichments)
     _render_loading_status(loaded, len(forms_meta), _retryable_enrichment_ids(forms_meta, statuses))
