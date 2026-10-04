@@ -51,6 +51,7 @@ TABLE_KEY = "catalog_table"
 # FormID рядків у порядку, в якому таблицю показано востаннє: вибір приходить номером рядка.
 TABLE_FORM_IDS_KEY = "catalog_table_form_ids"
 TABLE_PICKED_KEY = "catalog_table_picked_form"
+LOADING_STATUS_HEIGHT_PX = 72
 STATUS_ALL = "Усі"
 STATUS_OPEN = "Відкриті"
 STATUS_CLOSED = "Закриті"
@@ -415,6 +416,27 @@ def _pick_form_from_table() -> None:
         st.session_state[TABLE_PICKED_KEY] = True
 
 
+def _render_loading_status(loaded: int, total: int, retryable_ids: list[str]) -> None:
+    """Прогрес довантаження й кнопка повтору в рядку сталої висоти.
+
+    Раніше прогрес зникав після довантаження, а кнопка то з'являлась, то зникала, і щоразу
+    лічильники й таблиця під ними стрибали.
+    """
+    with st.container(height=LOADING_STATUS_HEIGHT_PX, border=False):
+        progress_col, retry_col = st.columns([3, 2], vertical_alignment="center")
+        if loaded < total:
+            progress_col.progress(loaded / total, text=f"Підвантажую деталі: {loaded}/{total}")
+        else:
+            progress_col.caption(f"Деталі завантажено для всіх форм: {total}.")
+        if retryable_ids and retry_col.button(
+            f"Повторити проблемні рядки ({len(retryable_ids)})",
+            key="catalog_retry_failed_rows",
+            help="Повторно завантажити рядки зі статусами timeout, api_error або rate_limited.",
+        ):
+            _clear_enrichment_state_for(retryable_ids)
+            st.rerun()
+
+
 def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     """One enrichment chunk plus table render."""
     enrichments = st.session_state["form_enrichments"]
@@ -463,20 +485,7 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
                     st.toast(f"⚠️ {form.name}: no enrichment result", icon="⚠️")
 
     loaded = sum(1 for f in forms_meta if f.id in enrichments)
-    total = len(forms_meta)
-    if loaded < total:
-        st.progress(
-            loaded / total,
-            text=f"Підвантажую деталі: {loaded}/{total}",
-        )
-    retryable_ids = _retryable_enrichment_ids(forms_meta, statuses)
-    if retryable_ids and st.button(
-        f"Повторити проблемні рядки ({len(retryable_ids)})",
-        key="catalog_retry_failed_rows",
-        help="Повторно завантажити рядки зі статусами timeout, api_error або rate_limited.",
-    ):
-        _clear_enrichment_state_for(retryable_ids)
-        st.rerun()
+    _render_loading_status(loaded, len(forms_meta), _retryable_enrichment_ids(forms_meta, statuses))
 
     df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at)
     _render_catalog_metrics(df)
