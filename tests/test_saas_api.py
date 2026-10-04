@@ -13,6 +13,7 @@ from google.oauth2.credentials import Credentials
 
 import api.routes.google_forms as google_forms_routes
 from api.google_data_cache import ApiCacheKey, clear_api_cache, get_or_load
+from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
 from core.saas.google_scopes import FORM_SCOPES, IDENTITY_SCOPES, SHEETS_SCOPES
@@ -618,6 +619,62 @@ def test_forms_catalog_enrich_returns_timeout_rows_within_budget(monkeypatch) ->
             "cache_hit": False,
         }
     ]
+
+
+class _AnyFormCountingClient(_CountingGoogleFormsClient):
+    """Answers for any form id, counting the calls that reach Google."""
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        return super().get_form_summary(creds, "form_1")
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        return super().get_response_stats(creds, "form_1")
+
+
+def test_forms_catalog_enrich_holds_back_calls_beyond_the_quota_guard() -> None:
+    clear_api_cache()
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    forms_client = _AnyFormCountingClient()
+    app = create_api_app(container, google_forms_client=forms_client)
+    app.state.forms_quota = FormsQuotaGuards(
+        reads=RollingWindowGuard(10), response_lists=RollingWindowGuard(1)
+    )
+    client = TestClient(app)
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    response = client.post(
+        "/v1/forms/catalog/enrich",
+        json={"form_ids": ["form_a", "form_b", "form_c"]},
+    )
+
+    rows = response.json()
+    assert forms_client.summary_calls == 3
+    assert forms_client.stats_calls == 1
+    assert sorted(row["status"] for row in rows) == ["ok", "rate_limited", "rate_limited"]
+    held_back = [row for row in rows if row["status"] == "rate_limited"]
+    assert {row["error_code"] for row in held_back} == {"quota_guard"}
+    # The status of a held-back form is known: only its response count waits.
+    assert all(row["summary"]["questions_count"] == 5 for row in held_back)
+    assert all(row["response_stats"] is None for row in held_back)
+
+
+def test_forms_catalog_enrich_spends_no_quota_on_cached_answers() -> None:
+    clear_api_cache()
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    app = create_api_app(container, google_forms_client=_AnyFormCountingClient())
+    app.state.forms_quota = FormsQuotaGuards(
+        reads=RollingWindowGuard(1), response_lists=RollingWindowGuard(1)
+    )
+    client = TestClient(app)
+    client.cookies.set(SESSION_COOKIE_NAME, session_id)
+
+    for _ in range(3):
+        rows = client.post("/v1/forms/catalog/enrich", json={"form_ids": ["form_a"]}).json()
+        assert rows[0]["status"] == "ok"
 
 
 def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
