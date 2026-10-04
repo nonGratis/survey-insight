@@ -74,3 +74,25 @@ def test_rows_still_loading_are_not_counted_as_unknown() -> None:
     assert set(table.loc[~loading, "PublicationStatus"]) == {"Відкриті"}
     metrics = {metric.label: metric.value for metric in at.metric}
     assert metrics["Невідомо"] == "0"
+
+
+def test_table_keeps_its_identity_while_details_load() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+        before = at.dataframe[0]
+        loaded_before = int((before.value["DataStatus"] != "Завантажується").sum())
+        at.run()  # the next loading step brings more rows
+        after = at.dataframe[0]
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert int((after.value["DataStatus"] != "Завантажується").sum()) > loaded_before
+    # Streamlit derives an unkeyed table's identity from its data, and a new identity
+    # remounts the table in the browser: scroll, sorting and selection are lost.
+    assert after.proto.id == before.proto.id
+    assert before.key == "catalog_table"

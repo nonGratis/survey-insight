@@ -47,6 +47,10 @@ TABLE_HEADER_HEIGHT_PX = 38
 TABLE_ROW_HEIGHT_PX = 35
 TABLE_MIN_HEIGHT_PX = 360
 TABLE_MAX_HEIGHT_PX = 680
+TABLE_KEY = "catalog_table"
+# FormID рядків у порядку, в якому таблицю показано востаннє: вибір приходить номером рядка.
+TABLE_FORM_IDS_KEY = "catalog_table_form_ids"
+TABLE_PICKED_KEY = "catalog_table_picked_form"
 STATUS_ALL = "Усі"
 STATUS_OPEN = "Відкриті"
 STATUS_CLOSED = "Закриті"
@@ -394,7 +398,24 @@ def _build_dataframe(
 filter_values = _render_table_filters(forms_meta)
 
 
-def _render_table_with_enrichment() -> None:
+def _pick_form_from_table() -> None:
+    """Зробити поточною форму клікнутого рядка.
+
+    Streamlit викликає це лише тоді, коли користувач змінив вибір, і передає номер рядка.
+    Номер читаємо за рядками, які користувач бачив, тож рядки, що зсунулись під час
+    довантаження чи фільтрування, самі форму не перемикають.
+    """
+    rows = st.session_state[TABLE_KEY]["selection"]["rows"]
+    form_ids = st.session_state.get(TABLE_FORM_IDS_KEY, [])
+    if not rows or rows[0] >= len(form_ids):
+        return
+    selected_form_id = form_ids[rows[0]]
+    if st.session_state.get(FORM_KEY) != selected_form_id:
+        st.session_state[FORM_KEY] = selected_form_id
+        st.session_state[TABLE_PICKED_KEY] = True
+
+
+def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     """One enrichment chunk plus table render."""
     enrichments = st.session_state["form_enrichments"]
     stats = st.session_state["form_response_stats"]
@@ -466,12 +487,16 @@ def _render_table_with_enrichment() -> None:
     if "Accepting" in display.columns:
         display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
 
-    selection = st.dataframe(
+    st.session_state[TABLE_FORM_IDS_KEY] = list(selection_source["FormID"])
+    st.dataframe(
         display,
+        # Сталий key: інакше Streamlit виводить ідентичність таблиці з даних і на кожному
+        # кроці довантаження створює її наново, скидаючи прокрутку, сортування й вибір.
+        key=TABLE_KEY,
         hide_index=True,
         width="stretch",
         height=_table_height(len(display)),
-        on_select="rerun",
+        on_select=_pick_form_from_table,
         selection_mode="single-row",
         column_config={
             "FormName": st.column_config.TextColumn("Назва"),
@@ -499,20 +524,17 @@ def _render_table_with_enrichment() -> None:
             "Description": st.column_config.TextColumn("Опис"),
         },
     )
-    selected_rows = getattr(getattr(selection, "selection", None), "rows", [])
-    if selected_rows:
-        selected_form_id = selection_source.iloc[selected_rows[0]]["FormID"]
-        if selected_form_id and st.session_state.get(FORM_KEY) != selected_form_id:
-            st.session_state[FORM_KEY] = selected_form_id
-            st.rerun()
+    # Клік у фрагменті перезапускає лише фрагмент, а вибрану форму показує панель над ним.
+    if st.session_state.pop(TABLE_PICKED_KEY, False) and in_fragment:
+        st.rerun()
 
 
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
 def _table_with_enrichment_fragment() -> None:
-    _render_table_with_enrichment()
+    _render_table_with_enrichment(in_fragment=True)
 
 
 if any(f.id not in st.session_state["form_enrichments"] for f in forms_meta):
     _table_with_enrichment_fragment()
 else:
-    _render_table_with_enrichment()
+    _render_table_with_enrichment(in_fragment=False)
