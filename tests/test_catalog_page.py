@@ -120,3 +120,38 @@ def test_changing_a_filter_starts_a_fresh_table_that_marks_the_current_form() ->
     assert json.loads(before.proto.selection_default)["selection"]["rows"] == [5]
     assert after.value["FormName"].iloc[0] == "Poll 05"
     assert json.loads(after.proto.selection_default)["selection"]["rows"] == [0]
+
+
+def _position_of_table(node, path=()):
+    """Index path of the table in the page tree, the way the browser places it."""
+    for index, child in getattr(node, "children", {}).items():
+        if getattr(child, "type", None) == "dataframe":
+            return (*path, index)
+        found = _position_of_table(child, (*path, index))
+        if found:
+            return found
+    return None
+
+
+def test_the_table_stays_in_place_when_loading_ends() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+        while_loading = (_position_of_table(at._tree), at.dataframe[0].proto.id)
+        for _ in range(20):
+            if "Завантажується" not in set(at.dataframe[0].value["DataStatus"]):
+                break
+            at.run()
+        at.run()  # the page without the loading timer
+        loaded = (_position_of_table(at._tree), at.dataframe[0].proto.id)
+
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Завантажується" not in set(at.dataframe[0].value["DataStatus"])
+    # A fragment draws inside its own container; drawn anywhere else when loading ends, the
+    # table would be built anew in the browser and lose its scroll position.
+    assert loaded == while_loading

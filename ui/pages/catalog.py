@@ -571,4 +571,8 @@ def _table_with_enrichment_fragment() -> None:
 if _has_pending_forms():
     _table_with_enrichment_fragment()
 else:
-    _render_table_with_enrichment(in_fragment=False)
+    # Фрагмент малює свій вміст у власному контейнері. Той самий контейнер тут тримає
+    # таблицю на тому ж місці сторінки, коли довантаження завершується, — інакше браузер
+    # будує її наново й скидає прокрутку.
+    with st.container():
+        _render_table_with_enrichment(in_fragment=False)
