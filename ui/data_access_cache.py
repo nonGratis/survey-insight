@@ -22,8 +22,8 @@ log = get_logger(__name__)
 
 
 ACCESS_TTL_SECONDS = 180
-FORMS_LIST_TTL_SECONDS = 120
-CATALOG_TTL_SECONDS = 300
+# The form list from Drive: the catalog and the form picker above every page share it.
+CATALOG_TTL_SECONDS = 900
 FORM_STRUCTURE_TTL_SECONDS = 600
 RESPONSE_STATS_TTL_SECONDS = 120
 TIMESTAMPS_TTL_SECONDS = 60

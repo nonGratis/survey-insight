@@ -18,7 +18,7 @@ def _fetch_forms(_creds: Credentials, token: str) -> list[dict]:
     return list_user_forms(_creds)
 
 
-@st.cache_data(ttl=120, show_spinner="Завантажую список форм...")
+@st.cache_data(ttl=900, show_spinner="Завантажую список форм...")
 def _fetch_forms_saas(session_id: str) -> list[dict]:
     """Return user's forms through the SaaS API."""
     return google_data_client_for_session(session_id).list_forms_for_picker()

@@ -44,7 +44,6 @@ from ui.api_boundary import handle_api_errors
 from ui.data_access_cache import (
     CATALOG_TTL_SECONDS,
     FORM_STRUCTURE_TTL_SECONDS,
-    FORMS_LIST_TTL_SECONDS,
     POPULATION_TABLES_TTL_SECONDS,
     RAW_RESPONSES_MAX_BYTES,
     RAW_RESPONSES_MAX_ROWS,
@@ -87,12 +86,12 @@ class GoogleDataClient:
 
     def list_forms_for_picker(self) -> list[dict[str, Any]]:
         if is_saas_mode():
-            session_id = _require_session_id(self.session_id)
-            return get_or_load(
-                _cache_key(session_id, "forms_list"),
-                ttl_seconds=FORMS_LIST_TTL_SECONDS,
-                loader=lambda: _client().list_forms(session_id),
-            )
+            # The same Drive list as the catalog, from the same cache entry: a list of its
+            # own with a shorter TTL cost a 2.5-3.5 s Drive call every couple of minutes.
+            return [
+                {"id": form.id, "name": form.name, "modifiedTime": form.modified_time}
+                for form in self.list_catalog_forms()
+            ]
         return local_list_user_forms(self._local_credentials())
 
     def list_catalog_forms(self) -> list[FormDriveMeta]:

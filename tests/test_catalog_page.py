@@ -222,3 +222,30 @@ def test_choosing_a_form_above_moves_the_mark_in_the_same_table() -> None:
     # The same table, so the browser keeps its scroll; only the mark moves to the new form.
     assert after.proto.id == before.proto.id
     assert list(at.session_state[after.key]["selection"]["rows"]) == [10]
+
+
+class _CountingDriveLists(_ManyOpenForms):
+    def __init__(self) -> None:
+        self.drive_lists = 0
+
+    def list_forms(self, creds: Credentials) -> list[dict]:
+        self.drive_lists += 1
+        return super().list_forms(creds)
+
+
+def test_the_form_picker_reuses_the_catalog_list_from_drive() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    google = _CountingDriveLists()
+    _, api_app = _app_with(container, google)
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    # One Drive list a page load: the picker above used to fetch the same list again,
+    # 2.5-3.5 s each time its shorter cache ran out.
+    assert google.drive_lists == 1
+    assert len(at.selectbox(key="global_form_select_catalog").options) == FORM_COUNT
