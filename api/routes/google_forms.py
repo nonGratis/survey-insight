@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections import Counter
@@ -37,6 +38,18 @@ CATALOG_ENRICH_MAX_IDS = int(os.getenv("SI_CATALOG_ENRICH_MAX_IDS", "20"))
 CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECONDS", "8"))
 CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "10"))
 QUOTA_GUARD_REASON = "quota_guard"
+
+
+class QuotaGuardHoldError(FormsApiError):
+    """A call our quota guard held back, with the time its slot frees."""
+
+    def __init__(self, retry_after_seconds: float) -> None:
+        super().__init__(
+            "Catalog paused to stay within the Google Forms API quota.",
+            status=429,
+            reason=QUOTA_GUARD_REASON,
+        )
+        self.retry_after_seconds = retry_after_seconds
 
 
 class GoogleAccessResponse(BaseModel):
@@ -96,6 +109,8 @@ class CatalogEnrichRow(BaseModel):
     form_id: str
     status: str
     error_code: str | None = None
+    # Rows held back by the quota guard: when to ask again (the guard keeps that slot).
+    retry_after_seconds: float | None = None
     summary: FormSummaryResponse | None = None
     response_stats: ResponseStatsResponse | None = None
     fetched_at: str | None = None
@@ -384,6 +399,7 @@ def _catalog_enrich_row(
     fetched_at_values: list[datetime] = []
     row_status = "ok"
     error_code: str | None = None
+    retry_after_seconds: float | None = None
 
     quota = _forms_quota(request)
     if include_summary:
@@ -399,6 +415,7 @@ def _catalog_enrich_row(
                 form_id=form_id,
                 status=_catalog_status(exc),
                 error_code=_enrich_error_code(exc, "google_forms_summary_error"),
+                retry_after_seconds=_retry_after(exc),
             )
 
     if include_stats:
@@ -412,11 +429,13 @@ def _catalog_enrich_row(
         except FormsApiError as exc:
             row_status = _catalog_status(exc)
             error_code = _enrich_error_code(exc, "google_forms_stats_error")
+            retry_after_seconds = _retry_after(exc)
 
     return CatalogEnrichRow(
         form_id=form_id,
         status=row_status,
         error_code=error_code,
+        retry_after_seconds=retry_after_seconds,
         summary=summary,
         response_stats=stats,
         fetched_at=_oldest_fetched_at(fetched_at_values),
@@ -487,12 +506,18 @@ def _admit(guard: RollingWindowGuard | None, user_id: str) -> None:
 
     Runs only when the cache misses, so cached answers cost nothing.
     """
-    if guard is not None and not guard.try_acquire(user_id):
-        raise FormsApiError(
-            "Catalog paused to stay within the Google Forms API quota.",
-            status=429,
-            reason=QUOTA_GUARD_REASON,
-        )
+    if guard is None:
+        return
+    wait_seconds = guard.acquire_or_wait(user_id)
+    if wait_seconds > 0:
+        raise QuotaGuardHoldError(wait_seconds)
+
+
+def _retry_after(exc: FormsApiError) -> float | None:
+    if not isinstance(exc, QuotaGuardHoldError):
+        return None
+    # Rounded up: asked a little late the slot is free, a little early it is not.
+    return math.ceil(exc.retry_after_seconds * 10) / 10
 
 
 def _enrich_error_code(exc: FormsApiError, default: str) -> str:

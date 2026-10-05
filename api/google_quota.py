@@ -8,8 +8,9 @@ call of each kind per form, so an account with ~200 forms hits the responses lim
 soon as loading is faster than about a minute.
 
 The guard admits a call while the user made fewer than ``limit`` calls of that kind in the
-last 60 seconds. The default limits stay below Google's to leave room for the other
-pages. It counts per process: Cloud Run may run several API instances, so it is a brake,
+last 60 seconds, and tells a refused call when its slot frees, so the catalog asks again
+right then and can show how long the rest takes. The default limits stay below Google's
+to leave room for the other pages. It counts per process: Cloud Run may run several API instances, so it is a brake,
 not an exact meter, and a real 429 from Google is still handled as before.
 """
 
@@ -39,19 +40,37 @@ class RollingWindowGuard:
         self.window_seconds = window_seconds
         self._clock = clock
         self._calls: dict[str, deque[float]] = {}
+        # Times at which refused calls were told to come back, in increasing order.
+        self._promised: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
-    def try_acquire(self, key: str) -> bool:
-        """Count a call for ``key`` and return True, or return False if the window is full."""
+    def acquire_or_wait(self, key: str) -> float:
+        """Count a call for ``key`` and return 0.0, or return the seconds until its slot frees.
+
+        A refused call gets the next slot no earlier refused call was given: slots free as
+        old calls leave the window, so callers that come back on time are admitted one by
+        one instead of all retrying at once.
+        """
         now = self._clock()
         with self._lock:
             calls = self._calls.setdefault(key, deque())
             while calls and now - calls[0] >= self.window_seconds:
                 calls.popleft()
-            if len(calls) >= self.limit:
-                return False
-            calls.append(now)
-            return True
+            promised = self._promised.setdefault(key, deque())
+            while promised and promised[0] <= now:
+                promised.popleft()
+            if len(calls) < self.limit:
+                calls.append(now)
+                return 0.0
+            # Free slots, in order: as the calls in the window expire, then as the calls
+            # promised to earlier refusals (made in the future) expire in their turn.
+            slot = len(promised)
+            if slot < len(calls):
+                frees_at = calls[slot] + self.window_seconds
+            else:
+                frees_at = promised[slot - len(calls)] + self.window_seconds
+            promised.append(frees_at)
+            return frees_at - now
 
 
 @dataclass(frozen=True)
