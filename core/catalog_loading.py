@@ -4,7 +4,8 @@
 мережі. Спершу нові форми в порядку каталогу, потім ті, що чекають повтору. Рядок, який
 притримав ліміт (наш обмежувач у API чи 429 від Google) або який не встиг (timeout,
 api_error), сторінка повторює сама через паузу, поки не вичерпає спроби; лише тоді його
-показує кнопка «Повторити проблемні рядки».
+показує кнопка «Повторити проблемні рядки». Рядок, якому наш обмежувач назвав час свого
+місця в ліміті, просто чекає того часу: це не невдала спроба.
 """
 
 from __future__ import annotations
@@ -68,15 +69,31 @@ def _chunks(items: list[str], size: int) -> list[list[str]]:
     return [items[start : start + size] for start in range(0, len(items), size)]
 
 
-def schedule_retry(status: str, previous: Retry | None, now: float) -> Retry | None:
-    """Наступна спроба для рядка, що отримав ``status``, або None, якщо повтору не буде."""
+def schedule_retry(
+    status: str, previous: Retry | None, now: float, *, retry_after: float | None = None
+) -> Retry | None:
+    """Наступна спроба для рядка, що отримав ``status``, або None, якщо повтору не буде.
+
+    ``retry_after`` — секунди до місця, яке обмежувач API притримав для рядка.
+    """
     if status not in RETRYABLE_STATUSES:
         return None
+    if retry_after is not None:
+        attempts = previous.attempts if previous else 0
+        return Retry(attempts=attempts, not_before=now + retry_after)
     attempts = (previous.attempts if previous else 0) + 1
     if attempts >= MAX_ATTEMPTS:
         return None
     delay = RATE_LIMITED_RETRY_SECONDS if status == "rate_limited" else OTHER_RETRY_SECONDS
     return Retry(attempts=attempts, not_before=now + delay)
+
+
+def seconds_until_retried(
+    retries: Mapping[str, Retry], form_ids: Collection[str], *, now: float
+) -> float | None:
+    """Скільки чекати, доки настане час повтору останнього з ``form_ids``; None — нікого."""
+    times = [retries[form_id].not_before for form_id in form_ids if form_id in retries]
+    return max(0.0, max(times) - now) if times else None
 
 
 def is_loading(

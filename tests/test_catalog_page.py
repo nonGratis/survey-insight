@@ -203,6 +203,29 @@ def test_rows_held_back_by_the_quota_show_their_status_and_wait_for_a_retry() ->
     assert not any("Повторити" in button.label for button in at.button)
 
 
+def test_the_status_row_tells_how_long_the_held_back_counts_wait() -> None:
+    container = _test_container()
+    session_id = _seed_user_session(container)
+    _seed_google_grant(container)
+    _, api_app = _app_with(container, _ManyOpenForms())
+    api_app.state.forms_quota = FormsQuotaGuards(
+        reads=RollingWindowGuard(1000), response_lists=RollingWindowGuard(FORM_COUNT - 5)
+    )
+
+    with _web_talking_to(api_app):
+        at = _signed_in_web(session_id)
+        at.run()
+        at.run()  # the last forms: all statuses are in, five response counts wait
+
+    assert not at.exception, [e.value for e in at.exception]
+    [text] = [bar.proto.text for bar in at.get("progress")]
+    prefix = f"Відповіді: {FORM_COUNT - 5}/{FORM_COUNT} — решта приблизно за "
+    assert text.startswith(prefix) and text.endswith(" с (ліміт Google)"), text
+    # The guard kept a slot for each of them: free once the first calls are a minute old.
+    seconds = int(text.removeprefix(prefix).split()[0])
+    assert 55 <= seconds <= 62
+
+
 def test_choosing_a_form_above_moves_the_mark_in_the_same_table() -> None:
     container = _test_container()
     session_id = _seed_user_session(container)

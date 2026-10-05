@@ -64,6 +64,8 @@ class CatalogEnrichmentResult:
     form_id: str
     status: str
     error_code: str | None = None
+    # Set by the API for rows its quota guard held back: when their slot frees.
+    retry_after_seconds: float | None = None
     summary: FormEnrichment | None = None
     response_stats: ResponseStats | None = None
     fetched_at: str | None = None
@@ -474,4 +476,11 @@ def _catalog_enrichment_from_payload(payload: dict[str, Any]) -> CatalogEnrichme
         if payload.get("fetched_at") is not None
         else None,
         cache_hit=bool(payload.get("cache_hit")),
+        retry_after_seconds=_optional_float(payload.get("retry_after_seconds")),
     )
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
