@@ -136,7 +136,7 @@ def _handle_saas_login_ticket() -> bool:
         st.query_params.clear()
         return False
 
-    _remember_saas_session(session)
+    _remember_saas_session(session, write_cookie=True)
     st.query_params.clear()
     return True
 
@@ -156,8 +156,14 @@ def _restore_saas_session() -> bool:
     if _has_fresh_saas_session():
         return True
 
-    cookie_manager = _cookie_manager()
-    session_id = st.session_state.get("saas_session_id") or cookie_manager.get(_SAAS_SESSION_COOKIE)
+    # The cookie components load in the browser and rerun the page when they answer, so
+    # they are rendered only to find a session this tab does not hold yet (page load). A
+    # session the tab holds is re-checked through the API alone.
+    cookie_manager: stx.CookieManager | None = None
+    session_id = st.session_state.get("saas_session_id")
+    if not isinstance(session_id, str) or not session_id:
+        cookie_manager = _cookie_manager()
+        session_id = cookie_manager.get(_SAAS_SESSION_COOKIE)
     if not isinstance(session_id, str) or not session_id:
         if _should_wait_for_cookie_probe():
             st.session_state[_SAAS_AUTH_RESTORE_PENDING] = True
@@ -178,7 +184,7 @@ def _restore_saas_session() -> bool:
         _clear_saas_session(cookie_manager)
         return False
 
-    _remember_saas_session(session, cookie_manager)
+    _remember_saas_session(session, write_cookie=False)
     return True
 
 
@@ -215,10 +221,12 @@ def _has_fresh_saas_session() -> bool:
     )
 
 
-def _remember_saas_session(
-    session: SaaSSession,
-    cookie_manager: stx.CookieManager | None = None,
-) -> None:
+def _remember_saas_session(session: SaaSSession, *, write_cookie: bool) -> None:
+    """Keep the checked session in this tab; write its cookie only at login.
+
+    The API session expires 30 days after login whatever the activity, and the cookie is
+    written with the same lifetime, so there is nothing to refresh on later checks.
+    """
     if not session.session_id:
         return
 
@@ -232,12 +240,16 @@ def _remember_saas_session(
         "name": session.name,
         "plan": session.plan,
     }
-    manager = cookie_manager or _cookie_manager()
-    manager.set(
+    if not write_cookie:
+        return
+    _cookie_manager().set(
         _SAAS_SESSION_COOKIE,
         session.session_id,
         key="set_saas_session",
         path="/",
+        # Without expires_at the component also sends Expires = now + 1 day; with both set
+        # browsers follow Max-Age, but the two should not disagree.
+        expires_at=datetime.now(UTC) + timedelta(days=_SAAS_SESSION_DAYS),
         max_age=float(_SAAS_SESSION_DAYS * 24 * 60 * 60),
         secure=_app_base_url().startswith("https://"),
         same_site="lax",

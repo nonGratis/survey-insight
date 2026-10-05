@@ -23,7 +23,11 @@ from ui.components.page_shell import render_app_version  # noqa: E402
 
 st.set_page_config(page_title="Survey Insight", layout="wide")
 
-logged_in = ensure_login_state()
+# The session check renders hidden cookie components on some runs only. Its own container
+# keeps everything below at the same place in the page, otherwise Streamlit rebuilds the
+# page (the catalog table loses its scroll).
+with st.container():
+    logged_in = ensure_login_state()
 
 if not logged_in and is_auth_restore_pending():
     hero_cols = st.columns([1, 2, 1], gap="large")
