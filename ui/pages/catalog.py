@@ -473,9 +473,15 @@ def _render_loading_status(
 ) -> None:
     """Прогрес довантаження й кнопка повтору в рядку сталої висоти.
 
-    Раніше прогрес зникав після довантаження, а кнопка то з'являлась, то зникала, і щоразу
-    лічильники й таблиця під ними стрибали.
+    Поки дані вантажаться, рядок не змінює висоти, тож лічильники й таблиця під ним не
+    стрибають. Коли все довантажено і повторювати нічого, рядок зникає: скільки форм і
+    які в них статуси, кажуть лічильники над таблицею.
     """
+    if finished >= total and not retryable_ids:
+        # st.empty() тримає місце рядка в дереві сторінки, тож таблиця під ним
+        # не будується наново і прокрутка лишається.
+        st.empty()
+        return
     with st.container(height=LOADING_STATUS_HEIGHT_PX, border=False):
         progress_col, retry_col = st.columns([3, 2], vertical_alignment="center")
         if details_loaded < total:
@@ -489,8 +495,6 @@ def _render_loading_status(
                 finished / total,
                 text=f"Відповіді: {finished}/{total} — решта за хвилину-дві (ліміт Google)",
             )
-        else:
-            progress_col.caption(f"Деталі завантажено для всіх форм: {total}.")
         if retryable_ids and retry_col.button(
             f"Повторити проблемні рядки ({len(retryable_ids)})",
             key="catalog_retry_failed_rows",

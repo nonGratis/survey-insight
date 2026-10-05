@@ -153,6 +153,9 @@ def test_the_table_stays_in_place_when_loading_ends() -> None:
 
     assert not at.exception, [e.value for e in at.exception]
     assert "Завантажується" not in set(at.dataframe[0].value["DataStatus"])
+    # Once everything is loaded the status row is gone: the counters above say it already.
+    assert not at.get("progress")
+    assert not any("Деталі" in caption.value for caption in at.caption)
     # A fragment draws inside its own container; drawn anywhere else when loading ends, the
     # table would be built anew in the browser and lose its scroll position.
     assert loaded == while_loading
