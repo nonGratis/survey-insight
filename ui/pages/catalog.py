@@ -451,6 +451,20 @@ def _pick_form_from_table(table_key: str) -> None:
         st.session_state[TABLE_PICKED_KEY] = True
 
 
+def _mark_current_form(table_key: str, form_ids: list[str], current_form_id: str | None) -> None:
+    """Позначка в таблиці йде за поточною формою, звідки б її не змінили.
+
+    Нову таблицю позначає selection_default. Наявна пам'ятає свій вибір, тож форму,
+    обрану зверху, позначаємо через Session State: таблиця та сама, прокрутка лишається.
+    """
+    state = st.session_state.get(table_key)
+    if state is None:
+        return
+    wanted = [form_ids.index(current_form_id)] if current_form_id in form_ids else []
+    if list(state["selection"]["rows"]) != wanted:
+        st.session_state[table_key] = {"selection": {"rows": wanted, "columns": [], "cells": []}}
+
+
 def _render_loading_status(
     details_loaded: int, finished: int, total: int, retryable_ids: list[str]
 ) -> None:
@@ -581,6 +595,7 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     st.session_state[TABLE_FORM_IDS_KEY] = form_ids
     current_form_id = st.session_state.get(FORM_KEY)
     table_key = _table_key(filter_values)
+    _mark_current_form(table_key, form_ids, current_form_id)
     st.dataframe(
         display,
         # Сталий key: інакше Streamlit виводить ідентичність таблиці з даних і на кожному
