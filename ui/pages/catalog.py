@@ -60,6 +60,9 @@ TABLE_KEY = "catalog_table"
 # FormID рядків у порядку, в якому таблицю показано востаннє: вибір приходить номером рядка.
 TABLE_FORM_IDS_KEY = "catalog_table_form_ids"
 TABLE_PICKED_KEY = "catalog_table_picked_form"
+# Форма, з якою сторінку намальовано востаннє, і прапорець «цей запуск без порції».
+TABLE_DRAWN_FORM_KEY = "catalog_table_drawn_form"
+SKIP_LOADING_STEP_KEY = "catalog_skip_loading_step"
 LOADING_STATUS_HEIGHT_PX = 72
 STATUS_ALL = "Усі"
 STATUS_OPEN = "Відкриті"
@@ -567,7 +570,13 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     fetched_at = st.session_state["form_data_fetched_at"]
     retries = st.session_state["form_retries"]
 
-    _enrich_next_batches()
+    # Запуск, що змінив поточну форму (клік у таблиці чи вибір зверху), лише перемальовує
+    # сторінку: порцію з Google візьме наступний тік, а вибір не чекає на неї 2-5 с.
+    current_form = st.session_state.get(FORM_KEY)
+    form_changed = st.session_state.get(TABLE_DRAWN_FORM_KEY, current_form) != current_form
+    st.session_state[TABLE_DRAWN_FORM_KEY] = current_form
+    if not (form_changed or st.session_state.pop(SKIP_LOADING_STEP_KEY, False)):
+        _enrich_next_batches()
 
     finished = sum(1 for f in forms_meta if f.id in enrichments and f.id not in retries)
     details_loaded = sum(
@@ -640,6 +649,7 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     )
     # Клік у фрагменті перезапускає лише фрагмент, а вибрану форму показує панель над ним.
     if st.session_state.pop(TABLE_PICKED_KEY, False) and in_fragment:
+        st.session_state[SKIP_LOADING_STEP_KEY] = True
         st.rerun()
 
 
