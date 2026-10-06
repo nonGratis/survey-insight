@@ -108,9 +108,9 @@ def test_unavailable_api_retries_then_falls_back_to_login(
 
     for _ in range(auth_widget.SESSION_RESTORE_MAX_RETRIES):
         with pytest.raises(_RerunError):
-            auth_widget._restore_saas_session()
+            auth_widget._restore_saas_session(manage_cookie=True)
 
-    assert auth_widget._restore_saas_session() is False
+    assert auth_widget._restore_saas_session(manage_cookie=True) is False
     assert state.get("saas_session_retries", 0) == 0
     assert state["saas_session_id"] == "sid"
 
@@ -123,5 +123,5 @@ def test_successful_session_check_resets_retry_counter(monkeypatch: pytest.Monke
     state["saas_session_retries"] = 2
     monkeypatch.setattr(auth_widget, "_remember_saas_session", lambda *a, **k: None)
 
-    assert auth_widget._restore_saas_session() is True
+    assert auth_widget._restore_saas_session(manage_cookie=True) is True
     assert "saas_session_retries" not in state
