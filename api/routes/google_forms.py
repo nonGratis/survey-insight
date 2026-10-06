@@ -55,7 +55,6 @@ class FormListItem(BaseModel):
     created_time: str | None = None
     modified_time: str | None = None
     edit_url: str | None = None
-    can_edit: bool | None = None
 
 
 class FormSummaryResponse(BaseModel):

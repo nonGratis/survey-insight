@@ -36,7 +36,7 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
 DRIVE_FIELDS = (
     "nextPageToken,"
     "files(id,name,createdTime,modifiedTime,owners(emailAddress,displayName),"
-    "webViewLink,capabilities/canEdit)"
+    "webViewLink)"
 )
 DRIVE_PAGE_SIZE = _env_int("SI_DRIVE_FORMS_PAGE_SIZE", 100, minimum=1, maximum=1000)
 DRIVE_MAX_FORMS = _env_int("SI_DRIVE_FORMS_MAX", 300, minimum=1, maximum=5000)
@@ -60,8 +60,6 @@ class FormDriveMeta:
     created_time: str
     modified_time: str
     edit_url: str
-    # Чи може користувач редагувати форму (Drive capabilities.canEdit); None — невідомо.
-    can_edit: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -145,7 +143,6 @@ def _parse_drive_file(raw: dict[str, Any]) -> FormDriveMeta:
     form_id = raw["id"]
     owners = raw.get("owners") or []
     first_owner = owners[0] if owners else {}
-    capabilities = raw.get("capabilities")
     return FormDriveMeta(
         id=form_id,
         name=raw.get("name", "—"),
@@ -154,9 +151,6 @@ def _parse_drive_file(raw: dict[str, Any]) -> FormDriveMeta:
         created_time=raw.get("createdTime", ""),
         modified_time=raw.get("modifiedTime", ""),
         edit_url=FORM_EDIT_URL_TEMPLATE.format(form_id=form_id),
-        can_edit=(
-            bool(capabilities.get("canEdit", False)) if isinstance(capabilities, dict) else None
-        ),
     )
 
 
