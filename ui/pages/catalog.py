@@ -74,41 +74,35 @@ STATUS_UNKNOWN = "Невідомо"
 STATUS_LOADING = "Завантажується"
 STATUS_OPTIONS = [STATUS_ALL, STATUS_OPEN, STATUS_CLOSED, STATUS_UNPUBLISHED, STATUS_UNKNOWN]
 
-# Усі колонки таблиці у канонічному порядку. UI-користувач у settings
-# panel вибирає підмножину і її ж порядок — задавання default тут.
-ALL_COLUMNS = [
+# Колонки таблиці в порядку показу. Сховані (HIDDEN_COLUMNS) користувач вмикає кнопкою
+# «Показати/сховати колонки» над таблицею.
+TABLE_COLUMNS = [
     "FormName",
     "PublicationStatus",
     "DataStatus",
-    "Title",
-    "Owner",
-    "Questions",
-    "Sections",
-    "Accepting",
     "Total",
     "LastResponse",
     "Activity",
-    "DaysNoResponse",
-    "UpdatedAgo",
+    "Questions",
+    "Owner",
+    "CanEdit",
     "Modified",
     "Created",
-    "SheetID",
+    "Sections",
+    "Title",
     "Description",
-]
-DEFAULT_VISIBLE_COLUMNS = [
-    "FormName",
-    "PublicationStatus",
-    "DataStatus",
-    "Owner",
-    "Questions",
-    "Accepting",
-    "Total",
-    "LastResponse",
-    "Activity",
-    "DaysNoResponse",
     "UpdatedAgo",
-    "Modified",
 ]
+HIDDEN_COLUMNS = {"Sections", "Title", "Description", "UpdatedAgo"}
+# Стан даних показуємо, лише коли якийсь рядок не довантажився; «Ок» і черга — не новина.
+DATA_STATUS_QUIET = {"Ок", "Завантажується"}
+# У рядку — про одну форму; категорії фільтра й лічильники лишаються в множині.
+STATUS_ROW_LABELS = {
+    STATUS_OPEN: "Відкрита",
+    STATUS_CLOSED: "Закрита",
+    STATUS_UNPUBLISHED: "Не опублікована",
+}
+DATETIME_FORMAT = "DD.MM.YYYY HH:mm"
 
 if not ensure_api_access():
     st.stop()
@@ -329,7 +323,7 @@ def _data_status_label(
     if status == "timeout":
         return "Таймаут"
     if status == "rate_limited":
-        return "Rate limit"
+        return "Ліміт Google"
     if status == "no_access":
         return "Немає доступу"
     if status == "deleted":
@@ -392,7 +386,7 @@ def _build_dataframe(
     for f in forms:
         enr = enrichments.get(f.id)
         stat = stats.get(f.id)
-        activity, days_no_response = _response_activity(stat)
+        activity, _ = _response_activity(stat)
         # Статус відомий, щойно прийшли деталі форми, навіть якщо відповіді ще в черзі.
         status_loaded = enr is not None or (f.id in enrichments and f.id not in retries)
         row = {
@@ -402,13 +396,12 @@ def _build_dataframe(
             "DataStatus": _data_status_label(f.id, enrichments, statuses, retries),
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
+            "CanEdit": f.can_edit,
             "Questions": enr.questions_count if enr else None,
             "Sections": enr.sections_count if enr else None,
-            "Accepting": enr.accepting_responses if enr else None,
             "Total": stat.total if stat else None,
-            "LastResponse": stat.last_response if stat else "",
+            "LastResponse": stat.last_response if stat else None,
             "Activity": activity,
-            "DaysNoResponse": days_no_response,
             "UpdatedAgo": _updated_ago_label(fetched_at.get(f.id)),
             "Modified": f.modified_time,
             "Created": f.created_time,
@@ -417,11 +410,70 @@ def _build_dataframe(
         }
         rows.append(row)
     df = pd.DataFrame(rows)
-    # ISO 8601 з Drive — pandas парсить охайно. Sheet timestamps локалізовані
-    # (DD.MM.YYYY HH:MM:SS), залишаємо як рядок щоб не наламати дров.
-    df["Modified"] = pd.to_datetime(df["Modified"], errors="coerce", utc=True)
-    df["Created"] = pd.to_datetime(df["Created"], errors="coerce", utc=True)
+    # Drive дає ISO 8601, час відповідей — теж ISO (UTC): дати сортуються як дати.
+    for column in ("Modified", "Created", "LastResponse"):
+        df[column] = pd.to_datetime(df[column], errors="coerce", utc=True)
     return df
+
+
+def _table_display(rows: pd.DataFrame) -> pd.DataFrame:
+    """Колонки, які бачить користувач, у порядку показу; статус — про одну форму."""
+    display = rows[[column for column in TABLE_COLUMNS if column in rows.columns]].copy()
+    display["PublicationStatus"] = display["PublicationStatus"].replace(STATUS_ROW_LABELS)
+    return display
+
+
+def _table_column_config(*, hide_owner: bool, show_data_status: bool) -> dict:
+    """Підписи й вигляд колонок. Час — у часовому поясі браузера, як його бачить людина."""
+    timezone = st.context.timezone
+
+    def when(label: str):  # returns a Streamlit column config
+        return st.column_config.DatetimeColumn(label, format=DATETIME_FORMAT, timezone=timezone)
+
+    config = {
+        "FormName": st.column_config.TextColumn("Назва"),
+        "PublicationStatus": st.column_config.TextColumn("Статус"),
+        "DataStatus": st.column_config.TextColumn("Стан даних"),
+        "Total": st.column_config.NumberColumn("Відповідей", format="%d"),
+        "LastResponse": when("Остання відповідь"),
+        "Activity": st.column_config.TextColumn(
+            "Активність",
+            help=f"Активна — остання відповідь не давніше {ACTIVE_RECENT_DAYS} днів.",
+        ),
+        "Questions": st.column_config.NumberColumn("Запитань", format="%d"),
+        "Owner": st.column_config.TextColumn("Власник"),
+        # Позначка, не посилання: форму обирають кліком у рядку, а відкривають кнопкою
+        # над таблицею (на вкладці edit).
+        "CanEdit": st.column_config.CheckboxColumn(
+            "Редагування",
+            help="Ви можете редагувати цю форму в Google Forms. Порожньо — Drive не сказав.",
+        ),
+        "Modified": when("Змінено"),
+        "Created": when("Створено"),
+        "Sections": st.column_config.NumberColumn("Секцій", format="%d"),
+        "Title": st.column_config.TextColumn(
+            "Заголовок для респондентів",
+            help="Заголовок, який бачать респонденти. «Назва» — ім'я файлу в Google Drive.",
+        ),
+        "Description": st.column_config.TextColumn("Опис"),
+        "UpdatedAgo": st.column_config.TextColumn(
+            "Дані отримано",
+            help=(
+                "Коли сервіс востаннє отримав дані цієї форми з Google. "
+                "Коли змінювали саму форму, показує стовпець «Змінено»."
+            ),
+        ),
+    }
+    hidden = set(HIDDEN_COLUMNS)
+    if not show_data_status:
+        hidden.add("DataStatus")
+    if hide_owner:
+        # Коли обрано «Мої», власник у всіх рядках той самий — колонка нічого не каже.
+        hidden.add("Owner")
+    # Сховану колонку користувач може показати кнопкою над таблицею.
+    for column in hidden:
+        config[column]["hidden"] = True
+    return config
 
 
 filter_values = _render_table_filters(forms_meta)
@@ -599,10 +651,7 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
     _render_catalog_metrics(df)
     filtered = _apply_filters(df, filter_values)
     selection_source = filtered.reset_index(drop=True)
-    table_columns = list(ALL_COLUMNS)
-    display = selection_source[[c for c in table_columns if c in selection_source.columns]].copy()
-    if "Accepting" in display.columns:
-        display["Accepting"] = display["Accepting"].map({True: "✓", False: "✗"}).fillna("")
+    display = _table_display(selection_source)
 
     form_ids = list(selection_source["FormID"])
     st.session_state[TABLE_FORM_IDS_KEY] = form_ids
@@ -625,31 +674,10 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
             if current_form_id in form_ids
             else None
         ),
-        column_config={
-            "FormName": st.column_config.TextColumn("Назва"),
-            "PublicationStatus": st.column_config.TextColumn("Статус"),
-            "DataStatus": st.column_config.TextColumn("Стан даних"),
-            "Title": st.column_config.TextColumn("Внутрішня назва"),
-            "Owner": st.column_config.TextColumn("Власник"),
-            "Questions": st.column_config.NumberColumn("Питань", format="%d"),
-            "Sections": st.column_config.NumberColumn("Секцій", format="%d"),
-            "Accepting": st.column_config.TextColumn("Приймає"),
-            "Total": st.column_config.NumberColumn("Відповідей", format="%d"),
-            "LastResponse": st.column_config.TextColumn("Остання відповідь"),
-            "Activity": st.column_config.TextColumn("Активність"),
-            "DaysNoResponse": st.column_config.NumberColumn("Днів без відповіді", format="%d"),
-            "UpdatedAgo": st.column_config.TextColumn(
-                "Дані отримано",
-                help=(
-                    "Коли сервіс востаннє отримав дані цієї форми з Google. "
-                    "Коли змінювали саму форму, показує стовпець «Змінено»."
-                ),
-            ),
-            "Modified": st.column_config.DatetimeColumn("Змінено", format="DD.MM.YYYY HH:mm"),
-            "Created": st.column_config.DatetimeColumn("Створено", format="DD.MM.YYYY HH:mm"),
-            "SheetID": st.column_config.TextColumn("Sheet ID", width="small"),
-            "Description": st.column_config.TextColumn("Опис"),
-        },
+        column_config=_table_column_config(
+            hide_owner=filter_values["ownership"] == OWNERSHIP_MINE,
+            show_data_status=not set(display["DataStatus"]).issubset(DATA_STATUS_QUIET),
+        ),
     )
     # Клік у фрагменті перезапускає лише фрагмент, а вибрану форму показує панель над ним.
     if st.session_state.pop(TABLE_PICKED_KEY, False) and in_fragment:

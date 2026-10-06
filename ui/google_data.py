@@ -6,6 +6,7 @@ credential path for developer convenience.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -98,7 +99,7 @@ class GoogleDataClient:
         if is_saas_mode():
             session_id = _require_session_id(self.session_id)
             return [
-                FormDriveMeta(**item)
+                _drive_meta_from_payload(item)
                 for item in get_or_load(
                     _cache_key(session_id, "catalog_metadata"),
                     ttl_seconds=CATALOG_TTL_SECONDS,
@@ -446,6 +447,12 @@ def _local_credentials():
     if not creds_dict:
         raise RuntimeError("Local Google credentials are missing.")
     return credentials_from_dict(creds_dict)
+
+
+def _drive_meta_from_payload(payload: dict[str, Any]) -> FormDriveMeta:
+    """Fields this web knows; a field the API adds later must not break the catalog."""
+    known = {field.name for field in dataclasses.fields(FormDriveMeta)}
+    return FormDriveMeta(**{key: value for key, value in payload.items() if key in known})
 
 
 def _format_timestamp(value: datetime) -> str:
