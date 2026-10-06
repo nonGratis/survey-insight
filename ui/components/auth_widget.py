@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import extra_streamlit_components as stx
@@ -40,6 +41,13 @@ _SAAS_VALIDATE_TTL_SECONDS = 30
 _SAAS_COOKIE_PROBE_RUNS = "saas_cookie_probe_runs"
 _SAAS_AUTH_RESTORE_PENDING = "saas_auth_restore_pending"
 _SAAS_SESSION_RETRIES = "saas_session_retries"
+# Cookie writes and deletes waiting for the browser to confirm them (see _SessionCookie).
+_SAAS_COOKIE_WRITE = "saas_cookie_write"
+_SAAS_COOKIE_DELETE = "saas_cookie_delete"
+# Sessions this tab signed out from: the cookie component may still report the old value
+# until the page reloads, and it must not sign the tab in again.
+_SAAS_SIGNED_OUT = "saas_signed_out_sessions"
+_SAAS_COOKIE_ABSENT_LOGGED = "saas_cookie_absent_logged"
 SESSION_RESTORE_MAX_RETRIES = 3
 SESSION_RESTORE_RETRY_DELAY_SECONDS = 2.0
 
@@ -63,6 +71,99 @@ def _saas_client(base_url: str) -> SaaSApiClient:
 
 def _cookie_manager() -> stx.CookieManager:
     return stx.CookieManager(key="saas_auth_cookies")
+
+
+class _SessionCookie:
+    """The browser cookie that keeps the sign-in between visits.
+
+    Its components are rendered only in the auth slot at the top of the page (``app.py``):
+    they load in the browser and rerun the page when they answer, so anywhere else they
+    shift the page, and inside a cached function they break it. A write or a delete waits
+    in session state and is rendered on every run until the browser confirms it: a single
+    render can be removed by the next run before the browser has carried it out.
+    """
+
+    def __init__(self, *, enabled: bool) -> None:
+        self._enabled = enabled
+        self._manager: stx.CookieManager | None = None
+
+    def _get_manager(self) -> stx.CookieManager | None:
+        # One manager per run: its component key may appear only once.
+        if self._enabled and self._manager is None:
+            self._manager = _cookie_manager()
+        return self._manager
+
+    def read(self) -> str | None:
+        manager = self._get_manager()
+        value = manager.get(_SAAS_SESSION_COOKIE) if manager else None
+        if not isinstance(value, str) or not value:
+            return None
+        return None if value in st.session_state.get(_SAAS_SIGNED_OUT, ()) else value
+
+    def answered(self) -> bool:
+        """Whether the browser reported its cookies (it always has Streamlit's own)."""
+        manager = self._get_manager()
+        return bool(manager and manager.cookies)
+
+    def sync(self) -> None:
+        write = st.session_state.get(_SAAS_COOKIE_WRITE)
+        if write:
+            self._write(write)
+        delete_key = st.session_state.get(_SAAS_COOKIE_DELETE)
+        if delete_key:
+            self._delete(delete_key)
+
+    def _write(self, write: dict) -> None:
+        if st.session_state.get(write["key"]) is True:
+            st.session_state.pop(_SAAS_COOKIE_WRITE, None)
+            log.info("ui_session_cookie_saved")
+            return
+        manager = self._get_manager()
+        if manager is None:
+            return
+        manager.set(
+            _SAAS_SESSION_COOKIE,
+            write["value"],
+            key=write["key"],
+            path="/",
+            # Without expires_at the component also sends Expires = now + 1 day; with both
+            # set browsers follow Max-Age, but the two should not disagree.
+            expires_at=write["expires_at"],
+            max_age=float(_SAAS_SESSION_DAYS * 24 * 60 * 60),
+            secure=_app_base_url().startswith("https://"),
+            same_site="lax",
+        )
+
+    def _delete(self, delete_key: str) -> None:
+        if st.session_state.get(delete_key) is True:
+            st.session_state.pop(_SAAS_COOKIE_DELETE, None)
+            log.info("ui_session_cookie_deleted")
+            return
+        manager = self._get_manager()
+        if manager is None:
+            return
+        # Straight to the component: CookieManager.delete() also drops the name from the
+        # browser's last report and fails while there is none (right after a sign-out).
+        # Deleting a cookie that is not there is a no-op in the browser.
+        manager.cookie_manager(
+            method="delete", cookie=_SAAS_SESSION_COOKIE, key=delete_key, default=False
+        )
+
+
+def _queue_cookie_write(session_id: str) -> None:
+    st.session_state.pop(_SAAS_COOKIE_DELETE, None)
+    st.session_state[_SAAS_COOKIE_WRITE] = {
+        "value": session_id,
+        # The API session expires 30 days after login whatever the activity: the cookie
+        # gets the same lifetime once, there is nothing to refresh later.
+        "expires_at": datetime.now(UTC) + timedelta(days=_SAAS_SESSION_DAYS),
+        "key": f"set_saas_session_{uuid.uuid4().hex[:8]}",
+    }
+
+
+def _queue_cookie_delete() -> None:
+    st.session_state.pop(_SAAS_COOKIE_WRITE, None)
+    st.session_state[_SAAS_COOKIE_DELETE] = f"delete_saas_session_{uuid.uuid4().hex[:8]}"
 
 
 def _query_param(name: str) -> str | None:
@@ -136,12 +237,13 @@ def _handle_saas_login_ticket() -> bool:
         st.query_params.clear()
         return False
 
-    _remember_saas_session(session, write_cookie=True)
+    _remember_saas_session(session)
+    _queue_cookie_write(session.session_id)
     st.query_params.clear()
     return True
 
 
-def _restore_saas_session() -> bool:
+def _restore_saas_session(*, manage_cookie: bool) -> bool:
     st.session_state[_SAAS_AUTH_RESTORE_PENDING] = False
 
     auth_error = _query_param("auth_error")
@@ -150,30 +252,37 @@ def _restore_saas_session() -> bool:
         st.query_params.clear()
         return False
 
+    cookie = _SessionCookie(enabled=manage_cookie)
     if _handle_saas_login_ticket():
+        cookie.sync()
         return True
+    cookie.sync()
 
     if _has_fresh_saas_session():
         return True
 
-    # The cookie components load in the browser and rerun the page when they answer, so
-    # they are rendered only to find a session this tab does not hold yet (page load). A
-    # session the tab holds is re-checked through the API alone.
-    cookie_manager: stx.CookieManager | None = None
+    # A session this tab holds is re-checked through the API alone; the cookie is read only
+    # to find a session the tab does not hold yet (page load, or a lost connection).
     session_id = st.session_state.get("saas_session_id")
+    from_cookie = not isinstance(session_id, str) or not session_id
+    if from_cookie:
+        if st.session_state.get(_SAAS_COOKIE_DELETE):
+            return False  # signing out: the cookie still names the old session
+        session_id = cookie.read()
     if not isinstance(session_id, str) or not session_id:
-        cookie_manager = _cookie_manager()
-        session_id = cookie_manager.get(_SAAS_SESSION_COOKIE)
-    if not isinstance(session_id, str) or not session_id:
-        if _should_wait_for_cookie_probe():
+        if not cookie.answered() and _should_wait_for_cookie_probe():
             st.session_state[_SAAS_AUTH_RESTORE_PENDING] = True
+        elif manage_cookie and not st.session_state.get(_SAAS_COOKIE_ABSENT_LOGGED):
+            st.session_state[_SAAS_COOKIE_ABSENT_LOGGED] = True
+            log.info("ui_session_cookie_absent")
         return False
 
     try:
         session = _saas_client(_api_base_url()).read_session(session_id)
     except httpx.HTTPError:
         log.exception("saas_session_restore_failed")
-        _clear_saas_session(cookie_manager)
+        _clear_saas_session(session_id)
+        cookie.sync()
         return False
 
     if session is None:
@@ -181,10 +290,13 @@ def _restore_saas_session() -> bool:
     st.session_state.pop(_SAAS_SESSION_RETRIES, None)
 
     if not session.authenticated:
-        _clear_saas_session(cookie_manager)
+        _clear_saas_session(session_id)
+        cookie.sync()
         return False
 
-    _remember_saas_session(session, write_cookie=False)
+    _remember_saas_session(session)
+    if from_cookie:
+        log.info("ui_session_restored_from_cookie")
     return True
 
 
@@ -221,12 +333,8 @@ def _has_fresh_saas_session() -> bool:
     )
 
 
-def _remember_saas_session(session: SaaSSession, *, write_cookie: bool) -> None:
-    """Keep the checked session in this tab; write its cookie only at login.
-
-    The API session expires 30 days after login whatever the activity, and the cookie is
-    written with the same lifetime, so there is nothing to refresh on later checks.
-    """
+def _remember_saas_session(session: SaaSSession) -> None:
+    """Keep the checked session in this tab (the cookie is written once, at login)."""
     if not session.session_id:
         return
 
@@ -240,23 +348,18 @@ def _remember_saas_session(session: SaaSSession, *, write_cookie: bool) -> None:
         "name": session.name,
         "plan": session.plan,
     }
-    if not write_cookie:
-        return
-    _cookie_manager().set(
-        _SAAS_SESSION_COOKIE,
-        session.session_id,
-        key="set_saas_session",
-        path="/",
-        # Without expires_at the component also sends Expires = now + 1 day; with both set
-        # browsers follow Max-Age, but the two should not disagree.
-        expires_at=datetime.now(UTC) + timedelta(days=_SAAS_SESSION_DAYS),
-        max_age=float(_SAAS_SESSION_DAYS * 24 * 60 * 60),
-        secure=_app_base_url().startswith("https://"),
-        same_site="lax",
-    )
 
 
-def _clear_saas_session(cookie_manager: stx.CookieManager | None = None) -> None:
+def _clear_saas_session(session_id: str | None = None) -> None:
+    """Forget the session in this tab and queue the cookie delete for the auth slot.
+
+    Renders nothing: it also runs deep inside pages, even inside cached functions.
+    ``session_id`` is the one read from the cookie when the tab did not hold it yet.
+    """
+    forgotten = session_id or st.session_state.get("saas_session_id")
+    if isinstance(forgotten, str) and forgotten:
+        signed_out = list(st.session_state.get(_SAAS_SIGNED_OUT, []))
+        st.session_state[_SAAS_SIGNED_OUT] = [*signed_out, forgotten][-5:]
     for key in (
         "saas_session_id",
         "saas_session_checked_at",
@@ -265,9 +368,7 @@ def _clear_saas_session(cookie_manager: stx.CookieManager | None = None) -> None
         _SAAS_COOKIE_PROBE_RUNS,
     ):
         st.session_state.pop(key, None)
-    manager = cookie_manager or _cookie_manager()
-    if manager.get(_SAAS_SESSION_COOKIE) is not None:
-        manager.delete(_SAAS_SESSION_COOKIE, key="delete_saas_session")
+    _queue_cookie_delete()
 
 
 def _logout_saas_session() -> None:
@@ -285,7 +386,13 @@ def _logout_saas_session() -> None:
     if isinstance(session_id, str):
         clear_google_data_cache(session_id=session_id)
     _clear_saas_session()
+    # Kept through the clear: the next runs delete the cookie and ignore its old value,
+    # or it would sign the tab in again.
+    kept = {key: st.session_state.get(key) for key in (_SAAS_COOKIE_DELETE, _SAAS_SIGNED_OUT)}
     st.session_state.clear()
+    for key, value in kept.items():
+        if value:
+            st.session_state[key] = value
 
 
 def _render_local_login_button(location: str = "sidebar") -> None:
@@ -334,10 +441,15 @@ def _render_logged_in(location: str = "sidebar") -> None:
         st.rerun()
 
 
-def ensure_login_state() -> bool:
-    """Refresh auth state and return True if the user is logged in."""
+def ensure_login_state(*, manage_cookie: bool = False) -> bool:
+    """Refresh auth state and return True if the user is logged in.
+
+    ``manage_cookie`` only from the auth slot in ``app.py``: the one call that may render
+    the session cookie components. Pages call it after that one, with the session just
+    checked.
+    """
     if _saas_auth_enabled():
-        return _restore_saas_session()
+        return _restore_saas_session(manage_cookie=manage_cookie)
 
     _handle_local_oauth_callback()
     if "credentials" in st.session_state:
