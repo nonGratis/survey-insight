@@ -74,7 +74,7 @@ def test_rows_still_loading_are_not_counted_as_unknown() -> None:
     loading = table["DataStatus"] == "Завантажується"
     assert 0 < loading.sum() < FORM_COUNT
     assert set(table.loc[loading, "PublicationStatus"]) == {"Завантажується"}
-    assert set(table.loc[~loading, "PublicationStatus"]) == {"Відкриті"}
+    assert set(table.loc[~loading, "PublicationStatus"]) == {"Відкрита"}
     metrics = {metric.label: metric.value for metric in at.metric}
     assert metrics["Невідомо"] == "0"
 
@@ -198,7 +198,7 @@ def test_rows_held_back_by_the_quota_show_their_status_and_wait_for_a_retry() ->
     # quietly, without an error label or the manual retry button.
     loaded = table["PublicationStatus"] != "Завантажується"
     assert int(loaded.sum()) == 60
-    assert set(table.loc[loaded, "PublicationStatus"]) == {"Відкриті"}
+    assert set(table.loc[loaded, "PublicationStatus"]) == {"Відкрита"}
     assert set(table.loc[loaded & ~counted, "DataStatus"]) == {"Завантажується"}
     assert not any("Повторити" in button.label for button in at.button)
 
