@@ -90,10 +90,29 @@ def test_parse_form_reads_publish_state() -> None:
 
     assert enrichment.title == "Demo"
     assert enrichment.questions_count == 2
-    assert enrichment.sections_count == 1
+    assert enrichment.sections_count == 2
     assert enrichment.linked_sheet_id == "sheet-1"
     assert enrichment.is_published is True
     assert enrichment.accepting_responses is False
+
+
+def test_parse_form_counts_like_the_google_forms_editor() -> None:
+    enrichment = _parse_form(
+        {
+            "info": {"title": "Demo"},
+            "items": [
+                {"questionItem": {}},
+                # A grid is one question in the editor, whatever its number of rows.
+                {"questionGroupItem": {"questions": [{"questionId": "r1"}, {"questionId": "r2"}]}},
+                {"textItem": {}},
+                {"imageItem": {}},
+            ],
+        }
+    )
+
+    assert enrichment.questions_count == 2
+    # No page break: the whole form is one section, as the report page counts it.
+    assert enrichment.sections_count == 1
 
 
 def test_parse_form_keeps_legacy_publish_state_unknown() -> None:

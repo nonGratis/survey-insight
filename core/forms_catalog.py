@@ -43,7 +43,7 @@ DRIVE_MAX_FORMS = _env_int("SI_DRIVE_FORMS_MAX", 300, minimum=1, maximum=5000)
 FORM_EDIT_URL_TEMPLATE = "https://docs.google.com/forms/d/{form_id}/edit"
 CATALOG_SUMMARY_FIELDS = (
     "info(title,description),"
-    "items(pageBreakItem,questionItem/question/questionId),"
+    "items(pageBreakItem,questionItem/question/questionId,questionGroupItem/questions/questionId),"
     "linkedSheetId,"
     "publishSettings/publishState(isPublished,isAcceptingResponses)"
 )
@@ -182,8 +182,10 @@ def _parse_form(form: dict[str, Any]) -> FormEnrichment:
     """Розкласти Forms API response у FormEnrichment."""
     info = form.get("info", {})
     items = form.get("items", [])
-    sections = sum(1 for item in items if "pageBreakItem" in item)
-    questions = sum(1 for item in items if "questionItem" in item)
+    # Як у редакторі Google Forms: розрив сторінки починає новий розділ, тож розділів
+    # на один більше, ніж розривів; сітка (questionGroupItem) — одне запитання.
+    sections = sum(1 for item in items if "pageBreakItem" in item) + 1
+    questions = sum(1 for item in items if "questionItem" in item or "questionGroupItem" in item)
     is_published, accepting_responses = _publish_state(form)
     return FormEnrichment(
         title=info.get("title", "—"),
