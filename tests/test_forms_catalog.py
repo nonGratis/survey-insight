@@ -4,8 +4,6 @@ import pytest
 
 from core.forms_catalog import (
     CATALOG_SUMMARY_FIELDS,
-    DRIVE_FIELDS,
-    _parse_drive_file,
     _parse_form,
     enrich_form,
     list_forms_with_drive_meta,
@@ -145,23 +143,3 @@ def test_list_forms_with_drive_meta_stops_at_configured_limit(monkeypatch) -> No
     assert [form.id for form in forms] == ["form_1", "form_2"]
     assert len(service.files_resource.calls) == 1
     assert service.files_resource.calls[0]["pageSize"] == 2
-
-
-@pytest.mark.parametrize(
-    ("capabilities", "expected"),
-    [
-        ({"capabilities": {"canEdit": True}}, True),
-        ({"capabilities": {"canEdit": False}}, False),
-        # Omitted like other false booleans: Drive answered, the user cannot edit.
-        ({"capabilities": {}}, False),
-        # Drive said nothing (field not asked for, older cached data): unknown.
-        ({}, None),
-    ],
-)
-def test_drive_file_says_whether_the_user_can_edit_the_form(
-    capabilities: dict, expected: bool | None
-) -> None:
-    meta = _parse_drive_file({"id": "form_1", "name": "Poll", **capabilities})
-
-    assert meta.can_edit is expected
-    assert "capabilities/canEdit" in DRIVE_FIELDS

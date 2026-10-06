@@ -85,7 +85,6 @@ TABLE_COLUMNS = [
     "Activity",
     "Questions",
     "Owner",
-    "CanEdit",
     "Modified",
     "Created",
     "Sections",
@@ -396,7 +395,6 @@ def _build_dataframe(
             "DataStatus": _data_status_label(f.id, enrichments, statuses, retries),
             "Title": enr.title if enr else "",
             "Owner": f.owner_email,
-            "CanEdit": f.can_edit,
             "Questions": enr.questions_count if enr else None,
             "Sections": enr.sections_count if enr else None,
             "Total": stat.total if stat else None,
@@ -442,12 +440,6 @@ def _table_column_config(*, hide_owner: bool, show_data_status: bool) -> dict:
         ),
         "Questions": st.column_config.NumberColumn("Запитань", format="%d"),
         "Owner": st.column_config.TextColumn("Власник"),
-        # Позначка, не посилання: форму обирають кліком у рядку, а відкривають кнопкою
-        # над таблицею (на вкладці edit).
-        "CanEdit": st.column_config.CheckboxColumn(
-            "Редагування",
-            help="Ви можете редагувати цю форму в Google Forms. Порожньо — Drive не сказав.",
-        ),
         "Modified": when("Змінено"),
         "Created": when("Створено"),
         "Sections": st.column_config.NumberColumn("Секцій", format="%d"),
