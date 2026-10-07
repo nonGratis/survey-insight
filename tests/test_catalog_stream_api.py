@@ -149,3 +149,17 @@ def test_googles_own_429s_are_counted_in_the_telemetry(
     [line] = [r for r in caplog.records if r.getMessage() == "forms_catalog_stream_completed"]
     assert line.google_429_count == 1
     assert line.workers == google_forms_routes.CATALOG_STREAM_WORKERS
+
+
+def test_a_slow_google_call_gets_its_own_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(google_forms_routes, "SLOW_GOOGLE_CALL_MS", 0.0)
+    client, _ = _client()
+    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
+
+    client.post(STREAM, json={"form_ids": ["form_a"]})
+
+    slow = [r for r in caplog.records if r.getMessage() == "google_call_slow"]
+    assert sorted(r.target for r in slow) == ["forms.forms.get", "forms.forms.responses.list"]
+    assert all(r.levelname == "WARNING" and r.duration_ms >= 0 for r in slow)
