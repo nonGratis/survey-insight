@@ -54,6 +54,12 @@ CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECO
 CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "10"))
 QUOTA_GUARD_REASON = "quota_guard"
 CATALOG_STREAM_MAX_FORMS = int(os.getenv("SI_CATALOG_STREAM_MAX_FORMS", "1000"))
+# Parallel Google calls of one catalog stream. 30 is what the batch page ran in production
+# (3 requests x 10) without a single 429 and with the API's CPU mostly idle. Calls wait
+# on Google, not on CPU, so more workers mean more calls in flight; once the per-minute
+# quota is spent, the quota guard sets the pace however many there are. google_429_count
+# in forms_catalog_stream_completed shows when Google starts refusing bursts.
+CATALOG_STREAM_WORKERS = int(os.getenv("SI_CATALOG_STREAM_WORKERS", "30"))
 # Ends well inside Cloud Run's request timeout (300 s); what is left ends as timeout.
 CATALOG_STREAM_DEADLINE_SECONDS = float(os.getenv("SI_CATALOG_STREAM_DEADLINE_SECONDS", "240"))
 
@@ -76,11 +82,13 @@ class _CatalogTimings:
 
     Google calls are timed alone (no quota guard, no cache), by kind: ``get`` is
     forms.get, ``list`` is the response count (one or more responses.list pages). Rows
-    are timed whole. Rows run in worker threads, hence the lock.
+    are timed whole. Rows run in worker threads, hence the lock. Google's own 429s are
+    counted (the quota guard's holds never reach Google).
     """
 
     def __init__(self) -> None:
         self._ms: dict[str, list[float]] = {"get": [], "list": [], "row": []}
+        self._google_429 = 0
         self._lock = threading.Lock()
 
     @contextmanager
@@ -88,6 +96,11 @@ class _CatalogTimings:
         start = time.perf_counter()
         try:
             yield
+        except FormsApiError as exc:
+            if exc.status == 429 and kind != "row":
+                with self._lock:
+                    self._google_429 += 1
+            raise
         finally:
             elapsed = (time.perf_counter() - start) * 1000
             with self._lock:
@@ -96,8 +109,10 @@ class _CatalogTimings:
     def fields(self) -> dict[str, float | int]:
         with self._lock:
             ms = {kind: list(values) for kind, values in self._ms.items()}
+            google_429 = self._google_429
         out: dict[str, float | int] = {
             "google_ms_total": round(sum(ms["get"]) + sum(ms["list"]), 1),
+            "google_429_count": google_429,
         }
         for kind, prefix in (("get", "google_get"), ("list", "google_list"), ("row", "row")):
             values = ms[kind]
@@ -301,7 +316,7 @@ def stream_forms_catalog(
         form_ids,
         load_summary=summary,
         load_stats=stats,
-        workers=CATALOG_ENRICH_MAX_WORKERS,
+        workers=CATALOG_STREAM_WORKERS,
         deadline_seconds=CATALOG_STREAM_DEADLINE_SECONDS,
         fatal=(GoogleTokenRevoked, GoogleTokenRefreshFailed),
     )
@@ -748,7 +763,7 @@ def _ndjson_with_telemetry(
             "forms_catalog_stream_completed",
             extra={
                 "forms": forms,
-                "workers": CATALOG_ENRICH_MAX_WORKERS,
+                "workers": CATALOG_STREAM_WORKERS,
                 "credentials_ms": credentials_ms,
                 "duration_ms": round((time.perf_counter() - start) * 1000, 1),
                 "summaries_ms": milestones.get("summaries_ms"),
