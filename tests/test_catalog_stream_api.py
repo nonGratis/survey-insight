@@ -13,6 +13,8 @@ from api.google_data_cache import clear_api_cache
 from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from api.routes import google_forms as google_forms_routes
+from core import catalog_stream
+from core.forms_api import FormsApiError
 from tests.test_saas_api import (
     _AnyFormCountingClient,
     _client_with_valid_grant,
@@ -116,3 +118,34 @@ def test_a_grant_revoked_during_the_stream_ends_it_with_an_error_line(
     assert response.status_code == 200
     assert _events(response)[-1] == {"event": "error", "error_code": "GoogleTokenRevoked"}
     assert container.tokens.get_by_user("user_1") is None
+
+
+class _BusyOnceGoogle(_AnyFormCountingClient):
+    """Google refuses the first details call with its own 429, then answers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.refused = False
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        if not self.refused:
+            self.refused = True
+            raise FormsApiError("Quota exceeded", status=429)
+        return super().get_form_summary(creds, form_id)
+
+
+def test_googles_own_429s_are_counted_in_the_telemetry(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(catalog_stream, "GOOGLE_RATE_LIMIT_RETRY_SECONDS", 0.0)
+    client, _ = _client_with_valid_grant(_BusyOnceGoogle())
+    clear_api_cache()
+    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
+
+    events = _events(client.post(STREAM, json={"form_ids": ["form_1"]}))
+
+    # Retried and loaded; the line tells whether the workers ask Google too fast.
+    assert [e["status"] for e in events if e["event"] == "summary"] == ["ok"]
+    [line] = [r for r in caplog.records if r.getMessage() == "forms_catalog_stream_completed"]
+    assert line.google_429_count == 1
+    assert line.workers == google_forms_routes.CATALOG_STREAM_WORKERS
