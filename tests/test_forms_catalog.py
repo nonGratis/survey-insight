@@ -144,7 +144,7 @@ def test_parse_form_reads_omitted_publish_flags_as_false(
 
 def test_enrich_form_requests_only_catalog_summary_fields(monkeypatch) -> None:
     service = _FakeFormsService()
-    monkeypatch.setattr("core.forms_catalog.build", lambda *args, **kwargs: service)
+    monkeypatch.setattr("core.forms_api.build", lambda *args, **kwargs: service)
 
     enrichment = enrich_form(object(), "form_1")
 
