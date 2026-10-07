@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -164,26 +166,47 @@ class SaaSApiClient:
     def list_forms_catalog(self, session_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", "/v1/forms/catalog"))
 
-    def enrich_forms_catalog(
-        self,
-        session_id: str,
-        form_ids: list[str],
-        *,
-        include_summary: bool = True,
-        include_stats: bool = True,
-    ) -> list[dict[str, Any]]:
-        return list(
-            self._request_with_session(
-                session_id,
-                "POST",
-                "/v1/forms/catalog/enrich",
-                json={
-                    "form_ids": form_ids,
-                    "include_summary": include_summary,
-                    "include_stats": include_stats,
+    def stream_catalog(self, session_id: str, form_ids: list[str]) -> Iterator[dict[str, Any]]:
+        """The events of one catalog load, as the API sends them (one JSON line each).
+
+        The read timeout bounds the silence between lines; the API sends a line at least
+        every few seconds while it waits for the Google quota.
+        """
+        path = "/v1/forms/catalog/stream"
+        start = time.perf_counter()
+        status_code = 0
+        error_code = ""
+        try:
+            with self._client(self.data_timeout) as client:
+                client.cookies.set(SESSION_COOKIE_NAME, session_id)
+                with client.stream("POST", path, json={"form_ids": form_ids}) as response:
+                    status_code = response.status_code
+                    if status_code >= 400:
+                        response.read()
+                        error_code = _raise_typed_error(response)
+                        response.raise_for_status()
+                    for line in response.iter_lines():
+                        if line:
+                            yield json.loads(line)
+        except httpx.HTTPStatusError as exc:
+            error_code = error_code or _error_code(exc.response) or type(exc).__name__
+            raise
+        except Exception as exc:
+            error_code = error_code or _typed_error_code(exc)
+            raise
+        finally:
+            log.info(
+                "ui_saas_api_request",
+                extra={
+                    "method": "POST",
+                    "path": path,
+                    "status": status_code,
+                    "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+                    "error_code": error_code,
+                    "cache_hit": False,
+                    "cache_layer": "none",
                 },
             )
-        )
 
     def get_form_summary(self, session_id: str, form_id: str) -> dict[str, Any]:
         return dict(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/summary"))
