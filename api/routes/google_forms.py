@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import statistics
@@ -16,6 +17,7 @@ from typing import Annotated, Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.dependencies import get_container, require_session
@@ -23,6 +25,15 @@ from api.google_data_cache import ApiCacheKey, ApiCacheResult, get_or_load
 from api.google_errors import google_http_exception as map_google_error
 from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from api.urls import safe_next_url
+from core.catalog_stream import (
+    STATS,
+    SUMMARY,
+    CatalogEvent,
+    Loaded,
+    RetryLaterError,
+    catalog_status,
+    load_catalog,
+)
 from core.forms_api import FormsApiError
 from core.logger import get_logger
 from core.saas.container import SaaSContainer
@@ -42,9 +53,12 @@ CATALOG_ENRICH_MAX_IDS = int(os.getenv("SI_CATALOG_ENRICH_MAX_IDS", "20"))
 CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECONDS", "8"))
 CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "10"))
 QUOTA_GUARD_REASON = "quota_guard"
+CATALOG_STREAM_MAX_FORMS = int(os.getenv("SI_CATALOG_STREAM_MAX_FORMS", "1000"))
+# Ends well inside Cloud Run's request timeout (300 s); what is left ends as timeout.
+CATALOG_STREAM_DEADLINE_SECONDS = float(os.getenv("SI_CATALOG_STREAM_DEADLINE_SECONDS", "240"))
 
 
-class QuotaGuardHoldError(FormsApiError):
+class QuotaGuardHoldError(FormsApiError, RetryLaterError):
     """A call our quota guard held back, with the time its slot frees."""
 
     def __init__(self, retry_after_seconds: float) -> None:
@@ -54,6 +68,7 @@ class QuotaGuardHoldError(FormsApiError):
             reason=QUOTA_GUARD_REASON,
         )
         self.retry_after_seconds = retry_after_seconds
+        self.seconds = retry_after_seconds
 
 
 class _CatalogTimings:
@@ -144,6 +159,10 @@ class CatalogEnrichRequest(BaseModel):
     form_ids: list[str]
     include_summary: bool = True
     include_stats: bool = True
+
+
+class CatalogStreamRequest(BaseModel):
+    form_ids: list[str]
 
 
 class CatalogEnrichRow(BaseModel):
@@ -244,6 +263,54 @@ def enrich_forms_catalog(
         timing_fields={"credentials_ms": credentials_ms, **timings.fields()},
     )
     return rows
+
+
+@router.post("/forms/catalog/stream")
+def stream_forms_catalog(
+    body: CatalogStreamRequest,
+    request: Request,
+    session: Annotated[Session, Depends(require_session)],
+) -> StreamingResponse:
+    """Details and response counts of the given forms: one JSON line per result (NDJSON).
+
+    The whole catalog in one request: credentials once, the quota guard waited out here,
+    each form sent as soon as it is ready (core.catalog_stream). Credentials are checked
+    before the first line, so a revoked grant still answers with an HTTP error; during the
+    stream it ends the load with an ``error`` line.
+    """
+    credentials_start = time.perf_counter()
+    creds = require_google_credentials(request, session, purpose="forms")
+    credentials_ms = round((time.perf_counter() - credentials_start) * 1000, 1)
+    form_ids = _bounded_form_ids(body.form_ids, limit=CATALOG_STREAM_MAX_FORMS)
+    quota = _forms_quota(request)
+    timings = _CatalogTimings()
+
+    def summary(form_id: str) -> Loaded:
+        result = _cached_form_summary(
+            request, creds, session.user_id, form_id, guard=quota.reads, timings=timings
+        )
+        return Loaded(result.value.model_dump(), result.fetched_at.isoformat(), result.cache_hit)
+
+    def stats(form_id: str) -> Loaded:
+        result = _cached_response_stats(
+            request, creds, session.user_id, form_id, guard=quota.response_lists, timings=timings
+        )
+        return Loaded(result.value.model_dump(), result.fetched_at.isoformat(), result.cache_hit)
+
+    events = load_catalog(
+        form_ids,
+        load_summary=summary,
+        load_stats=stats,
+        workers=CATALOG_ENRICH_MAX_WORKERS,
+        deadline_seconds=CATALOG_STREAM_DEADLINE_SECONDS,
+        fatal=(GoogleTokenRevoked, GoogleTokenRefreshFailed),
+    )
+    return StreamingResponse(
+        _ndjson_with_telemetry(
+            events, forms=len(form_ids), credentials_ms=credentials_ms, timings=timings
+        ),
+        media_type="application/x-ndjson",
+    )
 
 
 @router.get("/forms/{form_id}/summary", response_model=FormSummaryResponse)
@@ -493,7 +560,7 @@ def _catalog_enrich_row(
     )
 
 
-def _bounded_form_ids(form_ids: list[str]) -> list[str]:
+def _bounded_form_ids(form_ids: list[str], *, limit: int = CATALOG_ENRICH_MAX_IDS) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
     for form_id in form_ids:
@@ -501,7 +568,7 @@ def _bounded_form_ids(form_ids: list[str]) -> list[str]:
             continue
         seen.add(form_id)
         unique.append(form_id)
-    if len(unique) > CATALOG_ENRICH_MAX_IDS:
+    if len(unique) > limit:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="too_many_form_ids",
@@ -639,15 +706,64 @@ def _log_catalog_enrich_telemetry(
 
 
 def _catalog_status(exc: FormsApiError) -> str:
-    if exc.status in {401, 403}:
-        return "no_access"
-    if exc.status == 404:
-        return "deleted"
-    if exc.status == 429:
-        return "rate_limited"
-    if exc.status == 400:
-        return "unsupported"
-    return "api_error"
+    return catalog_status(exc)
+
+
+def _ndjson_with_telemetry(
+    events: Iterator[CatalogEvent],
+    *,
+    forms: int,
+    credentials_ms: float,
+    timings: _CatalogTimings,
+) -> Iterator[str]:
+    """The events as NDJSON lines, and one telemetry line when the stream ends or closes.
+
+    ``summaries_ms``: until every form had its details (or failed); ``counts_ms``: until
+    every form was finished; ``duration_ms``: the whole stream. Timing fields: ms.
+    """
+    start = time.perf_counter()
+    tally: Counter[str] = Counter()
+    milestones: dict[str, float] = {}
+    error_code = ""
+    try:
+        for event in events:
+            if event.event in (SUMMARY, STATS):
+                tally[f"{event.event}_{'ok' if event.status == 'ok' else 'failed'}"] += 1
+                tally["timeout"] += event.status == "timeout"
+                tally["cache_hit"] += bool(event.cache_hit)
+                summaries = tally[f"{SUMMARY}_ok"] + tally[f"{SUMMARY}_failed"]
+                finished = (
+                    tally[f"{STATS}_ok"] + tally[f"{STATS}_failed"] + tally[f"{SUMMARY}_failed"]
+                )
+                for name, count in (("summaries_ms", summaries), ("counts_ms", finished)):
+                    if count >= forms and name not in milestones:
+                        milestones[name] = round((time.perf_counter() - start) * 1000, 1)
+            elif event.event == "waiting" and event.forms:
+                tally["quota_waits"] += 1
+            elif event.event == "error":
+                error_code = event.error_code or ""
+            yield json.dumps(event.to_dict(), ensure_ascii=False) + "\n"
+    finally:
+        log.info(
+            "forms_catalog_stream_completed",
+            extra={
+                "forms": forms,
+                "workers": CATALOG_ENRICH_MAX_WORKERS,
+                "credentials_ms": credentials_ms,
+                "duration_ms": round((time.perf_counter() - start) * 1000, 1),
+                "summaries_ms": milestones.get("summaries_ms"),
+                "counts_ms": milestones.get("counts_ms"),
+                "summary_ok_count": tally[f"{SUMMARY}_ok"],
+                "summary_failed_count": tally[f"{SUMMARY}_failed"],
+                "count_ok_count": tally[f"{STATS}_ok"],
+                "count_failed_count": tally[f"{STATS}_failed"],
+                "timeout_count": tally["timeout"],
+                "cache_hit_count": tally["cache_hit"],
+                "quota_wait_events": tally["quota_waits"],
+                "error_code": error_code,
+                **timings.fields(),
+            },
+        )
 
 
 def _missing_scopes(container: SaaSContainer, user_id: str, purpose: str) -> tuple[str, ...]:
