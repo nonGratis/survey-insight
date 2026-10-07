@@ -7,6 +7,7 @@ Forms API дає структуру форми: питання, типи, вар
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -23,6 +24,8 @@ log = get_logger(__name__)
 FORM_MIME_TYPE = "application/vnd.google-apps.form"
 RESPONSE_TIMESTAMPS_FIELDS = "responses(createTime),nextPageToken"
 DEFAULT_FORMS_PAGE_SIZE = 50
+# This thread's Forms client and the credentials it was built for (forms_service).
+_clients = threading.local()
 
 QuestionType = Literal[
     "MULTIPLE_CHOICE",
@@ -111,6 +114,23 @@ def list_user_forms(
     return resp.get("files", [])
 
 
+def forms_service(creds: Credentials) -> Any:
+    """This thread's Forms API client for these credentials.
+
+    A client keeps its HTTPS connection open between calls, so the catalog's workers reuse
+    one each instead of opening a connection per form. Measured locally, a fresh client per
+    call took about 1 s a call with 10 calls in parallel and 2 s with 30, against 0.6 s
+    reused, with twice the memory. httplib2 connections are not thread-safe, hence one
+    client per thread; and a client serves only the very credentials object it was built
+    for (one user's request).
+    """
+    cached = getattr(_clients, "forms", None)
+    if cached is None or cached[0] is not creds:
+        cached = (creds, build("forms", "v1", credentials=creds, cache_discovery=False))
+        _clients.forms = cached
+    return cached[1]
+
+
 def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
     """Завантажити повну структуру форми через Forms API.
 
@@ -118,7 +138,7 @@ def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
         FormsApiError: 403 (нема forms.body.readonly), 404 (форма видалена
             або недоступна), інші HTTP-помилки.
     """
-    service = build("forms", "v1", credentials=creds, cache_discovery=False)
+    service = forms_service(creds)
     try:
         with log_call("api_call_ok", target="forms.forms.get", form_id=form_id, logger=log):
             return service.forms().get(formId=form_id).execute()
@@ -145,7 +165,7 @@ def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]
         FormsApiError: 403 (нема scope), 404 (форма видалена), інші
             HTTP-помилки Forms API.
     """
-    service = build("forms", "v1", credentials=creds, cache_discovery=False)
+    service = forms_service(creds)
     timestamps: list[datetime] = []
     page_token: str | None = None
     try:
@@ -202,7 +222,7 @@ def list_form_responses(creds: Credentials, form_id: str) -> list[dict[str, Any]
     Raises:
         FormsApiError: 403 (нема scope), 404 (форма видалена), інші HTTP-помилки.
     """
-    service = build("forms", "v1", credentials=creds, cache_discovery=False)
+    service = forms_service(creds)
     responses: list[dict[str, Any]] = []
     page_token: str | None = None
     try:

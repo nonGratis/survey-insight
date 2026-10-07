@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import threading
+
 from core.forms_api import (
     RESPONSE_TIMESTAMPS_FIELDS,
+    forms_service,
     list_response_timestamps,
     parse_question_types,
 )
@@ -110,3 +113,24 @@ def test_list_response_timestamps_requests_only_create_time_fields(monkeypatch):
             "fields": RESPONSE_TIMESTAMPS_FIELDS,
         }
     ]
+
+
+def test_a_thread_reuses_its_forms_client_for_the_same_credentials(monkeypatch) -> None:
+    built: list[object] = []
+
+    def build(*args, **kwargs):
+        built.append(kwargs["credentials"])
+        return object()
+
+    monkeypatch.setattr("core.forms_api.build", build)
+    alice, bob = object(), object()
+
+    # One client, and its open HTTPS connection, for all of one request's forms.
+    assert forms_service(alice) is forms_service(alice)
+    # Never another user's client: other credentials get their own.
+    assert forms_service(bob) is not forms_service(alice)
+    other_thread: list[object] = []
+    worker = threading.Thread(target=lambda: other_thread.append(forms_service(alice)))
+    worker.start()
+    worker.join(5)
+    assert built == [alice, bob, alice, alice]
