@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import math
 import os
+import statistics
+import threading
 import time
 from collections import Counter
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Annotated, Any
 from urllib.parse import urlencode
@@ -50,6 +54,43 @@ class QuotaGuardHoldError(FormsApiError):
             reason=QUOTA_GUARD_REASON,
         )
         self.retry_after_seconds = retry_after_seconds
+
+
+class _CatalogTimings:
+    """How long one catalog enrich request spent on what, for its telemetry line.
+
+    Google calls are timed alone (no quota guard, no cache), by kind: ``get`` is
+    forms.get, ``list`` is the response count (one or more responses.list pages). Rows
+    are timed whole. Rows run in worker threads, hence the lock.
+    """
+
+    def __init__(self) -> None:
+        self._ms: dict[str, list[float]] = {"get": [], "list": [], "row": []}
+        self._lock = threading.Lock()
+
+    @contextmanager
+    def measure(self, kind: str) -> Iterator[None]:
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed = (time.perf_counter() - start) * 1000
+            with self._lock:
+                self._ms[kind].append(elapsed)
+
+    def fields(self) -> dict[str, float | int]:
+        with self._lock:
+            ms = {kind: list(values) for kind, values in self._ms.items()}
+        out: dict[str, float | int] = {
+            "google_ms_total": round(sum(ms["get"]) + sum(ms["list"]), 1),
+        }
+        for kind, prefix in (("get", "google_get"), ("list", "google_list"), ("row", "row")):
+            values = ms[kind]
+            if kind != "row":
+                out[f"{prefix}_count"] = len(values)
+            out[f"{prefix}_ms_p50"] = round(statistics.median(values), 1) if values else 0.0
+            out[f"{prefix}_ms_max"] = round(max(values), 1) if values else 0.0
+        return out
 
 
 class GoogleAccessResponse(BaseModel):
@@ -179,8 +220,11 @@ def enrich_forms_catalog(
     request: Request,
     session: Annotated[Session, Depends(require_session)],
 ) -> list[CatalogEnrichRow]:
+    credentials_start = time.perf_counter()
     creds = require_google_credentials(request, session, purpose="forms")
+    credentials_ms = round((time.perf_counter() - credentials_start) * 1000, 1)
     form_ids = _bounded_form_ids(body.form_ids)
+    timings = _CatalogTimings()
     start = time.perf_counter()
     rows = _catalog_enrich_rows_with_budget(
         request,
@@ -189,6 +233,7 @@ def enrich_forms_catalog(
         form_ids=form_ids,
         include_summary=body.include_summary,
         include_stats=body.include_stats,
+        timings=timings,
     )
     _log_catalog_enrich_telemetry(
         rows,
@@ -196,6 +241,7 @@ def enrich_forms_catalog(
         include_summary=body.include_summary,
         include_stats=body.include_stats,
         duration_ms=round((time.perf_counter() - start) * 1000, 1),
+        timing_fields={"credentials_ms": credentials_ms, **timings.fields()},
     )
     return rows
 
@@ -336,24 +382,27 @@ def _catalog_enrich_rows_with_budget(
     form_ids: list[str],
     include_summary: bool,
     include_stats: bool,
+    timings: _CatalogTimings | None = None,
 ) -> list[CatalogEnrichRow]:
     if not form_ids:
         return []
+    times = timings or _CatalogTimings()
+
+    def timed_row(form_id: str) -> CatalogEnrichRow:
+        with times.measure("row"):
+            return _catalog_enrich_row(
+                request,
+                creds,
+                user_id,
+                form_id,
+                include_summary=include_summary,
+                include_stats=include_stats,
+                timings=times,
+            )
 
     workers = max(1, min(CATALOG_ENRICH_MAX_WORKERS, len(form_ids)))
     executor = ThreadPoolExecutor(max_workers=workers)
-    futures = {
-        executor.submit(
-            _catalog_enrich_row,
-            request,
-            creds,
-            user_id,
-            form_id,
-            include_summary=include_summary,
-            include_stats=include_stats,
-        ): form_id
-        for form_id in form_ids
-    }
+    futures = {executor.submit(timed_row, form_id): form_id for form_id in form_ids}
     done, pending = wait(futures, timeout=CATALOG_ENRICH_TIMEOUT_SECONDS)
     executor.shutdown(wait=False, cancel_futures=True)
 
@@ -392,6 +441,7 @@ def _catalog_enrich_row(
     *,
     include_summary: bool,
     include_stats: bool,
+    timings: _CatalogTimings | None = None,
 ) -> CatalogEnrichRow:
     summary: FormSummaryResponse | None = None
     stats: ResponseStatsResponse | None = None
@@ -405,7 +455,7 @@ def _catalog_enrich_row(
     if include_summary:
         try:
             summary_result = _cached_form_summary(
-                request, creds, user_id, form_id, guard=quota.reads
+                request, creds, user_id, form_id, guard=quota.reads, timings=timings
             )
             summary = summary_result.value
             cache_hits.append(summary_result.cache_hit)
@@ -421,7 +471,7 @@ def _catalog_enrich_row(
     if include_stats:
         try:
             stats_result = _cached_response_stats(
-                request, creds, user_id, form_id, guard=quota.response_lists
+                request, creds, user_id, form_id, guard=quota.response_lists, timings=timings
             )
             stats = stats_result.value
             cache_hits.append(stats_result.cache_hit)
@@ -466,12 +516,13 @@ def _cached_form_summary(
     form_id: str,
     *,
     guard: RollingWindowGuard | None = None,
+    timings: _CatalogTimings | None = None,
 ) -> ApiCacheResult[FormSummaryResponse]:
     def load() -> FormSummaryResponse:
         _admit(guard, user_id)
-        return FormSummaryResponse.model_validate(
-            _forms_client(request).get_form_summary(creds, form_id)
-        )
+        with _measured(timings, "get"):
+            raw = _forms_client(request).get_form_summary(creds, form_id)
+        return FormSummaryResponse.model_validate(raw)
 
     return get_or_load(
         ApiCacheKey(user_id=user_id, data_kind="form_summary", resource_id=form_id),
@@ -487,18 +538,28 @@ def _cached_response_stats(
     form_id: str,
     *,
     guard: RollingWindowGuard | None = None,
+    timings: _CatalogTimings | None = None,
 ) -> ApiCacheResult[ResponseStatsResponse]:
     def load() -> ResponseStatsResponse:
         _admit(guard, user_id)
-        return ResponseStatsResponse.model_validate(
-            _forms_client(request).get_response_stats(creds, form_id)
-        )
+        with _measured(timings, "list"):
+            raw = _forms_client(request).get_response_stats(creds, form_id)
+        return ResponseStatsResponse.model_validate(raw)
 
     return get_or_load(
         ApiCacheKey(user_id=user_id, data_kind="response_stats", resource_id=form_id),
         ttl_seconds=RESPONSE_STATS_TTL_SECONDS,
         loader=load,
     )
+
+
+@contextmanager
+def _measured(timings: _CatalogTimings | None, kind: str) -> Iterator[None]:
+    if timings is None:
+        yield
+        return
+    with timings.measure(kind):
+        yield
 
 
 def _admit(guard: RollingWindowGuard | None, user_id: str) -> None:
@@ -541,11 +602,18 @@ def _log_catalog_enrich_telemetry(
     include_summary: bool,
     include_stats: bool,
     duration_ms: float,
+    timing_fields: dict[str, float | int] | None = None,
 ) -> None:
+    """One line per enrich request. ``duration_ms`` is the rows' wall time; with
+    ``workers`` parallel rows it compares to ``google_ms_total / workers`` (Google time)
+    and ``row_ms_max`` (slowest row). ``credentials_ms`` is session, key and token work
+    before the rows start. Timing fields are milliseconds."""
     status_counts = Counter(row.status for row in rows)
     log.info(
         "forms_catalog_enrich_completed",
         extra={
+            **(timing_fields or {}),
+            "workers": max(1, min(CATALOG_ENRICH_MAX_WORKERS, chunk_size)),
             "chunk_size": chunk_size,
             "row_count": len(rows),
             "include_summary": include_summary,
