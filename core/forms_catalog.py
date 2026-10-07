@@ -38,8 +38,11 @@ DRIVE_FIELDS = (
     "files(id,name,createdTime,modifiedTime,owners(emailAddress,displayName),"
     "webViewLink)"
 )
-DRIVE_PAGE_SIZE = _env_int("SI_DRIVE_FORMS_PAGE_SIZE", 100, minimum=1, maximum=1000)
-DRIVE_MAX_FORMS = _env_int("SI_DRIVE_FORMS_MAX", 300, minimum=1, maximum=5000)
+# Drive gives up to 1000 files per call, and the pages come one after another (each needs
+# the previous one's token): an account with ~200 forms took 3 calls of ~0.8 s at 100 per
+# page. Beyond DRIVE_MAX_FORMS the catalog stops and logs forms_catalog_drive_limit_reached.
+DRIVE_PAGE_SIZE = _env_int("SI_DRIVE_FORMS_PAGE_SIZE", 1000, minimum=1, maximum=1000)
+DRIVE_MAX_FORMS = _env_int("SI_DRIVE_FORMS_MAX", 1000, minimum=1, maximum=5000)
 FORM_EDIT_URL_TEMPLATE = "https://docs.google.com/forms/d/{form_id}/edit"
 CATALOG_SUMMARY_FIELDS = (
     "info(title,description),"

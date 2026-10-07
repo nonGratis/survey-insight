@@ -4,6 +4,7 @@ import pytest
 
 from core.forms_catalog import (
     CATALOG_SUMMARY_FIELDS,
+    DRIVE_MAX_FORMS,
     _parse_form,
     enrich_form,
     list_forms_with_drive_meta,
@@ -162,3 +163,23 @@ def test_list_forms_with_drive_meta_stops_at_configured_limit(monkeypatch) -> No
     assert [form.id for form in forms] == ["form_1", "form_2"]
     assert len(service.files_resource.calls) == 1
     assert service.files_resource.calls[0]["pageSize"] == 2
+
+
+class _OnePageDriveFiles(_FakeDriveFiles):
+    def list(self, **kwargs):
+        response = super().list(**kwargs)
+        response.payload.pop("nextPageToken")
+        return response
+
+
+def test_drive_lists_a_usual_catalog_in_one_call_by_default(monkeypatch) -> None:
+    service = _FakeDriveService()
+    service.files_resource = _OnePageDriveFiles()
+    monkeypatch.setattr("core.forms_catalog.build", lambda *args, **kwargs: service)
+
+    forms = list_forms_with_drive_meta(object())
+
+    assert [form.id for form in forms] == ["form_1", "form_2"]
+    # Pages come one after another; at 100 per page ~200 forms took three calls.
+    assert [call["pageSize"] for call in service.files_resource.calls] == [1000]
+    assert DRIVE_MAX_FORMS >= 1000
