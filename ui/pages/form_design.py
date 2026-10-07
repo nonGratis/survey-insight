@@ -72,12 +72,13 @@ else:
                 {
                     "Запитання": (d.title[:70] + "…") if len(d.title) > 70 else d.title,
                     "Тип": d.qtype_label,
-                    "Опцій": d.n_options if d.n_options is not None else "—",
+                    "Опцій": d.n_options,
                     "Обовʼязк.": "так" if d.required else "ні",
                     "Прапори": ", ".join(d.flags) if d.flags else "—",
                 }
                 for d in designs
             ],
+            column_config={"Опцій": st.column_config.NumberColumn("Опцій", format="%d")},
             width="stretch",
             hide_index=True,
         )
