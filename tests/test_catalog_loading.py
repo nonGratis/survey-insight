@@ -11,6 +11,7 @@ from core.catalog_loading import (
     is_loading,
     next_form_batches,
     schedule_retry,
+    seconds_until_retried,
 )
 
 FORMS = [f"form_{index}" for index in range(7)]
@@ -90,6 +91,27 @@ def test_a_rate_limited_row_waits_for_the_quota_window_to_free_up() -> None:
     retry = schedule_retry("rate_limited", None, now=100.0)
 
     assert retry == Retry(attempts=1, not_before=100.0 + RATE_LIMITED_RETRY_SECONDS)
+
+
+def test_a_row_held_by_the_api_guard_comes_back_when_its_slot_frees() -> None:
+    previous = Retry(attempts=2, not_before=0.0)
+
+    retry = schedule_retry("rate_limited", previous, now=100.0, retry_after=37.5)
+
+    # The API kept a slot for the row: waiting for it is not a failed attempt.
+    assert retry == Retry(attempts=2, not_before=137.5)
+
+
+def test_the_wait_is_until_the_last_held_row_is_retried() -> None:
+    retries = {
+        "form_0": Retry(attempts=0, not_before=130.0),
+        "form_1": Retry(attempts=0, not_before=145.0),
+        "form_2": Retry(attempts=1, not_before=500.0),  # not one of the rows asked about
+    }
+
+    assert seconds_until_retried(retries, ["form_0", "form_1"], now=100.0) == 45.0
+    assert seconds_until_retried(retries, ["form_0"], now=200.0) == 0.0
+    assert seconds_until_retried(retries, ["form_3"], now=100.0) is None
 
 
 def test_a_timeout_is_retried_sooner_and_attempts_add_up() -> None:

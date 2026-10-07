@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
@@ -24,7 +25,13 @@ from datetime import UTC, date, datetime
 import pandas as pd
 import streamlit as st
 
-from core.catalog_loading import Retry, is_loading, next_form_batches, schedule_retry
+from core.catalog_loading import (
+    Retry,
+    is_loading,
+    next_form_batches,
+    schedule_retry,
+    seconds_until_retried,
+)
 from core.forms_catalog import (
     FormDriveMeta,
     FormEnrichment,
@@ -513,7 +520,11 @@ def _mark_current_form(table_key: str, form_ids: list[str], current_form_id: str
 
 
 def _render_loading_status(
-    details_loaded: int, finished: int, total: int, retryable_ids: list[str]
+    details_loaded: int,
+    finished: int,
+    total: int,
+    retryable_ids: list[str],
+    quota_wait: float | None,
 ) -> None:
     """Прогрес довантаження й кнопка повтору в рядку сталої висоти.
 
@@ -533,11 +544,8 @@ def _render_loading_status(
                 details_loaded / total, text=f"Підвантажую деталі: {details_loaded}/{total}"
             )
         elif finished < total:
-            # Статуси вже є; кількість відповідей Google віддає обмежено (180 запитів
-            # за хвилину), тож решта рядків чекає повтору.
             progress_col.progress(
-                finished / total,
-                text=f"Відповіді: {finished}/{total} — решта за хвилину-дві (ліміт Google)",
+                finished / total, text=_responses_progress_text(finished, total, quota_wait)
             )
         if retryable_ids and retry_col.button(
             f"Повторити проблемні рядки ({len(retryable_ids)})",
@@ -546,6 +554,21 @@ def _render_loading_status(
         ):
             _clear_enrichment_state_for(retryable_ids)
             st.rerun()
+
+
+def _responses_progress_text(finished: int, total: int, quota_wait: float | None) -> str:
+    """Скільки форм уже мають кількість відповідей і коли чекати решту.
+
+    Статуси вже є; кількість відповідей Google віддає обмежено (180 запитів за хвилину),
+    тож решта рядків чекає повтору. ``quota_wait`` — секунди до повтору останнього з них:
+    його час назвав обмежувач API, плюс тік таймера, на якому повтор піде.
+    """
+    text = f"Відповіді: {finished}/{total}"
+    if quota_wait is None:
+        return text
+    seconds = math.ceil(quota_wait + ENRICHMENT_TICK_SECONDS)
+    wait = f"{seconds} с" if seconds < 90 else f"{math.ceil(seconds / 60)} хв"
+    return f"{text} — решта приблизно за {wait} (ліміт Google)"
 
 
 def _remember_result(result: CatalogEnrichmentResult, now: float) -> None:
@@ -561,7 +584,9 @@ def _remember_result(result: CatalogEnrichmentResult, now: float) -> None:
         enrichments[form_id] = result.summary
     if result.response_stats is not None:
         st.session_state["form_response_stats"][form_id] = result.response_stats
-    retry = schedule_retry(result.status, retries.get(form_id), now)
+    retry = schedule_retry(
+        result.status, retries.get(form_id), now, retry_after=result.retry_after_seconds
+    )
     if retry is None:
         retries.pop(form_id, None)
     else:
@@ -637,6 +662,11 @@ def _render_table_with_enrichment(*, in_fragment: bool) -> None:
         finished,
         len(forms_meta),
         _retryable_enrichment_ids(forms_meta, statuses, retries),
+        seconds_until_retried(
+            retries,
+            [f.id for f in forms_meta if statuses.get(f.id) == "rate_limited"],
+            now=time.monotonic(),
+        ),
     )
 
     df = _build_dataframe(forms_meta, enrichments, stats, statuses, fetched_at, retries)

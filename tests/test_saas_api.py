@@ -613,6 +613,7 @@ def test_forms_catalog_enrich_returns_timeout_rows_within_budget(monkeypatch) ->
             "form_id": "slow_form",
             "status": "timeout",
             "error_code": "catalog_enrich_timeout",
+            "retry_after_seconds": None,
             "summary": None,
             "response_stats": None,
             "fetched_at": None,
@@ -655,6 +656,12 @@ def test_forms_catalog_enrich_holds_back_calls_beyond_the_quota_guard() -> None:
     assert sorted(row["status"] for row in rows) == ["ok", "rate_limited", "rate_limited"]
     held_back = [row for row in rows if row["status"] == "rate_limited"]
     assert {row["error_code"] for row in held_back} == {"quota_guard"}
+    # Each held-back row learns when its slot frees: the one call in the window leaves it in
+    # a minute, the call promised that slot a minute after that.
+    waits = sorted(row["retry_after_seconds"] for row in held_back)
+    assert 59 < waits[0] <= 60.1
+    assert 119 < waits[1] <= 120.1
+    assert [row["retry_after_seconds"] for row in rows if row["status"] == "ok"] == [None]
     # The status of a held-back form is known: only its response count waits.
     assert all(row["summary"]["questions_count"] == 5 for row in held_back)
     assert all(row["response_stats"] is None for row in held_back)
