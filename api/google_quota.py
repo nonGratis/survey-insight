@@ -42,14 +42,18 @@ class RollingWindowGuard:
         self._calls: dict[str, deque[float]] = {}
         # Times at which refused calls were told to come back, in increasing order.
         self._promised: dict[str, deque[float]] = {}
+        # The slot promised to each item (a form) that waits for one.
+        self._waiting: dict[tuple[str, str], float] = {}
         self._lock = threading.Lock()
 
-    def acquire_or_wait(self, key: str) -> float:
+    def acquire_or_wait(self, key: str, item: str | None = None) -> float:
         """Count a call for ``key`` and return 0.0, or return the seconds until its slot frees.
 
         A refused call gets the next slot no earlier refused call was given: slots free as
         old calls leave the window, so callers that come back on time are admitted one by
-        one instead of all retrying at once.
+        one instead of all retrying at once. A call for an ``item`` that already waits
+        for a slot (the same form asked again by a page reloaded mid-load) is told that
+        slot again: a second place in line would push everyone after it back.
         """
         now = self._clock()
         with self._lock:
@@ -59,8 +63,13 @@ class RollingWindowGuard:
             promised = self._promised.setdefault(key, deque())
             while promised and promised[0] <= now:
                 promised.popleft()
+            waiting = self._waiting.get((key, item)) if item is not None else None
+            if waiting is not None and waiting > now:
+                return waiting - now
             if len(calls) < self.limit:
                 calls.append(now)
+                if item is not None:
+                    self._waiting.pop((key, item), None)
                 return 0.0
             # Free slots, in order: as the calls in the window expire, then as the calls
             # promised to earlier refusals (made in the future) expire in their turn.
@@ -70,6 +79,10 @@ class RollingWindowGuard:
             else:
                 frees_at = promised[slot - len(calls)] + self.window_seconds
             promised.append(frees_at)
+            if item is not None:
+                # Past slots go: their item came back, or never will (a stopped stream).
+                self._waiting = {k: due for k, due in self._waiting.items() if due > now}
+                self._waiting[(key, item)] = frees_at
             return frees_at - now
 
 

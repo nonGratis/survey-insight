@@ -59,6 +59,25 @@ def test_a_call_that_comes_back_on_time_gets_its_slot() -> None:
     assert guard.acquire_or_wait("user_1") == 60.0  # the next slot: a full window later
 
 
+def test_a_form_asked_again_while_it_waits_keeps_its_slot() -> None:
+    clock = _Clock()
+    guard = RollingWindowGuard(1, window_seconds=60, clock=clock)
+    assert guard.acquire_or_wait("user_1", "form_a") == 0.0  # at 1000
+    clock.now += 10
+    assert guard.acquire_or_wait("user_1", "form_b") == 50.0  # its slot: 1060
+    clock.now += 20
+
+    # A page reloaded mid-load asks for form_b again: the same slot, not a second one,
+    # so form_c is not pushed a whole window further back (it would wait 150 s).
+    assert guard.acquire_or_wait("user_1", "form_b") == 30.0
+    assert guard.acquire_or_wait("user_1", "form_c") == 90.0
+
+    clock.now = 1060.0
+    assert guard.acquire_or_wait("user_1", "form_b") == 0.0
+    # Admitted, it no longer holds a slot: asked again, it waits like any other call.
+    assert guard.acquire_or_wait("user_1", "form_b") > 0
+
+
 def test_guard_counts_each_user_separately() -> None:
     guard = RollingWindowGuard(1, window_seconds=60, clock=_Clock())
 
