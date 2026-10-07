@@ -8,6 +8,7 @@ import pytest
 from google.oauth2.credentials import Credentials
 
 from api.google_data_cache import clear_api_cache
+from tests.test_catalog_page import _run_loaded
 from tests.test_e2e_web_api import _app_with, _signed_in_web, _web_talking_to
 from tests.test_saas_api import (
     _FakeGoogleFormsClient,
@@ -70,7 +71,7 @@ def _catalog_table(*, ownership: str | None = None):  # type: ignore[no-untyped-
 
     with _web_talking_to(api_app):
         at = _signed_in_web(session_id)
-        at.run()
+        _run_loaded(at)
         if ownership:
             at.segmented_control(key="catalog_ownership").set_value(ownership).run()
 

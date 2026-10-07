@@ -113,15 +113,13 @@ def test_catalog_exposes_publication_status_metrics_and_filter() -> None:
     assert "ActionBarStatus(note=" not in catalog
 
 
-def test_catalog_enrichment_uses_chunk_data_client() -> None:
+def test_catalog_loads_in_one_background_stream() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
-    assert "data = google_data_client()" in catalog
-    # Batches go to the chunk endpoint in parallel, never one request per form.
-    assert "data.enrich_catalog_forms,\n                batch.form_ids," in catalog
-    assert "data.get_form_summary(f.id)" not in catalog
-    assert "data.get_response_stats" not in catalog
-    assert "parallel_map" not in catalog
-    assert "session_id=data_token" not in catalog
+    # One streamed request for the whole catalog, read in a background thread.
+    assert "CatalogLoad(form_ids, google_data_client().stream_catalog).start()" in catalog
+    assert "ThreadPoolExecutor" not in catalog
+    assert "get_form_summary" not in catalog
+    assert "get_response_stats" not in catalog
 
 
 def test_catalog_table_exposes_activity_columns() -> None:
@@ -129,24 +127,22 @@ def test_catalog_table_exposes_activity_columns() -> None:
     assert '"DataStatus"' in catalog
     assert '"Activity"' in catalog
     assert '"UpdatedAgo"' in catalog
-    assert "form_data_status" in catalog
-    assert "form_data_fetched_at" in catalog
     assert '"Активність",' in catalog
 
 
-def test_catalog_can_retry_retryable_enrichment_rows() -> None:
+def test_catalog_refresh_starts_a_new_load() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
-    assert 'RETRYABLE_DATA_STATUSES = {"timeout", "api_error", "rate_limited"}' in catalog
-    assert "def _retryable_enrichment_ids(" in catalog
-    assert "def _clear_enrichment_state_for(" in catalog
-    assert 'key="catalog_retry_failed_rows"' in catalog
-    assert "_clear_enrichment_state_for(retryable_ids)" in catalog
+    assert "st.session_state.pop(CATALOG_LOAD_KEY, None)" in catalog
+    # The old load stops: its Google calls would eat the new one's quota.
+    assert "previous.stop()" in catalog
+    # The API retries what Google holds back; the page has no retry button of its own.
+    assert "catalog_retry_failed_rows" not in catalog
 
 
-def test_catalog_initial_load_uses_fast_snapshot_not_blocking_aggregate() -> None:
+def test_catalog_initial_render_waits_only_for_the_drive_list() -> None:
+    catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
     google_data = (ROOT / "ui/google_data.py").read_text(encoding="utf-8")
-    assert "Catalog initial render must stay fast" in google_data
-    assert "return self.list_catalog_forms(), {}, {}" in google_data
+    assert "forms_meta = list_catalog_forms()" in catalog
     assert "list_forms_catalog(session_id)" not in google_data
 
 

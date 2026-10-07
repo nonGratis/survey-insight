@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
 import streamlit as st
 
 from core.auth import credentials_from_dict
+from core.catalog_stream import Loaded, load_catalog
 from core.context_tables import ContextTable, scan_sheets_for_tables
 from core.forms_api import (
     get_form_structure as local_get_form_structure,
@@ -58,18 +60,8 @@ from ui.data_access_cache import (
 )
 from ui.saas_api import SaaSApiClient
 
-
-@dataclass(frozen=True)
-class CatalogEnrichmentResult:
-    form_id: str
-    status: str
-    error_code: str | None = None
-    # Set by the API for rows its quota guard held back: when their slot frees.
-    retry_after_seconds: float | None = None
-    summary: FormEnrichment | None = None
-    response_stats: ResponseStats | None = None
-    fetched_at: str | None = None
-    cache_hit: bool = False
+# The local demo loads the catalog in process, with fewer parallel Google calls.
+LOCAL_CATALOG_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -110,15 +102,6 @@ class GoogleDataClient:
             ]
         return local_list_catalog_forms(self._local_credentials())
 
-    def list_catalog_snapshot(
-        self,
-    ) -> tuple[list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]]:
-        # Catalog initial render must stay fast: show Drive metadata first and let
-        # the page progressively enrich rows in chunks. The aggregate catalog API
-        # remains available for future bounded/server-side use, but it must not
-        # block the first Streamlit render.
-        return self.list_catalog_forms(), {}, {}
-
     def get_form_summary(self, form_id: str) -> FormEnrichment:
         if is_saas_mode():
             session_id = _require_session_id(self.session_id)
@@ -149,47 +132,23 @@ class GoogleDataClient:
             last_response=_format_timestamp(timestamps[-1]) if timestamps else None,
         )
 
-    def enrich_catalog_forms(
-        self,
-        form_ids: list[str],
-        *,
-        include_summary: bool = True,
-        include_stats: bool = True,
-    ) -> list[CatalogEnrichmentResult]:
+    def stream_catalog(self, form_ids: list[str]) -> Iterator[dict[str, Any]]:
+        """Events of one catalog load: from the API, or computed here in local mode.
+
+        Runs in the page's background thread: it reads nothing from Streamlit.
+        """
         if is_saas_mode():
             session_id = _require_session_id(self.session_id)
-            return [
-                _catalog_enrichment_from_payload(row)
-                for row in (self.api or _client()).enrich_forms_catalog(
-                    session_id,
-                    form_ids,
-                    include_summary=include_summary,
-                    include_stats=include_stats,
-                )
-            ]
-
-        results: list[CatalogEnrichmentResult] = []
-        for form_id in form_ids:
-            try:
-                results.append(
-                    CatalogEnrichmentResult(
-                        form_id=form_id,
-                        status="ok",
-                        summary=self.get_form_summary(form_id) if include_summary else None,
-                        response_stats=(
-                            self.get_response_stats(form_id) if include_stats else None
-                        ),
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001 - keep catalog partial in local mode.
-                results.append(
-                    CatalogEnrichmentResult(
-                        form_id=form_id,
-                        status="api_error",
-                        error_code=type(exc).__name__,
-                    )
-                )
-        return results
+            yield from (self.api or _client()).stream_catalog(session_id, form_ids)
+            return
+        creds = self._local_credentials()
+        for event in load_catalog(
+            form_ids,
+            load_summary=lambda form_id: Loaded(asdict(local_enrich_form(creds, form_id))),
+            load_stats=lambda form_id: Loaded(asdict(self.get_response_stats(form_id))),
+            workers=LOCAL_CATALOG_WORKERS,
+        ):
+            yield event.to_dict()
 
     def get_form_structure(self, form_id: str) -> dict[str, Any]:
         if is_saas_mode():
@@ -307,13 +266,6 @@ def list_catalog_forms() -> list[FormDriveMeta]:
 
 
 @handle_api_errors
-def list_catalog_snapshot() -> tuple[
-    list[FormDriveMeta], dict[str, FormEnrichment | None], dict[str, ResponseStats]
-]:
-    return google_data_client().list_catalog_snapshot()
-
-
-@handle_api_errors
 def get_form_summary(form_id: str) -> FormEnrichment:
     return google_data_client().get_form_summary(form_id)
 
@@ -321,20 +273,6 @@ def get_form_summary(form_id: str) -> FormEnrichment:
 @handle_api_errors
 def get_response_stats(form_id: str) -> ResponseStats:
     return google_data_client().get_response_stats(form_id)
-
-
-@handle_api_errors
-def enrich_catalog_forms(
-    form_ids: list[str],
-    *,
-    include_summary: bool = True,
-    include_stats: bool = True,
-) -> list[CatalogEnrichmentResult]:
-    return google_data_client().enrich_catalog_forms(
-        form_ids,
-        include_summary=include_summary,
-        include_stats=include_stats,
-    )
 
 
 @handle_api_errors
@@ -459,28 +397,3 @@ def _drive_meta_from_payload(payload: dict[str, Any]) -> FormDriveMeta:
 
 def _format_timestamp(value: datetime) -> str:
     return value.isoformat(timespec="seconds")
-
-
-def _catalog_enrichment_from_payload(payload: dict[str, Any]) -> CatalogEnrichmentResult:
-    summary_payload = payload.get("summary")
-    stats_payload = payload.get("response_stats")
-    return CatalogEnrichmentResult(
-        form_id=str(payload.get("form_id") or ""),
-        status=str(payload.get("status") or "api_error"),
-        error_code=(
-            str(payload.get("error_code")) if payload.get("error_code") is not None else None
-        ),
-        summary=FormEnrichment(**summary_payload) if isinstance(summary_payload, dict) else None,
-        response_stats=ResponseStats(**stats_payload) if isinstance(stats_payload, dict) else None,
-        fetched_at=str(payload.get("fetched_at"))
-        if payload.get("fetched_at") is not None
-        else None,
-        cache_hit=bool(payload.get("cache_hit")),
-        retry_after_seconds=_optional_float(payload.get("retry_after_seconds")),
-    )
-
-
-def _optional_float(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    return float(value)

@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
+import queue
+import time
+from collections.abc import Callable, Iterator
+from unittest import mock
 
 import pytest
 from google.oauth2.credentials import Credentials
+from streamlit.testing.v1 import AppTest
 
 from api.google_data_cache import clear_api_cache
-from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from tests.test_e2e_web_api import _app_with, _signed_in_web, _web_talking_to
 from tests.test_saas_api import (
     _FakeGoogleFormsClient,
@@ -16,6 +21,8 @@ from tests.test_saas_api import (
     _seed_user_session,
     _test_container,
 )
+from ui.catalog_load import CatalogLoad, CatalogSnapshot
+from ui.google_data import GoogleDataClient
 
 # Більше, ніж сторінка довантажує за один прохід: частина рядків лишається в черзі.
 FORM_COUNT = 70
@@ -59,42 +66,130 @@ def _production_web(monkeypatch: pytest.MonkeyPatch) -> None:
     clear_api_cache()
 
 
-def test_rows_still_loading_are_not_counted_as_unknown() -> None:
+def _catalog_api():  # type: ignore[no-untyped-def]
     container = _test_container()
     session_id = _seed_user_session(container)
     _seed_google_grant(container)
     _, api_app = _app_with(container, _ManyOpenForms())
+    return session_id, api_app
+
+
+def _load(at: AppTest) -> CatalogLoad:
+    return at.session_state["catalog_load"]
+
+
+def _run_loaded(at: AppTest) -> None:
+    """Run the page, let its background load finish, and run it again to draw the result."""
+    at.run()
+    _load(at).join(15)
+    at.run()
+
+
+def _settle(at: AppTest, ready: Callable[[CatalogSnapshot], bool]) -> None:
+    """Wait until the background load has taken in what the test handed it."""
+    deadline = time.monotonic() + 5
+    while not ready(_load(at).snapshot()):
+        assert time.monotonic() < deadline, "the load did not take the events in"
+        time.sleep(0.01)
+
+
+class _Feed:
+    """Catalog events handed to the page's load by the test; the load waits for more."""
+
+    def __init__(self) -> None:
+        self._events: queue.Queue[dict | None] = queue.Queue()
+
+    def push(self, *events: dict) -> None:
+        for event in events:
+            self._events.put(event)
+
+    def end(self) -> None:
+        self._events.put(None)
+
+    def install(self):  # type: ignore[no-untyped-def]
+        def stream(client, form_ids: list[str]) -> Iterator[dict]:  # type: ignore[no-untyped-def]
+            while (event := self._events.get(timeout=10)) is not None:
+                yield event
+
+        return mock.patch.object(GoogleDataClient, "stream_catalog", stream)
+
+
+def _summary(form_id: str) -> dict:
+    data = {
+        "title": form_id,
+        "description": "",
+        "sections_count": 1,
+        "questions_count": 3,
+        "linked_sheet_id": None,
+        "is_published": True,
+        "accepting_responses": True,
+    }
+    return {"event": "summary", "form_id": form_id, "status": "ok", "data": data}
+
+
+def _count(form_id: str) -> dict:
+    data = {"total": 0, "first_response": None, "second_response": None, "last_response": None}
+    return {"event": "stats", "form_id": form_id, "status": "ok", "data": data}
+
+
+FORM_IDS = [f"form_{index:02d}" for index in range(FORM_COUNT)]
+
+
+def test_the_catalog_loads_through_one_streamed_request(caplog: pytest.LogCaptureFixture) -> None:
+    session_id, api_app = _catalog_api()
+    caplog.set_level(logging.INFO)
 
     with _web_talking_to(api_app):
         at = _signed_in_web(session_id)
-        at.run()
+        _run_loaded(at)
 
     assert not at.exception, [e.value for e in at.exception]
     table = at.dataframe[0].value
-    loading = table["DataStatus"] == "Завантажується"
-    assert 0 < loading.sum() < FORM_COUNT
-    assert set(table.loc[loading, "PublicationStatus"]) == {"Завантажується"}
+    assert set(table["PublicationStatus"]) == {"Відкрита"}
+    assert table["Total"].notna().all()
+    paths = [r.path for r in caplog.records if r.getMessage() == "ui_saas_api_request"]
+    # The Drive list, then the whole catalog in one request instead of a batch per tick.
+    assert paths.count("/v1/forms/catalog/stream") == 1
+    assert "/v1/forms/catalog/enrich" not in paths
+
+
+def test_rows_still_loading_are_not_counted_as_unknown() -> None:
+    session_id, api_app = _catalog_api()
+    feed = _Feed()
+
+    with _web_talking_to(api_app), feed.install():
+        at = _signed_in_web(session_id)
+        at.run()
+        feed.push(*(_summary(form_id) for form_id in FORM_IDS[:10]))
+        _settle(at, lambda snapshot: len(snapshot.summaries) == 10)
+        at.run()
+        feed.end()
+
+    assert not at.exception, [e.value for e in at.exception]
+    table = at.dataframe[0].value
+    loading = table["PublicationStatus"] == "Завантажується"
+    assert int(loading.sum()) == FORM_COUNT - 10
     assert set(table.loc[~loading, "PublicationStatus"]) == {"Відкрита"}
     metrics = {metric.label: metric.value for metric in at.metric}
     assert metrics["Невідомо"] == "0"
 
 
 def test_table_keeps_its_identity_while_details_load() -> None:
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    _, api_app = _app_with(container, _ManyOpenForms())
+    session_id, api_app = _catalog_api()
+    feed = _Feed()
 
-    with _web_talking_to(api_app):
+    with _web_talking_to(api_app), feed.install():
         at = _signed_in_web(session_id)
         at.run()
         before = at.dataframe[0]
-        loaded_before = int((before.value["DataStatus"] != "Завантажується").sum())
-        at.run()  # the next loading step brings more rows
+        feed.push(*(_summary(form_id) for form_id in FORM_IDS[:10]))
+        _settle(at, lambda snapshot: len(snapshot.summaries) == 10)
+        at.run()
         after = at.dataframe[0]
+        feed.end()
 
     assert not at.exception, [e.value for e in at.exception]
-    assert int((after.value["DataStatus"] != "Завантажується").sum()) > loaded_before
+    assert int((after.value["PublicationStatus"] != "Завантажується").sum()) == 10
     # Streamlit derives an unkeyed table's identity from its data, and a new identity
     # remounts the table in the browser: scroll, sorting and selection are lost.
     assert after.proto.id == before.proto.id
@@ -135,20 +230,21 @@ def _position_of_table(node, path=()):
 
 
 def test_the_table_stays_in_place_when_loading_ends() -> None:
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    _, api_app = _app_with(container, _ManyOpenForms())
+    session_id, api_app = _catalog_api()
+    feed = _Feed()
 
-    with _web_talking_to(api_app):
+    with _web_talking_to(api_app), feed.install():
         at = _signed_in_web(session_id)
         at.run()
         while_loading = (_position_of_table(at._tree), at.dataframe[0].proto.id)
-        for _ in range(20):
-            if "Завантажується" not in set(at.dataframe[0].value["DataStatus"]):
-                break
-            at.run()
-        at.run()  # the page without the loading timer
+        feed.push(
+            *(event for form_id in FORM_IDS for event in (_summary(form_id), _count(form_id)))
+        )
+        feed.push({"event": "done"})
+        _settle(at, lambda snapshot: snapshot.done)
+        feed.end()
+        at.run()  # the fragment sees the end and reruns the page without its timer
+        at.run()
         loaded = (_position_of_table(at._tree), at.dataframe[0].proto.id)
 
     assert not at.exception, [e.value for e in at.exception]
@@ -161,69 +257,48 @@ def test_the_table_stays_in_place_when_loading_ends() -> None:
     assert loaded == while_loading
 
 
-def test_one_loading_step_sends_several_batches() -> None:
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    _, api_app = _app_with(container, _ManyOpenForms())
-
-    with _web_talking_to(api_app):
-        at = _signed_in_web(session_id)
-        at.run()
-
-    assert not at.exception, [e.value for e in at.exception]
-    table = at.dataframe[0].value
-    # Three parallel requests of 20 forms, the most the API takes in one request.
-    assert int((table["DataStatus"] != "Завантажується").sum()) == 60
-
-
-def test_rows_held_back_by_the_quota_show_their_status_and_wait_for_a_retry() -> None:
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    _, api_app = _app_with(container, _ManyOpenForms())
-    api_app.state.forms_quota = FormsQuotaGuards(
-        reads=RollingWindowGuard(1000), response_lists=RollingWindowGuard(5)
-    )
-
-    with _web_talking_to(api_app):
-        at = _signed_in_web(session_id)
-        at.run()
-
-    assert not at.exception, [e.value for e in at.exception]
-    table = at.dataframe[0].value
-    counted = table["Total"].notna()
-    assert int(counted.sum()) == 5
-    # Every loaded form has its status; the held-back ones only wait for the response count,
-    # quietly, without an error label or the manual retry button.
-    loaded = table["PublicationStatus"] != "Завантажується"
-    assert int(loaded.sum()) == 60
-    assert set(table.loc[loaded, "PublicationStatus"]) == {"Відкрита"}
-    assert set(table.loc[loaded & ~counted, "DataStatus"]) == {"Завантажується"}
-    assert not any("Повторити" in button.label for button in at.button)
-
-
 def test_the_status_row_tells_how_long_the_held_back_counts_wait() -> None:
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    _, api_app = _app_with(container, _ManyOpenForms())
-    api_app.state.forms_quota = FormsQuotaGuards(
-        reads=RollingWindowGuard(1000), response_lists=RollingWindowGuard(FORM_COUNT - 5)
-    )
+    session_id, api_app = _catalog_api()
+    feed = _Feed()
 
-    with _web_talking_to(api_app):
+    with _web_talking_to(api_app), feed.install():
         at = _signed_in_web(session_id)
         at.run()
-        at.run()  # the last forms: all statuses are in, five response counts wait
+        feed.push(*(_summary(form_id) for form_id in FORM_IDS))
+        feed.push(*(_count(form_id) for form_id in FORM_IDS[:5]))
+        # The API says how long until the last count held by the Google quota runs.
+        feed.push({"event": "waiting", "seconds": 40.0, "forms": FORM_COUNT - 5})
+        _settle(at, lambda snapshot: snapshot.wait_seconds is not None)
+        at.run()
+        feed.end()
 
     assert not at.exception, [e.value for e in at.exception]
     [text] = [bar.proto.text for bar in at.get("progress")]
-    prefix = f"Відповіді: {FORM_COUNT - 5}/{FORM_COUNT} — решта приблизно за "
+    prefix = f"Відповіді: 5/{FORM_COUNT} — решта приблизно за "
     assert text.startswith(prefix) and text.endswith(" с (ліміт Google)"), text
-    # The guard kept a slot for each of them: free once the first calls are a minute old.
-    seconds = int(text.removeprefix(prefix).split()[0])
-    assert 55 <= seconds <= 62
+    assert 40 <= int(text.removeprefix(prefix).split()[0]) <= 42
+    table = at.dataframe[0].value
+    # Every form has its status; the held-back ones only wait for the count, quietly.
+    assert set(table["PublicationStatus"]) == {"Відкрита"}
+    assert int((table["DataStatus"] == "Завантажується").sum()) == FORM_COUNT - 5
+    assert not any("Повторити" in button.label for button in at.button)
+
+
+def test_a_grant_revoked_during_the_load_signs_out() -> None:
+    session_id, api_app = _catalog_api()
+    feed = _Feed()
+
+    with _web_talking_to(api_app), feed.install():
+        at = _signed_in_web(session_id)
+        at.run()
+        feed.push({"event": "error", "error_code": "GoogleTokenRevoked"})
+        feed.end()
+        _load(at).join(5)
+        at.run()
+
+    # The load's thread cannot sign out; the page run hands the error to the API boundary.
+    assert not at.exception, [e.value for e in at.exception]
+    assert "Вхід" in [s.value for s in at.subheader]
 
 
 def test_choosing_a_form_above_moves_the_mark_in_the_same_table() -> None:
