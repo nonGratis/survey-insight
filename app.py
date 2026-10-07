@@ -5,7 +5,12 @@
 Доступ до сторінок гейтується OAuth-логіном (Google identity).
 """
 
+import time
+
 import streamlit as st
+
+# Taken first, so a page run's duration includes the sign-in check and the sidebar.
+RUN_STARTED = time.perf_counter()
 
 # Налаштовуємо logging першим, до будь-яких інших імпортів core/, щоб
 # модулі одразу отримали сконфігурований root logger.
@@ -20,6 +25,7 @@ from ui.components.auth_widget import (  # noqa: E402
     render_profile,
 )
 from ui.components.page_shell import render_app_version  # noqa: E402
+from ui.telemetry import bind_user, page_run  # noqa: E402
 
 st.set_page_config(page_title="Survey Insight", layout="wide")
 
@@ -28,13 +34,16 @@ st.set_page_config(page_title="Survey Insight", layout="wide")
 # rebuilds the page (the catalog table loses its scroll).
 with st.container():
     logged_in = ensure_login_state(manage_cookie=True)
+# Every web log line of this browser session carries the user from here on.
+bind_user()
 
 if not logged_in and is_auth_restore_pending():
     hero_cols = st.columns([1, 2, 1], gap="large")
     with hero_cols[1]:
         st.subheader("Відновлення сесії")
         st.write("Перевіряю активний вхід…")
-    st.stop()
+    with page_run("session_restore", started=RUN_STARTED):
+        st.stop()
 
 if not logged_in:
     hero_cols = st.columns([1, 2, 1], gap="large")
@@ -67,18 +76,21 @@ if not logged_in:
         st.write("Потрібна допомога або демо? Напиши на пошту: shapovalov.andrii@edu.kpi.ua")
 
     render_app_version()
-    st.stop()
+    with page_run("login", started=RUN_STARTED):
+        st.stop()
 
 render_profile(location="sidebar")
 # Pages call st.stop() early, so the version goes here: the sidebar is always rendered.
 render_app_version(container=st.sidebar)
 
+# The first page is the default one, and Streamlit reports an empty url path for it.
+DEFAULT_PAGE_PATH = "catalog"
 pages = [
     st.Page(
         "ui/pages/catalog.py",
         title="Каталог",
         icon=":material/table_view:",
-        url_path="catalog",
+        url_path=DEFAULT_PAGE_PATH,
     ),
     st.Page(
         "ui/pages/form_design.py",
@@ -113,4 +125,5 @@ pages = [
 ]
 
 nav = st.navigation(pages)
-nav.run()
+with page_run(nav.url_path or DEFAULT_PAGE_PATH, started=RUN_STARTED):
+    nav.run()

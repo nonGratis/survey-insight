@@ -50,6 +50,7 @@ from ui.google_data import (
     google_data_client,
     list_catalog_snapshot,
 )
+from ui.telemetry import page_run
 
 log = get_logger(__name__)
 
@@ -717,11 +718,13 @@ def _has_pending_forms() -> bool:
 
 @st.fragment(run_every=ENRICHMENT_TICK_SECONDS)
 def _table_with_enrichment_fragment() -> None:
-    _render_table_with_enrichment(in_fragment=True)
-    if not _has_pending_forms():
-        # Усе довантажено: повний перезапуск малює сторінку вже без таймера фрагмента,
-        # який інакше й далі перемальовував би таблицю кожні ENRICHMENT_TICK_SECONDS.
-        st.rerun()
+    with page_run("catalog", fragment=True):
+        _render_table_with_enrichment(in_fragment=True)
+        if not _has_pending_forms():
+            # Усе довантажено: повний перезапуск малює сторінку вже без таймера
+            # фрагмента, який інакше й далі перемальовував би таблицю кожні
+            # ENRICHMENT_TICK_SECONDS.
+            st.rerun()
 
 
 if _has_pending_forms():

@@ -3,9 +3,9 @@
 JSON-формат — для prod (Cloud Run / GCP Cloud Logging автоматично парсить).
 Human-формат — для local dev.
 
-Контекст (session_id, user_hash, page) додається через StreamlitContextFilter
-тільки у main thread'і — у worker-thread'ах контексту немає
-і це ОЧІКУВАНО (логи з API workers просто матимуть менше полів).
+У web StreamlitContextFilter додає session_ref і user_id до записів, зроблених під час
+запуску сторінки; у потоках, які сторінка запускає сама, контексту немає, і це ОЧІКУВАНО.
+``severity`` — поле, з якого Cloud Logging бере рівень запису.
 
 Event-name convention:
 - api_call_ok               — low-level через log_call() на .execute() сайтах
@@ -26,6 +26,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Literal
+
+from core.saas.security import log_user_ref
 
 # RESERVED: усе, що `LogRecord` ставить сам, виключаємо з extras.
 # Авто-derive із порожнього запису — щоб не пропустити нові поля у Python 3.12+.
@@ -55,7 +57,9 @@ class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
             "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
-            "level": record.levelname,
+            # Cloud Logging reads the entry's level from this field (not from "level"),
+            # so severity filters in Logs Explorer and Log Analytics work.
+            "severity": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
             "module": record.module,
@@ -82,40 +86,48 @@ class HumanFormatter(logging.Formatter):
         return base
 
 
-class StreamlitContextFilter(logging.Filter):
-    """Injects session_id, user_hash, page — лише у main thread.
+# Browser session id -> log ref of the user signed in there, kept by bind_session_user.
+_SESSION_USERS: dict[str, str] = {}
+_SESSION_USERS_LOCK = threading.Lock()
+_SESSION_USERS_MAX = 10_000
 
-    У ThreadPoolExecutor worker'ах Streamlit-context недоступний за дизайном
-    (нема script_run_ctx, session_state ламається). Skip-аємо явно через
-    main-thread check — без try/except, що замилює інші баги.
+
+def bind_session_user(session_id: str, user_id: str | None) -> None:
+    """Remember who is signed in to a browser session (None: nobody) for the web logs."""
+    with _SESSION_USERS_LOCK:
+        _SESSION_USERS.pop(session_id, None)
+        if user_id:
+            _SESSION_USERS[session_id] = log_user_ref(user_id)
+            if len(_SESSION_USERS) > _SESSION_USERS_MAX:
+                # Sessions closed without a sign-out are never unbound: drop the oldest.
+                _SESSION_USERS.pop(next(iter(_SESSION_USERS)))
+
+
+class StreamlitContextFilter(logging.Filter):
+    """Adds ``session_ref`` and ``user_id`` to records written while a page script runs.
+
+    Streamlit runs every page script in a thread of its own, never the main one, so the
+    context comes from the script run context; threads the page starts itself (catalog
+    batches) have none and their records go out without these fields. The user comes from
+    bind_session_user, not from st.session_state: reading it is where Streamlit raises a
+    pending stop or rerun, which would drop the record and could swallow a rerun.
+    ``user_id`` is the same digest the API logs, so both services join on it.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if threading.current_thread() is not threading.main_thread():
-            return True
-
         try:
             from streamlit.runtime.scriptrunner import get_script_run_ctx
         except ImportError:
             return True
 
-        ctx = get_script_run_ctx()
+        ctx = get_script_run_ctx(suppress_warning=True)
         if ctx is None:
             return True
 
-        record.session_id = (getattr(ctx, "session_id", "") or "")[:12]
-        record.page = getattr(ctx, "page_script_hash", "") or "—"
-
-        try:
-            import streamlit as st
-
-            user = st.session_state.get("user") or {}
-        except Exception:
-            return True
-
-        email = user.get("email")
-        if email:
-            record.user_hash = hash_email(email)
+        record.session_ref = hashlib.sha256(ctx.session_id.encode("utf-8")).hexdigest()[:12]
+        user_ref = _SESSION_USERS.get(ctx.session_id)
+        if user_ref:
+            record.user_id = user_ref
         return True
 
 

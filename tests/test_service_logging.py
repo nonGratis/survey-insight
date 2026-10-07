@@ -51,7 +51,7 @@ def test_service_writes_info_events_as_json(entry_module: str) -> None:
 
     probe = [event for event in events if event.get("msg") == "probe_event"]
     assert len(probe) == 1
-    assert probe[0]["level"] == "INFO"
+    assert probe[0]["severity"] == "INFO"
     assert probe[0]["probe_count"] == 3
 
 
