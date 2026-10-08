@@ -601,7 +601,7 @@ def _cached_form_summary(
     timings: _CatalogTimings | None = None,
 ) -> ApiCacheResult[FormSummaryResponse]:
     def load() -> FormSummaryResponse:
-        _admit(guard, user_id)
+        _admit(guard, user_id, form_id)
         with _measured(timings, "get"):
             raw = _forms_client(request).get_form_summary(creds, form_id)
         return FormSummaryResponse.model_validate(raw)
@@ -623,7 +623,7 @@ def _cached_response_stats(
     timings: _CatalogTimings | None = None,
 ) -> ApiCacheResult[ResponseStatsResponse]:
     def load() -> ResponseStatsResponse:
-        _admit(guard, user_id)
+        _admit(guard, user_id, form_id)
         with _measured(timings, "list"):
             raw = _forms_client(request).get_response_stats(creds, form_id)
         return ResponseStatsResponse.model_validate(raw)
@@ -644,14 +644,14 @@ def _measured(timings: _CatalogTimings | None, kind: str) -> Iterator[None]:
         yield
 
 
-def _admit(guard: RollingWindowGuard | None, user_id: str) -> None:
+def _admit(guard: RollingWindowGuard | None, user_id: str, form_id: str) -> None:
     """Spend one call of the user's quota, or fail like Google's 429 without calling Google.
 
     Runs only when the cache misses, so cached answers cost nothing.
     """
     if guard is None:
         return
-    wait_seconds = guard.acquire_or_wait(user_id)
+    wait_seconds = guard.acquire_or_wait(user_id, form_id)
     if wait_seconds > 0:
         raise QuotaGuardHoldError(wait_seconds)
 
