@@ -7,14 +7,17 @@ Forms API дає структуру форми: питання, типи, вар
 
 from __future__ import annotations
 
+import os
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import build_http
 
 from core.google_errors import google_error_reason
 from core.logger import get_logger, log_call
@@ -23,6 +26,11 @@ log = get_logger(__name__)
 
 FORM_MIME_TYPE = "application/vnd.google-apps.form"
 RESPONSE_TIMESTAMPS_FIELDS = "responses(createTime),nextPageToken"
+# How long a catalog call (a form's details or one page of its response times) may go
+# without an answer. Google answers these in ~0.4 s (p99 ~2 s); a call it holds for tens
+# of seconds is dropped and asked again (core.catalog_stream) instead of holding the
+# whole catalog. The heavier calls (whole form, full responses) keep the client default.
+CATALOG_CALL_TIMEOUT_SECONDS = float(os.getenv("SI_GOOGLE_CALL_TIMEOUT_SECONDS", "10"))
 DEFAULT_FORMS_PAGE_SIZE = 50
 # This thread's Forms client and the credentials it was built for (forms_service).
 _clients = threading.local()
@@ -114,8 +122,8 @@ def list_user_forms(
     return resp.get("files", [])
 
 
-def forms_service(creds: Credentials) -> Any:
-    """This thread's Forms API client for these credentials.
+def forms_service(creds: Credentials, *, timeout: float | None = None) -> Any:
+    """This thread's Forms API client for these credentials (and socket ``timeout``).
 
     A client keeps its HTTPS connection open between calls, so the catalog's workers reuse
     one each instead of opening a connection per form. Measured locally, a fresh client per
@@ -125,10 +133,16 @@ def forms_service(creds: Credentials) -> Any:
     for (one user's request).
     """
     cached = getattr(_clients, "forms", None)
-    if cached is None or cached[0] is not creds:
-        cached = (creds, build("forms", "v1", credentials=creds, cache_discovery=False))
+    if cached is None or cached[0] is not creds or cached[1] != timeout:
+        # What build(credentials=...) does, with the timeout set: build_http() keeps the
+        # library's default (60 s) when none is given.
+        http = build_http()
+        if timeout is not None:
+            http.timeout = timeout
+        service = build("forms", "v1", http=AuthorizedHttp(creds, http=http), cache_discovery=False)
+        cached = (creds, timeout, service)
         _clients.forms = cached
-    return cached[1]
+    return cached[2]
 
 
 def get_form_structure(creds: Credentials, form_id: str) -> dict[str, Any]:
@@ -165,7 +179,7 @@ def list_response_timestamps(creds: Credentials, form_id: str) -> list[datetime]
         FormsApiError: 403 (нема scope), 404 (форма видалена), інші
             HTTP-помилки Forms API.
     """
-    service = forms_service(creds)
+    service = forms_service(creds, timeout=CATALOG_CALL_TIMEOUT_SECONDS)
     timestamps: list[datetime] = []
     page_token: str | None = None
     try:

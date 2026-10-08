@@ -91,6 +91,26 @@ def test_google_rate_limits_are_retried_a_few_times(monkeypatch: pytest.MonkeyPa
     assert ("stats", "a", "rate_limited") in _brief(events)
 
 
+def test_a_call_google_does_not_answer_in_time_is_asked_once_more() -> None:
+    calls: list[str] = []
+
+    def summary(form_id: str) -> Loaded:
+        calls.append(form_id)
+        if form_id == "slow" and calls.count("slow") == 1:
+            raise TimeoutError("The read operation timed out")
+        if form_id == "stuck":
+            raise TimeoutError("The read operation timed out")
+        return _summary(form_id)
+
+    events = list(load_catalog(["slow", "stuck"], load_summary=summary, load_stats=_stats))
+
+    # The second try of a held call usually answers; one that does not ends as timeout.
+    assert ("summary", "slow", "ok") in _brief(events)
+    assert ("summary", "stuck", "timeout") in _brief(events)
+    assert calls.count("slow") == 2
+    assert calls.count("stuck") == catalog_stream.GOOGLE_TIMEOUT_ATTEMPTS
+
+
 def test_a_fatal_error_stops_the_whole_load() -> None:
     class GrantRevokedError(Exception):
         pass

@@ -30,6 +30,9 @@ STATS: LoadKind = "stats"
 # Google's own 429 (not our guard): wait and try again a few times before giving up.
 GOOGLE_RATE_LIMIT_RETRY_SECONDS = 15.0
 GOOGLE_RATE_LIMIT_ATTEMPTS = 3
+# A call Google did not answer in time (the client's socket timeout) is asked once more at
+# once: a held call is rare and the next one is usually fast.
+GOOGLE_TIMEOUT_ATTEMPTS = 2
 # Longest silence on the stream: keeps proxies from closing it and the countdown fresh.
 HEARTBEAT_SECONDS = 5.0
 
@@ -114,8 +117,9 @@ def load_catalog(
 ) -> Iterator[CatalogEvent]:
     """Events for every form: its details, then its response count; ``done`` at the end.
 
-    A form whose details fail gets no count. Loads still pending at the deadline end as
-    ``timeout``. An exception of a ``fatal`` type stops everything with an ``error`` event.
+    A form whose details fail gets no count. A call Google does not answer in time is asked
+    once more, then ends as ``timeout``, as do loads still pending at the deadline. An
+    exception of a ``fatal`` type stops everything with an ``error`` event.
     """
     loads = {SUMMARY: load_summary, STATS: load_stats}
     started = clock()
@@ -162,6 +166,14 @@ def load_catalog(
                 except fatal as exc:
                     yield CatalogEvent("error", error_code=type(exc).__name__)
                     return
+                except TimeoutError:
+                    if attempts + 1 < GOOGLE_TIMEOUT_ATTEMPTS:
+                        heapq.heappush(
+                            held, _Held(clock(), next(order), kind, form_id, attempts + 1)
+                        )
+                        continue
+                    yield CatalogEvent(kind, form_id, "timeout", "google_call_timeout")
+                    continue
                 except FormsApiError as exc:
                     status = catalog_status(exc)
                     if status == "rate_limited" and attempts + 1 < GOOGLE_RATE_LIMIT_ATTEMPTS:
