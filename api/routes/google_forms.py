@@ -60,6 +60,12 @@ CATALOG_STREAM_MAX_FORMS = int(os.getenv("SI_CATALOG_STREAM_MAX_FORMS", "1000"))
 # quota is spent, the quota guard sets the pace however many there are. google_429_count
 # in forms_catalog_stream_completed shows when Google starts refusing bursts.
 CATALOG_STREAM_WORKERS = int(os.getenv("SI_CATALOG_STREAM_WORKERS", "30"))
+# A catalog Google call slower than this gets its own log line (google_call_slow): the
+# telemetry line has only the median and the maximum, and one slow call holds back the
+# moment all statuses are in. Its time next to Google's own latency (Cloud Monitoring)
+# tells whether Google or the API was slow.
+SLOW_GOOGLE_CALL_MS = float(os.getenv("SI_SLOW_GOOGLE_CALL_MS", "5000"))
+_GOOGLE_TARGETS = {"get": "forms.forms.get", "list": "forms.forms.responses.list"}
 # Ends well inside Cloud Run's request timeout (300 s); what is left ends as timeout.
 CATALOG_STREAM_DEADLINE_SECONDS = float(os.getenv("SI_CATALOG_STREAM_DEADLINE_SECONDS", "240"))
 
@@ -105,6 +111,11 @@ class _CatalogTimings:
             elapsed = (time.perf_counter() - start) * 1000
             with self._lock:
                 self._ms[kind].append(elapsed)
+            if kind in _GOOGLE_TARGETS and elapsed >= SLOW_GOOGLE_CALL_MS:
+                log.warning(
+                    "google_call_slow",
+                    extra={"target": _GOOGLE_TARGETS[kind], "duration_ms": round(elapsed, 1)},
+                )
 
     def fields(self) -> dict[str, float | int]:
         with self._lock:
