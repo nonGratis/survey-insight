@@ -141,9 +141,7 @@ def test_catalog_refresh_starts_a_new_load() -> None:
 
 def test_catalog_initial_render_waits_only_for_the_drive_list() -> None:
     catalog = (ROOT / "ui/pages/catalog.py").read_text(encoding="utf-8")
-    google_data = (ROOT / "ui/google_data.py").read_text(encoding="utf-8")
     assert "forms_meta = list_catalog_forms()" in catalog
-    assert "list_forms_catalog(session_id)" not in google_data
 
 
 def test_catalog_table_uses_dynamic_min_max_height() -> None:

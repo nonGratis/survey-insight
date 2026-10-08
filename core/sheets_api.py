@@ -46,45 +46,6 @@ class SheetsApiError(RuntimeError):
         self.reason = reason
 
 
-def find_response_sheet_name(service, sheet_id: str) -> str:
-    """Повернути імʼя першого GRID-аркуша у привʼязаному Spreadsheet.
-
-    Forms-linked spreadsheets завжди мають мінімум один GRID-аркуш із
-    відповідями. Беремо перший такий — це робастно для українських,
-    англійських та будь-яких інших локалізацій, а також для випадку,
-    коли користувач додав другий tab вручну.
-
-    Public, бо forms_catalog.fetch_response_stats також використовує.
-    """
-    try:
-        with log_call(
-            "api_call_ok",
-            target="sheets.spreadsheets.get",
-            scope="metadata",
-            sheet_id=sheet_id,
-            logger=log,
-        ):
-            meta = (
-                service.spreadsheets()
-                .get(
-                    spreadsheetId=sheet_id,
-                    fields="sheets(properties(title,sheetType))",
-                )
-                .execute()
-            )
-    except HttpError as exc:
-        raise SheetsApiError(
-            f"Не вдалося прочитати metadata Sheet {sheet_id}: {exc.reason or exc}",
-            status=exc.resp.status,
-            reason=google_error_reason(exc),
-        ) from exc
-    for sheet in meta.get("sheets", []):
-        props = sheet.get("properties", {})
-        if props.get("sheetType", "GRID") == "GRID":
-            return props["title"]
-    raise SheetsApiError(f"У spreadsheet {sheet_id} не знайдено жодного GRID-аркуша.")
-
-
 def _grid_sheet_titles(service, sheet_id: str) -> list[str]:
     """Назви ВСІХ GRID-аркушів привʼязаного Spreadsheet (для скану контексту)."""
     try:

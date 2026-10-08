@@ -2,7 +2,7 @@
 
 Cloud Logging reads ``severity`` (tests/test_service_logging.py). These tests cover the
 fields the analysis groups by: ``session_ref`` and ``user_id`` on web records, one
-``ui_page_run`` per page run, and the time split in ``forms_catalog_enrich_completed``.
+``ui_page_run`` per page run, and the time split in ``forms_catalog_stream_completed``.
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def test_the_app_logs_one_page_run_per_run(
     assert (record.page, record.run_kind, record.outcome) == ("catalog", "full", "stopped")
 
 
-def test_the_enrich_line_splits_the_time_between_google_and_the_rest(
+def test_the_stream_line_splits_the_time_between_google_and_the_rest(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     clear_api_cache()
@@ -158,13 +158,12 @@ def test_the_enrich_line_splits_the_time_between_google_and_the_rest(
     caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
 
     response = client.post(
-        "/v1/forms/catalog/enrich", json={"form_ids": ["form_a", "form_b", "form_c"]}
+        "/v1/forms/catalog/stream", json={"form_ids": ["form_a", "form_b", "form_c"]}
     )
 
     assert response.status_code == 200
-    [record] = [r for r in caplog.records if r.getMessage() == "forms_catalog_enrich_completed"]
+    [record] = [r for r in caplog.records if r.getMessage() == "forms_catalog_stream_completed"]
     assert (record.google_get_count, record.google_list_count) == (3, 3)
-    assert record.workers == 3
     for field in (
         "credentials_ms",
         "google_ms_total",
@@ -172,8 +171,7 @@ def test_the_enrich_line_splits_the_time_between_google_and_the_rest(
         "google_get_ms_max",
         "google_list_ms_p50",
         "google_list_ms_max",
-        "row_ms_p50",
-        "row_ms_max",
+        "duration_ms",
     ):
         assert isinstance(getattr(record, field), float), field
-    assert record.row_ms_max >= record.google_get_ms_max
+    assert record.duration_ms >= record.google_get_ms_max
