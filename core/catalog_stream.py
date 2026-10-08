@@ -4,10 +4,11 @@ Runs where the Google calls are made: inside one streamed API request in product
 set of credentials, one quota guard, no round trip per batch from the page) and in process
 in the local demo. The page only draws what has arrived.
 
-Order of work: a form's response count goes right after its details, ahead of the next
-form's details, so the per-minute window of response-list calls starts early. Once the
-quota guard holds the counts back (RetryLaterError), the workers go on with the details that
-are left, and the held counts run when their slots free.
+Order of work: every form's details first, then the response counts. The details give each
+row its status, what the page shows first, and on a repeat visit they come from the cache
+at once; a count queued ahead of them would hold them back behind a Google call each (in
+production 4.8 s for 212 cached statuses). Counts the quota guard holds back
+(RetryLaterError) run when their slots free.
 """
 
 from __future__ import annotations
@@ -120,7 +121,7 @@ def load_catalog(
     started = clock()
     order = itertools.count()
     details: deque[str] = deque(form_ids)
-    counts: deque[_Task] = deque()  # ready to run, ahead of new details
+    counts: deque[_Task] = deque()  # ready to run once no details are left to start
     held: list[_Held] = []
     running: dict[Future[Loaded], _Task] = {}
     pool = ThreadPoolExecutor(max_workers=max(1, workers))
@@ -135,7 +136,7 @@ def load_catalog(
                 item = heapq.heappop(held)
                 counts.append((item.kind, item.form_id, item.attempts))
             while len(running) < max(1, workers) and (counts or details):
-                task: _Task = counts.popleft() if counts else (SUMMARY, details.popleft(), 0)
+                task: _Task = (SUMMARY, details.popleft(), 0) if details else counts.popleft()
                 running[pool.submit(loads[task[0]], task[1])] = task
             if not running:
                 # Everything left waits for the quota: say how long, then sleep until the

@@ -29,20 +29,20 @@ def _brief(events: list[CatalogEvent]) -> list[tuple]:
     return [(e.event, e.form_id, e.status) for e in events if e.event != "waiting"]
 
 
-def test_each_form_gets_its_details_then_its_count_and_the_load_ends_with_done() -> None:
+def test_every_forms_details_come_before_the_counts_and_the_load_ends_with_done() -> None:
     events = list(load_catalog(["a", "b"], load_summary=_summary, load_stats=_stats, workers=1))
 
-    # A count goes ahead of the next form's details: the quota window starts early.
+    # Statuses first: no count, a Google call each, holds back the next form's details.
     assert _brief(events) == [
         ("summary", "a", "ok"),
-        ("stats", "a", "ok"),
         ("summary", "b", "ok"),
+        ("stats", "a", "ok"),
         ("stats", "b", "ok"),
         ("done", None, None),
     ]
     assert events[0].data == {"title": "a"}
     assert events[0].fetched_at == "2026-10-07T10:00:00+00:00"
-    assert events[1].cache_hit is True
+    assert events[2].cache_hit is True
 
 
 def test_a_form_whose_details_fail_gets_no_count() -> None:
