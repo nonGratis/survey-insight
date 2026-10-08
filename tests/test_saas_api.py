@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urljoin, urlsplit
@@ -11,9 +10,7 @@ from fastapi.testclient import TestClient
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 
-import api.routes.google_forms as google_forms_routes
 from api.google_data_cache import ApiCacheKey, clear_api_cache, get_or_load
-from api.google_quota import FormsQuotaGuards, RollingWindowGuard
 from api.main import SESSION_COOKIE_NAME, create_api_app
 from core.saas.container import SaaSContainer
 from core.saas.google_scopes import FORM_SCOPES, IDENTITY_SCOPES, SHEETS_SCOPES
@@ -184,16 +181,6 @@ class _CountingGoogleFormsClient(_FakeGoogleFormsClient):
     def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
         self.stats_calls += 1
         return super().get_response_stats(creds, form_id)
-
-
-class _SlowGoogleFormsClient(_FakeGoogleFormsClient):
-    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
-        if form_id == "slow_form":
-            time.sleep(0.2)
-        return super().get_form_summary(creds, "form_1")
-
-    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
-        return super().get_response_stats(creds, "form_1")
 
 
 def _refresh_error(error: str, *, retryable: bool = False) -> RefreshError:
@@ -416,8 +403,6 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
 
     access = client.get("/v1/google/access", params={"purpose": "forms"})
     forms = client.get("/v1/forms")
-    summary = client.get("/v1/forms/form_1/summary")
-    stats = client.get("/v1/forms/form_1/response-stats")
     timestamps = client.get("/v1/forms/form_1/response-timestamps")
     structure = client.get("/v1/forms/form_1/structure")
     responses = client.get("/v1/forms/form_1/responses")
@@ -425,153 +410,15 @@ def test_forms_api_routes_use_server_side_google_credentials_without_exposing_to
     assert access.json()["has_access"] is True
     assert forms.status_code == 200
     assert forms.json()[0]["id"] == "form_1"
-    assert summary.json()["questions_count"] == 5
-    assert stats.json()["total"] == 2
     assert timestamps.json() == {"timestamps": ["2026-06-01T10:00:00", "2026-06-01T10:05:00"]}
     assert "answers" not in str(timestamps.json())
     assert structure.json()["formId"] == "form_1"
     assert responses.json()[0]["responseId"] == "r1"
 
-    combined_payload = str(
-        [forms.json(), summary.json(), stats.json(), structure.json(), responses.json()]
-    )
+    combined_payload = str([forms.json(), timestamps.json(), structure.json(), responses.json()])
     assert "access-token" not in combined_payload
     assert "refresh-token" not in combined_payload
     assert getattr(container.artifacts, "pdfs", {}) == {}
-
-
-def test_forms_catalog_returns_partial_row_failures() -> None:
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    client = TestClient(
-        create_api_app(container, google_forms_client=_PartiallyFailingGoogleFormsClient())
-    )
-    client.cookies.set(SESSION_COOKIE_NAME, session_id)
-
-    response = client.get("/v1/forms/catalog")
-
-    assert response.status_code == 200
-    rows = response.json()
-    assert rows[0]["status"] == "ok"
-    assert rows[0]["summary"]["questions_count"] == 5
-    assert rows[0]["response_stats"]["total"] == 2
-    assert rows[1]["form"]["id"] == "form_deleted"
-    assert rows[1]["status"] == "deleted"
-    assert rows[1]["summary"] is None
-    assert rows[1]["response_stats"] is None
-
-
-def test_forms_catalog_enrich_returns_chunk_rows_with_partial_failures() -> None:
-    clear_api_cache()
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    client = TestClient(
-        create_api_app(container, google_forms_client=_PartiallyFailingGoogleFormsClient())
-    )
-    client.cookies.set(SESSION_COOKIE_NAME, session_id)
-
-    response = client.post(
-        "/v1/forms/catalog/enrich",
-        json={
-            "form_ids": ["form_1", "form_deleted"],
-            "include_summary": True,
-            "include_stats": True,
-        },
-    )
-
-    assert response.status_code == 200
-    rows = response.json()
-    assert rows[0]["form_id"] == "form_1"
-    assert rows[0]["status"] == "ok"
-    assert rows[0]["summary"]["questions_count"] == 5
-    assert rows[0]["response_stats"]["total"] == 2
-    assert rows[1]["form_id"] == "form_deleted"
-    assert rows[1]["status"] == "deleted"
-    assert rows[1]["error_code"] == "google_forms_summary_error"
-
-
-def test_forms_catalog_enrich_reuses_api_side_summary_and_stats_cache() -> None:
-    clear_api_cache()
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    forms_client = _CountingGoogleFormsClient()
-    client = TestClient(create_api_app(container, google_forms_client=forms_client))
-    client.cookies.set(SESSION_COOKIE_NAME, session_id)
-
-    for _ in range(2):
-        response = client.post(
-            "/v1/forms/catalog/enrich",
-            json={"form_ids": ["form_1"], "include_summary": True, "include_stats": True},
-        )
-        assert response.status_code == 200
-
-    rows = response.json()
-    assert rows[0]["status"] == "ok"
-    assert rows[0]["cache_hit"] is True
-    assert rows[0]["fetched_at"]
-    assert forms_client.summary_calls == 1
-    assert forms_client.stats_calls == 1
-
-
-def test_forms_catalog_enrich_logs_aggregate_safe_telemetry(caplog) -> None:
-    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
-
-    google_forms_routes._log_catalog_enrich_telemetry(
-        [
-            google_forms_routes.CatalogEnrichRow(
-                form_id="raw-form-id-1",
-                status="ok",
-                cache_hit=True,
-            ),
-            google_forms_routes.CatalogEnrichRow(
-                form_id="raw-form-id-2",
-                status="timeout",
-                error_code="catalog_enrich_timeout",
-            ),
-        ],
-        chunk_size=2,
-        include_summary=True,
-        include_stats=True,
-        duration_ms=12.5,
-    )
-
-    record = next(r for r in caplog.records if r.message == "forms_catalog_enrich_completed")
-    assert record.chunk_size == 2
-    assert record.cache_hit_count == 1
-    assert record.timeout_count == 1
-    assert record.ok_count == 1
-    assert "raw-form-id" not in str(record.__dict__)
-
-
-def test_forms_catalog_enrich_telemetry_counts_forms_without_publish_state(caplog) -> None:
-    caplog.set_level(logging.INFO, logger=google_forms_routes.log.name)
-
-    def summary(**publish_state) -> google_forms_routes.FormSummaryResponse:
-        return google_forms_routes.FormSummaryResponse(
-            title="Poll", description="", sections_count=1, questions_count=3, **publish_state
-        )
-
-    google_forms_routes._log_catalog_enrich_telemetry(
-        [
-            google_forms_routes.CatalogEnrichRow(form_id="legacy", status="ok", summary=summary()),
-            google_forms_routes.CatalogEnrichRow(
-                form_id="closed",
-                status="ok",
-                summary=summary(is_published=True, accepting_responses=False),
-            ),
-            google_forms_routes.CatalogEnrichRow(form_id="foreign", status="no_access"),
-        ],
-        chunk_size=3,
-        include_summary=True,
-        include_stats=False,
-        duration_ms=1.0,
-    )
-
-    record = next(r for r in caplog.records if r.message == "forms_catalog_enrich_completed")
-    assert record.publish_state_unknown_count == 1
 
 
 def test_api_google_data_cache_logs_hashed_resource_id(caplog) -> None:
@@ -591,37 +438,6 @@ def test_api_google_data_cache_logs_hashed_resource_id(caplog) -> None:
     assert "raw-form-id" not in str(record.__dict__)
 
 
-def test_forms_catalog_enrich_returns_timeout_rows_within_budget(monkeypatch) -> None:
-    clear_api_cache()
-    monkeypatch.setattr(google_forms_routes, "CATALOG_ENRICH_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(google_forms_routes, "CATALOG_ENRICH_MAX_WORKERS", 1)
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    client = TestClient(create_api_app(container, google_forms_client=_SlowGoogleFormsClient()))
-    client.cookies.set(SESSION_COOKIE_NAME, session_id)
-
-    response = client.post(
-        "/v1/forms/catalog/enrich",
-        json={"form_ids": ["slow_form"], "include_summary": True, "include_stats": True},
-    )
-
-    assert response.status_code == 200
-    rows = response.json()
-    assert rows == [
-        {
-            "form_id": "slow_form",
-            "status": "timeout",
-            "error_code": "catalog_enrich_timeout",
-            "retry_after_seconds": None,
-            "summary": None,
-            "response_stats": None,
-            "fetched_at": None,
-            "cache_hit": False,
-        }
-    ]
-
-
 class _AnyFormCountingClient(_CountingGoogleFormsClient):
     """Answers for any form id, counting the calls that reach Google."""
 
@@ -630,58 +446,6 @@ class _AnyFormCountingClient(_CountingGoogleFormsClient):
 
     def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
         return super().get_response_stats(creds, "form_1")
-
-
-def test_forms_catalog_enrich_holds_back_calls_beyond_the_quota_guard() -> None:
-    clear_api_cache()
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    forms_client = _AnyFormCountingClient()
-    app = create_api_app(container, google_forms_client=forms_client)
-    app.state.forms_quota = FormsQuotaGuards(
-        reads=RollingWindowGuard(10), response_lists=RollingWindowGuard(1)
-    )
-    client = TestClient(app)
-    client.cookies.set(SESSION_COOKIE_NAME, session_id)
-
-    response = client.post(
-        "/v1/forms/catalog/enrich",
-        json={"form_ids": ["form_a", "form_b", "form_c"]},
-    )
-
-    rows = response.json()
-    assert forms_client.summary_calls == 3
-    assert forms_client.stats_calls == 1
-    assert sorted(row["status"] for row in rows) == ["ok", "rate_limited", "rate_limited"]
-    held_back = [row for row in rows if row["status"] == "rate_limited"]
-    assert {row["error_code"] for row in held_back} == {"quota_guard"}
-    # Each held-back row learns when its slot frees: the one call in the window leaves it in
-    # a minute, the call promised that slot a minute after that.
-    waits = sorted(row["retry_after_seconds"] for row in held_back)
-    assert 59 < waits[0] <= 60.1
-    assert 119 < waits[1] <= 120.1
-    assert [row["retry_after_seconds"] for row in rows if row["status"] == "ok"] == [None]
-    # The status of a held-back form is known: only its response count waits.
-    assert all(row["summary"]["questions_count"] == 5 for row in held_back)
-    assert all(row["response_stats"] is None for row in held_back)
-
-
-def test_forms_catalog_enrich_spends_no_quota_on_cached_answers() -> None:
-    clear_api_cache()
-    container = _test_container()
-    session_id = _seed_user_session(container)
-    _seed_google_grant(container)
-    app = create_api_app(container, google_forms_client=_AnyFormCountingClient())
-    app.state.forms_quota = FormsQuotaGuards(
-        reads=RollingWindowGuard(1), response_lists=RollingWindowGuard(1)
-    )
-    client = TestClient(app)
-    client.cookies.set(SESSION_COOKIE_NAME, session_id)
-
-    for _ in range(3):
-        rows = client.post("/v1/forms/catalog/enrich", json={"form_ids": ["form_a"]}).json()
-        assert rows[0]["status"] == "ok"
 
 
 def test_sheets_population_tables_require_incremental_sheets_scope() -> None:
@@ -1130,23 +894,6 @@ def test_grant_revoked_during_a_google_call_returns_401_and_drops_record(
         "code": "google_token_revoked",
         "action": "reauth_required",
     }
-    assert container.tokens.get_by_user("user_1") is None
-
-
-def test_catalog_enrich_reports_revoked_grant_instead_of_row_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    client, container = _client_with_valid_grant(_MidCallRefreshGoogleFormsClient())
-
-    def refresh(self: Credentials, request: object) -> None:
-        raise _refresh_error("invalid_grant")
-
-    monkeypatch.setattr(Credentials, "refresh", refresh)
-
-    response = client.post("/v1/forms/catalog/enrich", json={"form_ids": ["form_1"]})
-
-    assert response.status_code == 401
-    assert response.json()["detail"]["code"] == "google_token_revoked"
     assert container.tokens.get_by_user("user_1") is None
 
 

@@ -32,14 +32,15 @@ from core.forms_api import (
 )
 from core.forms_catalog import (
     FormDriveMeta,
-    FormEnrichment,
-    ResponseStats,
 )
 from core.forms_catalog import (
     enrich_form as local_enrich_form,
 )
 from core.forms_catalog import (
     list_forms_with_drive_meta as local_list_catalog_forms,
+)
+from core.forms_catalog import (
+    response_stats as local_response_stats,
 )
 from core.saas.settings import load_web_settings
 from core.sheets_api import fetch_all_grids as local_fetch_all_grids
@@ -51,7 +52,6 @@ from ui.data_access_cache import (
     RAW_RESPONSES_MAX_BYTES,
     RAW_RESPONSES_MAX_ROWS,
     RAW_RESPONSES_TTL_SECONDS,
-    RESPONSE_STATS_TTL_SECONDS,
     TIMESTAMPS_TTL_SECONDS,
     CacheKey,
     clear_cache,
@@ -102,36 +102,6 @@ class GoogleDataClient:
             ]
         return local_list_catalog_forms(self._local_credentials())
 
-    def get_form_summary(self, form_id: str) -> FormEnrichment:
-        if is_saas_mode():
-            session_id = _require_session_id(self.session_id)
-            return FormEnrichment(
-                **get_or_load(
-                    _cache_key(session_id, "form_summary", form_id),
-                    ttl_seconds=FORM_STRUCTURE_TTL_SECONDS,
-                    loader=lambda: _client().get_form_summary(session_id, form_id),
-                )
-            )
-        return local_enrich_form(self._local_credentials(), form_id)
-
-    def get_response_stats(self, form_id: str) -> ResponseStats:
-        if is_saas_mode():
-            session_id = _require_session_id(self.session_id)
-            return ResponseStats(
-                **get_or_load(
-                    _cache_key(session_id, "response_stats", form_id),
-                    ttl_seconds=RESPONSE_STATS_TTL_SECONDS,
-                    loader=lambda: _client().get_response_stats(session_id, form_id),
-                )
-            )
-        timestamps = local_list_response_timestamps(self._local_credentials(), form_id)
-        return ResponseStats(
-            total=len(timestamps),
-            first_response=_format_timestamp(timestamps[0]) if timestamps else None,
-            second_response=_format_timestamp(timestamps[1]) if len(timestamps) >= 2 else None,
-            last_response=_format_timestamp(timestamps[-1]) if timestamps else None,
-        )
-
     def stream_catalog(self, form_ids: list[str]) -> Iterator[dict[str, Any]]:
         """Events of one catalog load: from the API, or computed here in local mode.
 
@@ -145,7 +115,7 @@ class GoogleDataClient:
         for event in load_catalog(
             form_ids,
             load_summary=lambda form_id: Loaded(asdict(local_enrich_form(creds, form_id))),
-            load_stats=lambda form_id: Loaded(asdict(self.get_response_stats(form_id))),
+            load_stats=lambda form_id: Loaded(asdict(local_response_stats(creds, form_id))),
             workers=LOCAL_CATALOG_WORKERS,
         ):
             yield event.to_dict()
@@ -266,16 +236,6 @@ def list_catalog_forms() -> list[FormDriveMeta]:
 
 
 @handle_api_errors
-def get_form_summary(form_id: str) -> FormEnrichment:
-    return google_data_client().get_form_summary(form_id)
-
-
-@handle_api_errors
-def get_response_stats(form_id: str) -> ResponseStats:
-    return google_data_client().get_response_stats(form_id)
-
-
-@handle_api_errors
 def get_form_structure(form_id: str) -> dict[str, Any]:
     return google_data_client().get_form_structure(form_id)
 
@@ -307,18 +267,13 @@ def clear_forms_list_cache(session_id: str | None = None) -> None:
 
 def clear_catalog_cache(session_id: str | None = None) -> None:
     scoped_session = _session_for_clear(session_id)
-    for kind in (
-        "forms_list",
-        "catalog_metadata",
-        "form_summary",
-        "response_stats",
-    ):
+    for kind in ("forms_list", "catalog_metadata"):
         clear_cache(session_id=scoped_session, data_kind=kind)
 
 
 def clear_form_cache(form_id: str, session_id: str | None = None) -> None:
     scoped_session = _session_for_clear(session_id)
-    for kind in ("form_summary", "form_structure", "response_stats", "response_timestamps"):
+    for kind in ("form_structure", "response_timestamps"):
         clear_cache(session_id=scoped_session, data_kind=kind, resource_id=form_id)
 
 
@@ -393,7 +348,3 @@ def _drive_meta_from_payload(payload: dict[str, Any]) -> FormDriveMeta:
     """Fields this web knows; a field the API adds later must not break the catalog."""
     known = {field.name for field in dataclasses.fields(FormDriveMeta)}
     return FormDriveMeta(**{key: value for key, value in payload.items() if key in known})
-
-
-def _format_timestamp(value: datetime) -> str:
-    return value.isoformat(timespec="seconds")

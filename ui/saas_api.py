@@ -163,9 +163,6 @@ class SaaSApiClient:
     def list_forms(self, session_id: str) -> list[dict[str, Any]]:
         return list(self._request_with_session(session_id, "GET", "/v1/forms"))
 
-    def list_forms_catalog(self, session_id: str) -> list[dict[str, Any]]:
-        return list(self._request_with_session(session_id, "GET", "/v1/forms/catalog"))
-
     def stream_catalog(self, session_id: str, form_ids: list[str]) -> Iterator[dict[str, Any]]:
         """The events of one catalog load, as the API sends them (one JSON line each).
 
@@ -207,14 +204,6 @@ class SaaSApiClient:
                     "cache_layer": "none",
                 },
             )
-
-    def get_form_summary(self, session_id: str, form_id: str) -> dict[str, Any]:
-        return dict(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/summary"))
-
-    def get_response_stats(self, session_id: str, form_id: str) -> dict[str, Any]:
-        return dict(
-            self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/response-stats")
-        )
 
     def get_form_structure(self, session_id: str, form_id: str) -> dict[str, Any]:
         return dict(self._request_with_session(session_id, "GET", f"/v1/forms/{form_id}/structure"))
