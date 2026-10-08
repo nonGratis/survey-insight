@@ -150,7 +150,6 @@ def test_the_catalog_loads_through_one_streamed_request(caplog: pytest.LogCaptur
     paths = [r.path for r in caplog.records if r.getMessage() == "ui_saas_api_request"]
     # The Drive list, then the whole catalog in one request instead of a batch per tick.
     assert paths.count("/v1/forms/catalog/stream") == 1
-    assert "/v1/forms/catalog/enrich" not in paths
 
 
 def test_rows_still_loading_are_not_counted_as_unknown() -> None:

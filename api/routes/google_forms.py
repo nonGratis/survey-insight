@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 import statistics
 import threading
 import time
 from collections import Counter
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from datetime import datetime
 from typing import Annotated, Any
 from urllib.parse import urlencode
 
@@ -31,7 +28,6 @@ from core.catalog_stream import (
     CatalogEvent,
     Loaded,
     RetryLaterError,
-    catalog_status,
     load_catalog,
 )
 from core.forms_api import FormsApiError
@@ -57,10 +53,6 @@ RESPONSE_STATS_TTL_SECONDS = int(os.getenv("SI_API_RESPONSE_STATS_TTL_SECONDS", 
 CLOSED_FORM_STATS_TTL_SECONDS = int(
     os.getenv("SI_API_CLOSED_FORM_STATS_TTL_SECONDS", str(6 * 60 * 60))
 )
-CATALOG_ENRICH_MAX_IDS = int(os.getenv("SI_CATALOG_ENRICH_MAX_IDS", "20"))
-CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECONDS", "8"))
-CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "10"))
-QUOTA_GUARD_REASON = "quota_guard"
 CATALOG_STREAM_MAX_FORMS = int(os.getenv("SI_CATALOG_STREAM_MAX_FORMS", "1000"))
 # Parallel Google calls of one catalog stream. 30 is what the batch page ran in production
 # (3 requests x 10) without a single 429 and with the API's CPU mostly idle. Calls wait
@@ -78,30 +70,25 @@ _GOOGLE_TARGETS = {"get": "forms.forms.get", "list": "forms.forms.responses.list
 CATALOG_STREAM_DEADLINE_SECONDS = float(os.getenv("SI_CATALOG_STREAM_DEADLINE_SECONDS", "240"))
 
 
-class QuotaGuardHoldError(FormsApiError, RetryLaterError):
-    """A call our quota guard held back, with the time its slot frees."""
+class QuotaGuardHoldError(RetryLaterError):
+    """A call our quota guard held back: ``seconds`` until its slot frees."""
 
-    def __init__(self, retry_after_seconds: float) -> None:
-        super().__init__(
-            "Catalog paused to stay within the Google Forms API quota.",
-            status=429,
-            reason=QUOTA_GUARD_REASON,
-        )
-        self.retry_after_seconds = retry_after_seconds
-        self.seconds = retry_after_seconds
+    def __init__(self, seconds: float) -> None:
+        super().__init__("Catalog paused to stay within the Google Forms API quota.")
+        self.seconds = seconds
 
 
 class _CatalogTimings:
-    """How long one catalog enrich request spent on what, for its telemetry line.
+    """How long one catalog stream spent on Google calls, for its telemetry line.
 
     Google calls are timed alone (no quota guard, no cache), by kind: ``get`` is
-    forms.get, ``list`` is the response count (one or more responses.list pages). Rows
-    are timed whole. Rows run in worker threads, hence the lock. Google's own 429s are
-    counted (the quota guard's holds never reach Google).
+    forms.get, ``list`` is the response count (one or more responses.list pages). They run
+    in worker threads, hence the lock. Google's own 429s are counted (the quota guard's
+    holds never reach Google).
     """
 
     def __init__(self) -> None:
-        self._ms: dict[str, list[float]] = {"get": [], "list": [], "row": []}
+        self._ms: dict[str, list[float]] = {"get": [], "list": []}
         self._google_429 = 0
         self._lock = threading.Lock()
 
@@ -111,7 +98,7 @@ class _CatalogTimings:
         try:
             yield
         except FormsApiError as exc:
-            if exc.status == 429 and kind != "row":
+            if exc.status == 429:
                 with self._lock:
                     self._google_429 += 1
             raise
@@ -133,10 +120,9 @@ class _CatalogTimings:
             "google_ms_total": round(sum(ms["get"]) + sum(ms["list"]), 1),
             "google_429_count": google_429,
         }
-        for kind, prefix in (("get", "google_get"), ("list", "google_list"), ("row", "row")):
+        for kind, prefix in (("get", "google_get"), ("list", "google_list")):
             values = ms[kind]
-            if kind != "row":
-                out[f"{prefix}_count"] = len(values)
+            out[f"{prefix}_count"] = len(values)
             out[f"{prefix}_ms_p50"] = round(statistics.median(values), 1) if values else 0.0
             out[f"{prefix}_ms_max"] = round(max(values), 1) if values else 0.0
         return out
@@ -181,34 +167,8 @@ class ResponseTimestampsResponse(BaseModel):
     timestamps: list[str]
 
 
-class CatalogFormRow(BaseModel):
-    status: str
-    error_code: str | None = None
-    form: FormListItem
-    summary: FormSummaryResponse | None = None
-    response_stats: ResponseStatsResponse | None = None
-
-
-class CatalogEnrichRequest(BaseModel):
-    form_ids: list[str]
-    include_summary: bool = True
-    include_stats: bool = True
-
-
 class CatalogStreamRequest(BaseModel):
     form_ids: list[str]
-
-
-class CatalogEnrichRow(BaseModel):
-    form_id: str
-    status: str
-    error_code: str | None = None
-    # Rows held back by the quota guard: when to ask again (the guard keeps that slot).
-    retry_after_seconds: float | None = None
-    summary: FormSummaryResponse | None = None
-    response_stats: ResponseStatsResponse | None = None
-    fetched_at: str | None = None
-    cache_hit: bool = False
 
 
 @router.get("/google/access", response_model=GoogleAccessResponse)
@@ -246,57 +206,6 @@ def list_forms(
         ]
     except FormsApiError as exc:
         raise google_http_exception(exc, request) from exc
-
-
-@router.get("/forms/catalog", response_model=list[CatalogFormRow])
-def read_forms_catalog(
-    request: Request,
-    session: Annotated[Session, Depends(require_session)],
-) -> list[CatalogFormRow]:
-    creds = require_google_credentials(request, session, purpose="forms")
-    try:
-        forms = [
-            FormListItem.model_validate(item) for item in _forms_client(request).list_forms(creds)
-        ]
-    except FormsApiError as exc:
-        raise google_http_exception(exc, request) from exc
-
-    rows: list[CatalogFormRow] = []
-    for form in forms:
-        rows.append(_catalog_row(request, creds, session.user_id, form))
-    return rows
-
-
-@router.post("/forms/catalog/enrich", response_model=list[CatalogEnrichRow])
-def enrich_forms_catalog(
-    body: CatalogEnrichRequest,
-    request: Request,
-    session: Annotated[Session, Depends(require_session)],
-) -> list[CatalogEnrichRow]:
-    credentials_start = time.perf_counter()
-    creds = require_google_credentials(request, session, purpose="forms")
-    credentials_ms = round((time.perf_counter() - credentials_start) * 1000, 1)
-    form_ids = _bounded_form_ids(body.form_ids)
-    timings = _CatalogTimings()
-    start = time.perf_counter()
-    rows = _catalog_enrich_rows_with_budget(
-        request,
-        creds,
-        user_id=session.user_id,
-        form_ids=form_ids,
-        include_summary=body.include_summary,
-        include_stats=body.include_stats,
-        timings=timings,
-    )
-    _log_catalog_enrich_telemetry(
-        rows,
-        chunk_size=len(form_ids),
-        include_summary=body.include_summary,
-        include_stats=body.include_stats,
-        duration_ms=round((time.perf_counter() - start) * 1000, 1),
-        timing_fields={"credentials_ms": credentials_ms, **timings.fields()},
-    )
-    return rows
 
 
 @router.post("/forms/catalog/stream")
@@ -355,32 +264,6 @@ def stream_forms_catalog(
         ),
         media_type="application/x-ndjson",
     )
-
-
-@router.get("/forms/{form_id}/summary", response_model=FormSummaryResponse)
-def read_form_summary(
-    form_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(require_session)],
-) -> FormSummaryResponse:
-    creds = require_google_credentials(request, session, purpose="forms")
-    try:
-        return _cached_form_summary(request, creds, session.user_id, form_id).value
-    except FormsApiError as exc:
-        raise google_http_exception(exc, request) from exc
-
-
-@router.get("/forms/{form_id}/response-stats", response_model=ResponseStatsResponse)
-def read_form_response_stats(
-    form_id: str,
-    request: Request,
-    session: Annotated[Session, Depends(require_session)],
-) -> ResponseStatsResponse:
-    creds = require_google_credentials(request, session, purpose="forms")
-    try:
-        return _cached_response_stats(request, creds, session.user_id, form_id).value
-    except FormsApiError as exc:
-        raise google_http_exception(exc, request) from exc
 
 
 @router.get("/forms/{form_id}/response-timestamps", response_model=ResponseTimestampsResponse)
@@ -467,144 +350,7 @@ def _forms_client(request: Request) -> GoogleFormsClient:
     return request.app.state.google_forms_client
 
 
-def _catalog_row(
-    request: Request,
-    creds: Any,
-    user_id: str,
-    form: FormListItem,
-) -> CatalogFormRow:
-    try:
-        summary = _cached_form_summary(request, creds, user_id, form.id).value
-        stats = _cached_response_stats(request, creds, user_id, form.id).value
-    except FormsApiError as exc:
-        return CatalogFormRow(
-            status=_catalog_status(exc),
-            error_code="google_forms_error",
-            form=form,
-        )
-    return CatalogFormRow(status="ok", form=form, summary=summary, response_stats=stats)
-
-
-def _catalog_enrich_rows_with_budget(
-    request: Request,
-    creds: Any,
-    *,
-    user_id: str,
-    form_ids: list[str],
-    include_summary: bool,
-    include_stats: bool,
-    timings: _CatalogTimings | None = None,
-) -> list[CatalogEnrichRow]:
-    if not form_ids:
-        return []
-    times = timings or _CatalogTimings()
-
-    def timed_row(form_id: str) -> CatalogEnrichRow:
-        with times.measure("row"):
-            return _catalog_enrich_row(
-                request,
-                creds,
-                user_id,
-                form_id,
-                include_summary=include_summary,
-                include_stats=include_stats,
-                timings=times,
-            )
-
-    workers = max(1, min(CATALOG_ENRICH_MAX_WORKERS, len(form_ids)))
-    executor = ThreadPoolExecutor(max_workers=workers)
-    futures = {executor.submit(timed_row, form_id): form_id for form_id in form_ids}
-    done, pending = wait(futures, timeout=CATALOG_ENRICH_TIMEOUT_SECONDS)
-    executor.shutdown(wait=False, cancel_futures=True)
-
-    rows_by_id: dict[str, CatalogEnrichRow] = {}
-    for future in done:
-        form_id = futures[future]
-        try:
-            rows_by_id[form_id] = future.result()
-        except (GoogleTokenRevoked, GoogleTokenRefreshFailed):
-            # Account-level failure: every row would fail the same way, and the
-            # user has to act (re-authenticate), so do not hide it as row errors.
-            raise
-        except Exception as exc:  # noqa: BLE001 - keep row-level failure contract.
-            rows_by_id[form_id] = CatalogEnrichRow(
-                form_id=form_id,
-                status="api_error",
-                error_code=type(exc).__name__,
-            )
-
-    for future in pending:
-        form_id = futures[future]
-        rows_by_id[form_id] = CatalogEnrichRow(
-            form_id=form_id,
-            status="timeout",
-            error_code="catalog_enrich_timeout",
-        )
-
-    return [rows_by_id[form_id] for form_id in form_ids]
-
-
-def _catalog_enrich_row(
-    request: Request,
-    creds: Any,
-    user_id: str,
-    form_id: str,
-    *,
-    include_summary: bool,
-    include_stats: bool,
-    timings: _CatalogTimings | None = None,
-) -> CatalogEnrichRow:
-    summary: FormSummaryResponse | None = None
-    stats: ResponseStatsResponse | None = None
-    cache_hits: list[bool] = []
-    fetched_at_values: list[datetime] = []
-    row_status = "ok"
-    error_code: str | None = None
-    retry_after_seconds: float | None = None
-
-    quota = _forms_quota(request)
-    if include_summary:
-        try:
-            summary_result = _cached_form_summary(
-                request, creds, user_id, form_id, guard=quota.reads, timings=timings
-            )
-            summary = summary_result.value
-            cache_hits.append(summary_result.cache_hit)
-            fetched_at_values.append(summary_result.fetched_at)
-        except FormsApiError as exc:
-            return CatalogEnrichRow(
-                form_id=form_id,
-                status=_catalog_status(exc),
-                error_code=_enrich_error_code(exc, "google_forms_summary_error"),
-                retry_after_seconds=_retry_after(exc),
-            )
-
-    if include_stats:
-        try:
-            stats_result = _cached_response_stats(
-                request, creds, user_id, form_id, guard=quota.response_lists, timings=timings
-            )
-            stats = stats_result.value
-            cache_hits.append(stats_result.cache_hit)
-            fetched_at_values.append(stats_result.fetched_at)
-        except FormsApiError as exc:
-            row_status = _catalog_status(exc)
-            error_code = _enrich_error_code(exc, "google_forms_stats_error")
-            retry_after_seconds = _retry_after(exc)
-
-    return CatalogEnrichRow(
-        form_id=form_id,
-        status=row_status,
-        error_code=error_code,
-        retry_after_seconds=retry_after_seconds,
-        summary=summary,
-        response_stats=stats,
-        fetched_at=_oldest_fetched_at(fetched_at_values),
-        cache_hit=bool(cache_hits) and all(cache_hits),
-    )
-
-
-def _bounded_form_ids(form_ids: list[str], *, limit: int = CATALOG_ENRICH_MAX_IDS) -> list[str]:
+def _bounded_form_ids(form_ids: list[str], *, limit: int) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
     for form_id in form_ids:
@@ -690,72 +436,8 @@ def _admit(guard: RollingWindowGuard | None, user_id: str, form_id: str) -> None
         raise QuotaGuardHoldError(wait_seconds)
 
 
-def _retry_after(exc: FormsApiError) -> float | None:
-    if not isinstance(exc, QuotaGuardHoldError):
-        return None
-    # Rounded up: asked a little late the slot is free, a little early it is not.
-    return math.ceil(exc.retry_after_seconds * 10) / 10
-
-
-def _enrich_error_code(exc: FormsApiError, default: str) -> str:
-    return QUOTA_GUARD_REASON if exc.reason == QUOTA_GUARD_REASON else default
-
-
 def _forms_quota(request: Request) -> FormsQuotaGuards:
     return request.app.state.forms_quota
-
-
-def _oldest_fetched_at(values: list[datetime]) -> str | None:
-    if not values:
-        return None
-    return min(values).isoformat()
-
-
-def _log_catalog_enrich_telemetry(
-    rows: list[CatalogEnrichRow],
-    *,
-    chunk_size: int,
-    include_summary: bool,
-    include_stats: bool,
-    duration_ms: float,
-    timing_fields: dict[str, float | int] | None = None,
-) -> None:
-    """One line per enrich request. ``duration_ms`` is the rows' wall time; with
-    ``workers`` parallel rows it compares to ``google_ms_total / workers`` (Google time)
-    and ``row_ms_max`` (slowest row). ``credentials_ms`` is session, key and token work
-    before the rows start. Timing fields are milliseconds."""
-    status_counts = Counter(row.status for row in rows)
-    log.info(
-        "forms_catalog_enrich_completed",
-        extra={
-            **(timing_fields or {}),
-            "workers": max(1, min(CATALOG_ENRICH_MAX_WORKERS, chunk_size)),
-            "chunk_size": chunk_size,
-            "row_count": len(rows),
-            "include_summary": include_summary,
-            "include_stats": include_stats,
-            "duration_ms": duration_ms,
-            "cache_hit_count": sum(1 for row in rows if row.cache_hit),
-            "timeout_count": status_counts.get("timeout", 0),
-            # Rows held back by our own quota guard; the rest of rate_limited is Google's 429.
-            "quota_guard_count": sum(1 for row in rows if row.error_code == QUOTA_GUARD_REASON),
-            "api_error_count": status_counts.get("api_error", 0),
-            "rate_limited_count": status_counts.get("rate_limited", 0),
-            "no_access_count": status_counts.get("no_access", 0),
-            "deleted_count": status_counts.get("deleted", 0),
-            "unsupported_count": status_counts.get("unsupported", 0),
-            "ok_count": status_counts.get("ok", 0),
-            # Loaded forms whose state Google does not report (legacy forms without
-            # publishSettings): the catalog shows them as «Невідомо».
-            "publish_state_unknown_count": sum(
-                1 for row in rows if row.summary is not None and row.summary.is_published is None
-            ),
-        },
-    )
-
-
-def _catalog_status(exc: FormsApiError) -> str:
-    return catalog_status(exc)
 
 
 def _ndjson_with_telemetry(

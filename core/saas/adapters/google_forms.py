@@ -13,7 +13,7 @@ from core.forms_api import (
     list_form_responses,
     list_response_timestamps,
 )
-from core.forms_catalog import enrich_form, list_forms_with_drive_meta
+from core.forms_catalog import enrich_form, list_forms_with_drive_meta, response_stats
 
 
 class GoogleFormsApiClient:
@@ -26,13 +26,7 @@ class GoogleFormsApiClient:
         return asdict(enrich_form(creds, form_id))
 
     def get_response_stats(self, creds: Credentials, form_id: str) -> dict[str, Any]:
-        timestamps = list_response_timestamps(creds, form_id)
-        return {
-            "total": len(timestamps),
-            "first_response": _format_timestamp(timestamps[0]) if timestamps else None,
-            "second_response": _format_timestamp(timestamps[1]) if len(timestamps) >= 2 else None,
-            "last_response": _format_timestamp(timestamps[-1]) if timestamps else None,
-        }
+        return asdict(response_stats(creds, form_id))
 
     def list_response_timestamps(self, creds: Credentials, form_id: str) -> list[str]:
         return [_format_timestamp(item) for item in list_response_timestamps(creds, form_id)]
