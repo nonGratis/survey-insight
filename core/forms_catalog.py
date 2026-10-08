@@ -18,7 +18,13 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from core.forms_api import FORM_MIME_TYPE, FormsApiError, forms_service, list_response_timestamps
+from core.forms_api import (
+    CATALOG_CALL_TIMEOUT_SECONDS,
+    FORM_MIME_TYPE,
+    FormsApiError,
+    forms_service,
+    list_response_timestamps,
+)
 from core.logger import get_logger, log_call
 
 log = get_logger(__name__)
@@ -162,7 +168,7 @@ def enrich_form(creds: Credentials, form_id: str) -> FormEnrichment:
     Раises:
         FormsApiError: на 403 (нема forms.body.readonly), 404 (видалено).
     """
-    service = forms_service(creds)
+    service = forms_service(creds, timeout=CATALOG_CALL_TIMEOUT_SECONDS)
     try:
         with log_call(
             "api_call_ok",

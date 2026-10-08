@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 
 from core.forms_api import (
+    CATALOG_CALL_TIMEOUT_SECONDS,
     RESPONSE_TIMESTAMPS_FIELDS,
     forms_service,
     list_response_timestamps,
@@ -119,7 +120,7 @@ def test_a_thread_reuses_its_forms_client_for_the_same_credentials(monkeypatch) 
     built: list[object] = []
 
     def build(*args, **kwargs):
-        built.append(kwargs["credentials"])
+        built.append(kwargs["http"].credentials)
         return object()
 
     monkeypatch.setattr("core.forms_api.build", build)
@@ -134,3 +135,21 @@ def test_a_thread_reuses_its_forms_client_for_the_same_credentials(monkeypatch) 
     worker.start()
     worker.join(5)
     assert built == [alice, bob, alice, alice]
+
+
+def test_catalog_calls_get_a_client_that_gives_up_on_a_held_call(monkeypatch) -> None:
+    timeouts: list[float | None] = []
+
+    def build(*args, **kwargs):
+        timeouts.append(kwargs["http"].http.timeout)
+        return object()
+
+    monkeypatch.setattr("core.forms_api.build", build)
+    creds = object()
+
+    catalog = forms_service(creds, timeout=CATALOG_CALL_TIMEOUT_SECONDS)
+    assert forms_service(creds, timeout=CATALOG_CALL_TIMEOUT_SECONDS) is catalog
+    # A whole form or its full responses can take longer: those keep the library default.
+    forms_service(creds)
+
+    assert timeouts == [CATALOG_CALL_TIMEOUT_SECONDS, 60]
