@@ -49,6 +49,14 @@ log = get_logger(__name__)
 
 CATALOG_SUMMARY_TTL_SECONDS = int(os.getenv("SI_API_CATALOG_SUMMARY_TTL_SECONDS", "600"))
 RESPONSE_STATS_TTL_SECONDS = int(os.getenv("SI_API_RESPONSE_STATS_TTL_SECONDS", "120"))
+# A form that accepts no responses (closed or unpublished) gets none, so its count is kept
+# for hours: a repeat visit asks Google only for the open forms' counts and, with ~100 of
+# them, fits in one minute of the quota. Its own cache key: once the form is reopened its
+# details say so and its count is loaded fresh under the open key. Still stale for up to
+# this long: responses deleted by the owner, or a form reopened and closed again unseen.
+CLOSED_FORM_STATS_TTL_SECONDS = int(
+    os.getenv("SI_API_CLOSED_FORM_STATS_TTL_SECONDS", str(6 * 60 * 60))
+)
 CATALOG_ENRICH_MAX_IDS = int(os.getenv("SI_CATALOG_ENRICH_MAX_IDS", "20"))
 CATALOG_ENRICH_TIMEOUT_SECONDS = float(os.getenv("SI_CATALOG_ENRICH_TIMEOUT_SECONDS", "8"))
 CATALOG_ENRICH_MAX_WORKERS = int(os.getenv("SI_CATALOG_ENRICH_MAX_WORKERS", "10"))
@@ -310,16 +318,26 @@ def stream_forms_catalog(
     form_ids = _bounded_form_ids(body.form_ids, limit=CATALOG_STREAM_MAX_FORMS)
     quota = _forms_quota(request)
     timings = _CatalogTimings()
+    closed: set[str] = set()  # forms whose details say they accept no responses
 
     def summary(form_id: str) -> Loaded:
         result = _cached_form_summary(
             request, creds, session.user_id, form_id, guard=quota.reads, timings=timings
         )
+        if result.value.accepting_responses is False:
+            closed.add(form_id)
         return Loaded(result.value.model_dump(), result.fetched_at.isoformat(), result.cache_hit)
 
     def stats(form_id: str) -> Loaded:
+        # A form's count is loaded after its details (core.catalog_stream).
         result = _cached_response_stats(
-            request, creds, session.user_id, form_id, guard=quota.response_lists, timings=timings
+            request,
+            creds,
+            session.user_id,
+            form_id,
+            closed=form_id in closed,
+            guard=quota.response_lists,
+            timings=timings,
         )
         return Loaded(result.value.model_dump(), result.fetched_at.isoformat(), result.cache_hit)
 
@@ -630,6 +648,7 @@ def _cached_response_stats(
     user_id: str,
     form_id: str,
     *,
+    closed: bool = False,
     guard: RollingWindowGuard | None = None,
     timings: _CatalogTimings | None = None,
 ) -> ApiCacheResult[ResponseStatsResponse]:
@@ -640,8 +659,12 @@ def _cached_response_stats(
         return ResponseStatsResponse.model_validate(raw)
 
     return get_or_load(
-        ApiCacheKey(user_id=user_id, data_kind="response_stats", resource_id=form_id),
-        ttl_seconds=RESPONSE_STATS_TTL_SECONDS,
+        ApiCacheKey(
+            user_id=user_id,
+            data_kind="response_stats_closed" if closed else "response_stats",
+            resource_id=form_id,
+        ),
+        ttl_seconds=CLOSED_FORM_STATS_TTL_SECONDS if closed else RESPONSE_STATS_TTL_SECONDS,
         loader=load,
     )
 
