@@ -88,15 +88,19 @@ core/               бізнес-логіка і статистика (без і
   forecast/           детекція хвиль (CUSUM), моделі насичення, довірчі інтервали
   report.py · reports.py   PDF-звіт: рендер і секції
   forms_api.py · forms_catalog.py · sheets_api.py   читання Google Forms / Drive / Sheets
+  catalog_stream.py   завантаження всього каталогу: черга, ліміт Google, повтори, дедлайн
   auth.py             вхід у Google для локального demo-режиму
   saas/               сесії, OAuth, зашифровані токени; адаптери Firestore, KMS, GCS, Cloud Tasks
 api/                FastAPI: OAuth, сесії, доступ до Google Forms / Drive / Sheets
+  google_quota.py     власний ліміт викликів Google на користувача (нижче квот Google)
+  google_data_cache.py   кеш даних Google у пам'яті API; однакові запити — один виклик
 worker/             фонові задачі звітів (Cloud Tasks)
 ui/                 Streamlit-шар; до API ходить лише через saas_api.py
+  catalog_load.py     фонове читання потоку каталогу для сторінки
   pages/              catalog · form_design · dynamics · weighting · questions · export
   components/         auth_widget · form_picker · action_bar · metric_bar · mode_switch · page_shell
 tests/              pytest
-deploy/cloud-run/   інструкція розгортання
+deploy/cloud-run/   розгортання, налаштування продакшену, змінні SI_*, логи
 assets/fonts/       шрифти Liberation Sans для PDF
 ```
 
