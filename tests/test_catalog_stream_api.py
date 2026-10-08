@@ -163,3 +163,35 @@ def test_a_slow_google_call_gets_its_own_warning(
     slow = [r for r in caplog.records if r.getMessage() == "google_call_slow"]
     assert sorted(r.target for r in slow) == ["forms.forms.get", "forms.forms.responses.list"]
     assert all(r.levelname == "WARNING" and r.duration_ms >= 0 for r in slow)
+
+
+class _OneClosedFormGoogle(_AnyFormCountingClient):
+    """Any form answers; ``closed_form`` accepts no responses. Counts asked per form."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.counted: list[str] = []
+
+    def get_form_summary(self, creds: Credentials, form_id: str) -> dict:
+        summary = super().get_form_summary(creds, form_id)
+        return {**summary, "accepting_responses": form_id != "closed_form"}
+
+    def get_response_stats(self, creds: Credentials, form_id: str) -> dict:
+        self.counted.append(form_id)
+        return super().get_response_stats(creds, form_id)
+
+
+def test_a_closed_forms_count_is_kept_after_the_open_ones_expire(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(google_forms_routes, "RESPONSE_STATS_TTL_SECONDS", 0)
+    google = _OneClosedFormGoogle()
+    client, _ = _client_with_valid_grant(google)
+    clear_api_cache()
+
+    for _ in range(2):
+        events = _events(client.post(STREAM, json={"form_ids": ["open_form", "closed_form"]}))
+        assert [e["status"] for e in events if e["event"] == "stats"] == ["ok", "ok"]
+
+    # A closed form gets no responses: its count is asked once, the open form's every time.
+    assert sorted(google.counted) == ["closed_form", "open_form", "open_form"]
