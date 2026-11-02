@@ -77,13 +77,14 @@ gcloud run deploy survey-insight-api `
   --image europe-central2-docker.pkg.dev/survey-insight/survey-insight/app:latest `
   --region europe-central2 `
   --memory 1Gi `
-  --min-instances 1 `
   --service-account survey-insight-api@survey-insight.iam.gserviceaccount.com `
   --set-env-vars SERVICE=api,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>,GCP_PROJECT_ID=survey-insight,FIRESTORE_DATABASE="(default)",KMS_KEY_NAME=projects/survey-insight/locations/global/keyRings/survey-insight/cryptoKeys/oauth-tokens,GCS_BUCKET=survey-insight-reports-1046685202661,CLOUD_TASKS_LOCATION=europe-central2,TASKS_QUEUE_NAME=report-jobs,CLOUD_TASKS_SERVICE_ACCOUNT_EMAIL=survey-insight-tasks@survey-insight.iam.gserviceaccount.com `
   --set-secrets SESSION_PEPPER=SESSION_PEPPER:latest,GOOGLE_OAUTH_CLIENT_CONFIG_JSON=GOOGLE_OAUTH_CLIENT_CONFIG_JSON:latest
 ```
 
-`--memory 1Gi`: a catalog load runs 30 Google calls in parallel (`SI_CATALOG_STREAM_WORKERS`), and with 512 MiB the API kept ~85 % of its memory after a load and was restarted by Cloud Run for running out of it (2026-10-07). `--min-instances 1` keeps one instance warm: a cold start cost the first page ~6 s, and the API's Google data cache, quota guard and single-flight of identical loads live in that instance's memory.
+`--memory 1Gi`: a catalog load runs 30 Google calls in parallel (`SI_CATALOG_STREAM_WORKERS`), and with 512 MiB the API kept ~85 % of its memory after a load and was restarted by Cloud Run for running out of it (2026-10-07). Memory is billed only while requests run, so the higher limit costs nothing while the service sleeps.
+
+Keep minimum instances at 0 on every service (`--min-instances` on a revision, `--min` on a service). A minimum instance is billed all day, with or without traffic: one each on the API and the web cost about $1.15 a day before VAT, $26 in October 2026. At 0 a service sleeps after up to ~15 idle minutes. The first page after that takes about 10-15 s, and the API's Google data cache, quota guard and single-flight start empty, so the first catalog load waits for the Google quota again.
 
 After deploy, copy the API URL and set:
 
@@ -126,7 +127,6 @@ gcloud run deploy survey-insight-web `
   --region europe-central2 `
   --session-affinity `
   --timeout 3600 `
-  --min 1 `
   --max 1 `
   --set-env-vars SERVICE=web,APP_ENV=production,APP_BASE_URL=https://<web-run-url>,API_BASE_URL=https://<api-run-url>,WORKER_BASE_URL=https://<worker-run-url>
 ```
@@ -135,7 +135,7 @@ With `APP_ENV=production` the web service signs users in through the API (Google
 
 `--session-affinity` keeps a browser on the instance that holds its Streamlit session. Streamlit keeps download files (`st.download_button`) and component assets in that instance's memory, so without affinity a second instance answers those requests with 404: the PDF download fails as an empty file named by a hash. Affinity is best effort, so an instance shutting down can still cut a session; serving reports through the API would remove the dependency. Redeploys with `--image` keep the setting.
 
-`--timeout 3600`: a Streamlit page keeps one websocket open for the whole visit, and Cloud Run ends every request at its timeout (300 s by default), which cut the page's connection every five minutes. `--min 1 --max 1` (service level): one always-on instance holds every Streamlit session, so a page never waits for a cold start and no session lands on an instance that does not know it.
+`--timeout 3600`: a Streamlit page keeps one websocket open for the whole visit, and Cloud Run ends every request at its timeout (300 s by default), which cut the page's connection every five minutes. An open page keeps that websocket as a running request, so the instance stays awake and is billed until the tab closes. `--max 1` (service level): one instance holds every Streamlit session, so no session lands on an instance that does not know it.
 
 ## Changing settings later
 
@@ -149,13 +149,13 @@ Redeploying only a new image (`gcloud run deploy <service> --image ...` without 
 
 ## Production settings
 
-As of 2026-10-08 (`gcloud run services describe <service> --region europe-central2`):
+As of 2026-11-02 (`gcloud run services describe <service> --region europe-central2`):
 
 | Service | CPU | Memory | Instances | Request timeout | Notes |
 |---|---|---|---|---|---|
-| `survey-insight-api` | 1 | 1 GiB | min 1, max 20 | 300 s | public; a catalog load ends by itself after 240 s |
-| `survey-insight-web` | 1 | 512 MiB | exactly 1 (service level) | 3600 s | session affinity; CPU only during requests |
-| `survey-insight-worker` | 1 | 512 MiB | max 20 | 300 s | invoked by Cloud Tasks only (`--no-allow-unauthenticated`) |
+| `survey-insight-api` | 1 | 1 GiB | min 0, max 20 | 300 s | public; a catalog load ends by itself after 240 s |
+| `survey-insight-web` | 1 | 512 MiB | min 0, max 1 (service level) | 3600 s | session affinity; CPU only during requests |
+| `survey-insight-worker` | 1 | 512 MiB | min 0, max 20 | 300 s | invoked by Cloud Tasks only (`--no-allow-unauthenticated`) |
 
 The API's cache, quota guard and single-flight are per instance. With more than one API instance they still work, but each instance keeps its own: two instances can ask Google for the same form, and each spends up to the per-user quota.
 
